@@ -168,7 +168,7 @@ def start(target, input_args):
     target.addChildTargetFn(create_normal_index, target_vars)
     target.addChildTargetFn(create_tumor_index, target_vars)
 
-    # target.addFollowOnTargetFn(start_preprocessing, target_vars)
+    target.addFollowOnTargetFn(start_preprocessing, target_vars)
     # target.setFollowOnTargetFn(mutect, target_vars)
 
 
@@ -241,8 +241,8 @@ def create_tumor_index(target, target_vars):
 
 def start_preprocessing(target, target_vars):
     target.addChildTargetFn(normal_rtc, target_vars)
-    # target.addChildTargetFn()
-    # target.addFollowOnTargetFn()
+    target.addChildTargetFn(tumor_rtc, target_vars)
+    # target.addFollowOnTargetFn(mutect, target_vars)
 
 
 def normal_rtc(target, target_vars):
@@ -281,6 +281,7 @@ def normal_rtc(target, target_vars):
 
     # Spawn Child
     # target.addChildTargetFn(normal_ir, (gatk,))
+
 
 def tumor_rtc(target, target_vars):
     """
