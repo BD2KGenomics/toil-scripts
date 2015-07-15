@@ -215,7 +215,7 @@ def create_reference_dict(target, target_vars):
     docker_call(input_args, command, tool=tools['picard'])
 
     # Update FileStoreID
-    target.updateGlobalFile(ids['ref.dict'], os.path.splitext(ref_path)[0] + '.dict')
+    target.fileStore.updateGlobalFile(ids['ref.dict'], os.path.splitext(ref_path)[0] + '.dict')
 
 
 def create_normal_index(target, target_vars):
