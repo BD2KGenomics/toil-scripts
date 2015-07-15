@@ -27,22 +27,12 @@ Tree Structure of GATK Pipeline
 11 is a "Target follow-on", it is executed after completion of children.
 =========================================================================
 :Directory Structure:
-local_dir = /mnt/
-# For "shared" input files
-shared_dir = <local_dir>/<script_name>/<UUID4>
-# For files specific to a tumor/normal pair
-pair_dir = <local_dir>/<script_name>/<UUID4>/<pair>/
-    <pair> is defined as UUID-normal:UUID-tumor
-files are uploaded to:
-    s3://bd2k-<script>/<UUID4>/ if shared (.fai/.dict)
-    s3://bd2k-<script>/<UUID4>/<pair> if specific to that T/N pair.
+work_dir = <args.work_dir>/<script_name>/<UUID4>
 =========================================================================
 :Dependencies:
 curl            - apt-get install curl
 samtools        - apt-get install samtools
 picard-tools    - apt-get install picard-tools
-boto            - pip install boto
-FileChunkIO     - pip install FileChunkIO
 jobTree         - https://github.com/benedictpaten/jobTree
 Active Internet Connection (Boto)
 """
@@ -52,6 +42,7 @@ import shutil
 import subprocess
 import uuid
 import errno
+import multiprocessing
 from jobTree.target import Target
 
 
@@ -248,6 +239,86 @@ def create_tumor_index(target, target_vars):
     target.fileStore.updateGlobalFile(ids['tumor.bai'], tumor_path + '.bai')
 
 
+def start_preprocessing(target, target_vars):
+    target.addChildTargetFn(normal_rtc, target_vars)
+    # target.addChildTargetFn()
+    # target.addFollowOnTargetFn()
+
+
+def normal_rtc(target, target_vars):
+    """
+    Creates normal.intervals file
+    """
+    # Unpack target variables
+    input_args, symbolic_inputs, ids, tools = target_vars
+
+    # Retrieve input files
+    phase_path = download_input(target, input_args, ids, 'phase.vcf')
+    mills_path = download_input(target, input_args, ids, 'mills.vcf')
+    gatk_jar = download_input(target, input_args, ids, 'gatk_jar')
+
+    ref_path = read_and_rename_global_file(target, input_args, ids['ref.fasta'], new_extension='.fasta')
+    normal_path = read_and_rename_global_file(target, input_args, ids['normal.bam'], new_extension='.bam')
+    read_and_rename_global_file(target, input_args, ids['ref.fai'], new_extension='.fasta.fai', alternate_name=ref_path)
+    read_and_rename_global_file(target, input_args, ids['ref.dict'], new_extension='.dict', alternate_name=ref_path)
+    read_and_rename_global_file(target, input_args, ids['normal.bai'], new_extension='.bai', alternate_name=normal_path)
+
+    # Output File
+    output = os.path.join(input_args['work_dir'], 'normal.intervals')
+
+    # Create interval file
+    try:
+        subprocess.check_call(['java', '-Xmx15g', '-jar', gatk_jar, '-T', 'RealignerTargetCreator',
+                               '-nt', input_args['cpu_count'], '-R', ref_path, '-I', normal_path, '-known', phase_path,
+                               '-known', mills_path, '--downsampling_type', 'NONE', '-o', output])
+    except subprocess.CalledProcessError:
+        raise RuntimeError('RealignerTargetCreator failed to finish')
+    except OSError:
+        raise RuntimeError('Failed to find "java" or gatk_jar')
+
+    # Update GlobalFileStore
+    target.fileStore.updateGlobalFile(ids['normal.intervals'], output)
+
+    # Spawn Child
+    # target.addChildTargetFn(normal_ir, (gatk,))
+
+def tumor_rtc(target, target_vars):
+    """
+    Creates tumor.intervals file
+    """
+    # Unpack target variables
+    input_args, symbolic_inputs, ids, tools = target_vars
+
+    # Retrieve input files
+    phase_path = download_input(target, input_args, ids, 'phase.vcf')
+    mills_path = download_input(target, input_args, ids, 'mills.vcf')
+    gatk_jar = download_input(target, input_args, ids, 'gatk_jar')
+
+    ref_path = read_and_rename_global_file(target, input_args, ids['ref.fasta'], new_extension='.fasta')
+    tumor_path = read_and_rename_global_file(target, input_args, ids['tumor.bam'], new_extension='.bam')
+    read_and_rename_global_file(target, input_args, ids['ref.fai'], new_extension='.fasta.fai', alternate_name=ref_path)
+    read_and_rename_global_file(target, input_args, ids['ref.dict'], new_extension='.dict', alternate_name=ref_path)
+    read_and_rename_global_file(target, input_args, ids['tumor.bai'], new_extension='.bai', alternate_name=tumor_path)
+
+    # Output File
+    output = os.path.join(input_args['work_dir'], 'tumor.intervals')
+
+    # Create interval file
+    try:
+        subprocess.check_call(['java', '-Xmx15g', '-jar', gatk_jar, '-T', 'RealignerTargetCreator',
+                               '-nt', input_args['cpu_count'], '-R', ref_path, '-I', tumor_path, '-known', phase_path,
+                               '-known', mills_path, '--downsampling_type', 'NONE', '-o', output])
+    except subprocess.CalledProcessError:
+        raise RuntimeError('RealignerTargetCreator failed to finish')
+    except OSError:
+        raise RuntimeError('Failed to find "java" or gatk_jar')
+
+    # Update GlobalFileStore
+    target.fileStore.updateGlobalFile(ids['tumor.intervals'], output)
+
+    # Spawn Child
+    # target.addChildTargetFn(tumor_ir, (gatk,))
+
 if __name__ == '__main__':
     parser = build_parser()
     Target.Runner.addJobTreeOptions(parser)
@@ -255,6 +326,7 @@ if __name__ == '__main__':
 
     work_dir = os.path.join(str(args.work_dir),
                             'bd2k-{}'.format(os.path.basename(__file__).split('.')[0]), str(uuid.uuid4()))
+
     input_args = {'ref.fasta': args.reference,
                   'normal.bam': args.normal,
                   'tumor.bam': args.tumor,
@@ -264,7 +336,8 @@ if __name__ == '__main__':
                   'cosmic.vcf': args.cosmic,
                   'gatk.jar': args.gatk,
                   'mutect.jar': args.mutect,
-                  'work_dir': work_dir}
+                  'work_dir': work_dir,
+                  'cpu_count': str(multiprocessing.cpu_count())}
 
     # Ensure user supplied URLs to files and that BAMs are in the appropriate format
     for bam in [args.normal, args.tumor]:
