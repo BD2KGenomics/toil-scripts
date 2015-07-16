@@ -4,7 +4,7 @@
 
 """
 Tree Structure of GATK Pipeline
-   0-----------> 5 ----------> 14
+   0------------> 5 ----------> 14
 / / \ \          / \
 1 2 3 4         6   7
                 |   |
@@ -34,8 +34,6 @@ work_dir = <args.work_dir>/<script_name>/<UUID4>
 =========================================================================
 :Dependencies:
 curl            - apt-get install curl
-samtools        - apt-get install samtools
-picard-tools    - apt-get install picard-tools
 jobTree         - https://github.com/benedictpaten/jobTree
 Active Internet Connection (Boto)
 """
@@ -159,7 +157,7 @@ def start(target, input_args):
     symbolic_inputs = input_args.keys() + ['ref.fai', 'ref.dict', 'normal.bai', 'tumor.bai', 'normal.intervals',
                                            'tumor.intervals', 'normal.indel.bam', 'tumor.indel.bam', 'normal.indel.bai',
                                            'tumor.indel.bai', 'normal.recal.table', 'tumor.recal.table',
-                                           'normal.bqsr.bam', 'tumor.bqsr.bam', 'normal.bqsr.bai', '.tumor.bqsr.bai',
+                                           'normal.bqsr.bam', 'tumor.bqsr.bam', 'normal.bqsr.bai', 'tumor.bqsr.bai',
                                            'mutect.vcf']
     ids = {x: target.fileStore.getEmptyFileStoreID() for x in symbolic_inputs}
     tools = {'samtools': 'jvivian/samtools:1.2',
