@@ -109,7 +109,7 @@ def read_and_rename_global_file(target, input_args, file_store_id, name):
     if not os.path.exists(os.path.join(work_dir, name)):
         name = target.fileStore.readGlobalFile(file_store_id, os.path.join(work_dir, name))
 
-    return name
+    return os.path.join(work_dir, name)
 
 
 def mkdir_p(path):
