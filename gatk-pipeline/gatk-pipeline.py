@@ -4,27 +4,30 @@
 
 """
 Tree Structure of GATK Pipeline
-     0-----> 11 ---- 12
-    / \
-   1   2
-   |   |
-   3   4
-   |   |
-   5   6
-   |   |
-   7   8
-   |   |
-   9   10
-0  = create .dict/.fai for reference genome
-1,2 = samtools index
-3,4 = RealignerTargetCreator
-5,6 = Indel Realignment
-7,8 = Base Recalibration
-9,10 = Recalibrate (PrintReads)
-11 = MuTect
-12 = teardown / cleanup
-1-10, and 12 are "Target children"
-11 is a "Target follow-on", it is executed after completion of children.
+   0-----------> 5 ----------> 14
+/ / \ \          / \
+1 2 3 4         6   7
+                |   |
+                8   9
+                |   |
+                10  11
+                |   |
+                12  13
+
+0  = Start node
+1 = reference index
+2 = reference dict
+3 = normal bam index
+4 = tumor bam index
+5 = pre-processing node
+6, 7 = RealignerTargetCreator
+8,9 = IndelRealigner
+10,11 = BaseRecalibration
+12, 13 = PrintReads
+14 = MuTect
+
+0-4, 6-13 are "children targets"
+5 and 14 are "follow-on targets"
 =========================================================================
 :Directory Structure:
 work_dir = <args.work_dir>/<script_name>/<UUID4>
@@ -38,7 +41,6 @@ Active Internet Connection (Boto)
 """
 import argparse
 import os
-import shutil
 import subprocess
 import uuid
 import errno
@@ -97,18 +99,17 @@ def download_input(target, input_args, ids, name):
     return file_path
 
 
-def read_and_rename_global_file(target, input_args, file_store_id, new_extension='', alternate_name=None):
+def read_and_rename_global_file(target, input_args, file_store_id, name):
     """
     Given a FileStoreID, returns the filepath linked to it.
     :new_extension: Adds an extension to the file at the file_path.
     :alternate_name: A path to a filename that you want to use. (allows directory control as well as name)
     """
     work_dir = input_args['work_dir']
-    name = target.fileStore.readGlobalFile(file_store_id)
-    new_name = os.path.splitext(name if alternate_name is None else alternate_name)[0] + new_extension
-    shutil.move(name, os.path.join(work_dir, os.path.basename(new_name)))
+    if not os.path.exists(os.path.join(work_dir, name)):
+        name = target.fileStore.readGlobalFile(file_store_id, os.path.join(work_dir, name))
 
-    return os.path.join(work_dir, os.path.basename(new_name))
+    return name
 
 
 def mkdir_p(path):
@@ -259,11 +260,11 @@ def normal_rtc(target, target_vars):
     mills_vcf = download_input(target, input_args, ids, 'mills.vcf')
     gatk_jar = download_input(target, input_args, ids, 'gatk.jar')
 
-    ref_fasta = read_and_rename_global_file(target, input_args, ids['ref.fasta'], new_extension='.fasta')
-    normal_bam = read_and_rename_global_file(target, input_args, ids['normal.bam'], new_extension='.bam')
-    ref_fai = read_and_rename_global_file(target, input_args, ids['ref.fai'], new_extension='.fasta.fai', alternate_name=ref_fasta)
-    ref_dict = read_and_rename_global_file(target, input_args, ids['ref.dict'], new_extension='.dict', alternate_name=ref_fasta)
-    normal_bai = read_and_rename_global_file(target, input_args, ids['normal.bai'], new_extension='.bai', alternate_name=normal_bam)
+    ref_fasta = read_and_rename_global_file(target, input_args, ids['ref.fasta'], name='ref.fasta')
+    normal_bam = read_and_rename_global_file(target, input_args, ids['normal.bam'], name='normal.bam')
+    ref_fai = read_and_rename_global_file(target, input_args, ids['ref.fai'], name='ref.fasta.fai')
+    ref_dict = read_and_rename_global_file(target, input_args, ids['ref.dict'], name='ref.dict')
+    normal_bai = read_and_rename_global_file(target, input_args, ids['normal.bai'], name='normal.bai')
 
     # Output File
     output = os.path.join(input_args['work_dir'], 'normal.intervals')
@@ -282,7 +283,7 @@ def normal_rtc(target, target_vars):
     target.fileStore.updateGlobalFile(ids['normal.intervals'], output)
 
     # Remove files created by target.readGlobalFile()
-    target_teardown(ref_fasta, normal_bam, ref_fai, ref_dict, normal_bai)
+    # target_teardown(ref_fasta, normal_bam, ref_fai, ref_dict, normal_bai)
 
     # Spawn Child
     target.addChildTargetFn(normal_ir, target_vars)
@@ -300,11 +301,11 @@ def tumor_rtc(target, target_vars):
     mills_vcf = download_input(target, input_args, ids, 'mills.vcf')
     gatk_jar = download_input(target, input_args, ids, 'gatk.jar')
 
-    ref_fasta = read_and_rename_global_file(target, input_args, ids['ref.fasta'], new_extension='.fasta')
-    tumor_bam = read_and_rename_global_file(target, input_args, ids['tumor.bam'], new_extension='.bam')
-    ref_fai = read_and_rename_global_file(target, input_args, ids['ref.fai'], new_extension='.fasta.fai', alternate_name=ref_fasta)
-    ref_dict = read_and_rename_global_file(target, input_args, ids['ref.dict'], new_extension='.dict', alternate_name=ref_fasta)
-    tumor_bai = read_and_rename_global_file(target, input_args, ids['tumor.bai'], new_extension='.bai', alternate_name=tumor_bam)
+    ref_fasta = read_and_rename_global_file(target, input_args, ids['ref.fasta'], name='ref.fasta')
+    tumor_bam = read_and_rename_global_file(target, input_args, ids['tumor.bam'], name='tumor.bam')
+    ref_fai = read_and_rename_global_file(target, input_args, ids['ref.fai'], name='ref.fasta.fai')
+    ref_dict = read_and_rename_global_file(target, input_args, ids['ref.dict'], name='ref.dict')
+    tumor_bai = read_and_rename_global_file(target, input_args, ids['tumor.bai'], name='tumor.bai')
 
     # Output File
     output = os.path.join(input_args['work_dir'], 'tumor.intervals')
@@ -323,7 +324,7 @@ def tumor_rtc(target, target_vars):
     target.fileStore.updateGlobalFile(ids['tumor.intervals'], output)
 
     # Remove files created by target.readGlobalFile()
-    target_teardown(ref_fasta, tumor_bam, ref_fai, ref_dict, tumor_bai)
+    # target_teardown(ref_fasta, tumor_bam, ref_fai, ref_dict, tumor_bai)
 
     # Spawn Child
     target.addChildTargetFn(tumor_ir, target_vars)
@@ -337,15 +338,15 @@ def normal_ir(target, target_vars):
     input_args, symbolic_inputs, ids, tools = target_vars
 
     # Retrieve input files
-    gatk_jar = read_and_rename_global_file(target, input_args, ids['gatk.jar'], new_extension='.jar')
-    ref_fasta = read_and_rename_global_file(target, input_args, ids['ref.fasta'], new_extension='.fasta')
-    normal_bam = read_and_rename_global_file(target, input_args, ids['normal.bam'], new_extension='.bam')
-    phase_vcf = read_and_rename_global_file(target, input_args, ids['phase.vcf'], new_extension='.vcf')
-    mills_vcf = read_and_rename_global_file(target, input_args, ids['mills.vcf'], new_extension='.vcf')
-    normal_intervals = read_and_rename_global_file(target, input_args, ids['normal.intervals'], new_extension='.intervals')
-    ref_fai = read_and_rename_global_file(target, input_args, ids['ref.fai'], new_extension='.fasta.fai', alternate_name=ref_fasta)
-    ref_dict = read_and_rename_global_file(target, input_args, ids['ref.dict'], new_extension='.dict', alternate_name=ref_fasta)
-    normal_bai = read_and_rename_global_file(target, input_args, ids['normal.bai'], new_extension='.bai', alternate_name=normal_bam)
+    gatk_jar = read_and_rename_global_file(target, input_args, ids['gatk.jar'], name='gatk.jar')
+    ref_fasta = read_and_rename_global_file(target, input_args, ids['ref.fasta'], name='ref.fasta')
+    normal_bam = read_and_rename_global_file(target, input_args, ids['normal.bam'], name='normal.bam')
+    phase_vcf = read_and_rename_global_file(target, input_args, ids['phase.vcf'], name='phase.vcf')
+    mills_vcf = read_and_rename_global_file(target, input_args, ids['mills.vcf'], name='mills.vcf')
+    normal_intervals = read_and_rename_global_file(target, input_args, ids['normal.intervals'], name='normal.intervals')
+    ref_fai = read_and_rename_global_file(target, input_args, ids['ref.fai'], name='ref.fasta.fai')
+    ref_dict = read_and_rename_global_file(target, input_args, ids['ref.dict'], name='ref.dict')
+    normal_bai = read_and_rename_global_file(target, input_args, ids['normal.bai'], name='normal.bai')
 
     # Output file
     output = os.path.join(input_args['work_dir'], 'normal.indel.bam')
@@ -366,8 +367,8 @@ def normal_ir(target, target_vars):
     target.fileStore.updateGlobalFile(ids['normal.indel.bai'], os.path.splitext(output)[0] + '.bai')
 
     # Remove files created by target.readGlobalFile()
-    target_teardown(gatk_jar, ref_fasta, normal_bam, phase_vcf, mills_vcf, normal_intervals, ref_fai, ref_dict,
-                    normal_bai, os.path.join(input_args['work_dir'], 'tumor.bam'))
+    # target_teardown(gatk_jar, ref_fasta, normal_bam, phase_vcf, mills_vcf, normal_intervals, ref_fai, ref_dict,
+    #                 normal_bai, os.path.join(input_args['work_dir'], 'normal.bam'))
 
     # Spawn Child
     target.addChildTargetFn(normal_br, target_vars)
@@ -381,15 +382,15 @@ def tumor_ir(target, target_vars):
     input_args, symbolic_inputs, ids, tools = target_vars
 
     # Retrieve input files
-    gatk_jar = read_and_rename_global_file(target, input_args, ids['gatk.jar'], new_extension='.jar')
-    ref_fasta = read_and_rename_global_file(target, input_args, ids['ref.fasta'], new_extension='.fasta')
-    tumor_bam = read_and_rename_global_file(target, input_args, ids['tumor.bam'], new_extension='.bam')
-    phase_vcf = read_and_rename_global_file(target, input_args, ids['phase.vcf'], new_extension='.vcf')
-    mills_vcf = read_and_rename_global_file(target, input_args, ids['mills.vcf'], new_extension='.vcf')
-    tumor_intervals = read_and_rename_global_file(target, input_args, ids['tumor.intervals'], new_extension='.intervals')
-    ref_fai = read_and_rename_global_file(target, input_args, ids['ref.fai'], new_extension='.fasta.fai', alternate_name=ref_fasta)
-    ref_dict = read_and_rename_global_file(target, input_args, ids['ref.dict'], new_extension='.dict', alternate_name=ref_fasta)
-    tumor_bai = read_and_rename_global_file(target, input_args, ids['tumor.bai'], new_extension='.bai', alternate_name=tumor_bam)
+    gatk_jar = read_and_rename_global_file(target, input_args, ids['gatk.jar'], name='gatk.jar')
+    ref_fasta = read_and_rename_global_file(target, input_args, ids['ref.fasta'], name='ref.fasta')
+    tumor_bam = read_and_rename_global_file(target, input_args, ids['tumor.bam'], name='tumor.bam')
+    phase_vcf = read_and_rename_global_file(target, input_args, ids['phase.vcf'], name='phase.vcf')
+    mills_vcf = read_and_rename_global_file(target, input_args, ids['mills.vcf'], name='mills.vcf')
+    tumor_intervals = read_and_rename_global_file(target, input_args, ids['tumor.intervals'], name='tumor.intervals')
+    ref_fai = read_and_rename_global_file(target, input_args, ids['ref.fai'], name='ref.fasta.fai')
+    ref_dict = read_and_rename_global_file(target, input_args, ids['ref.dict'], name='ref.dict')
+    tumor_bai = read_and_rename_global_file(target, input_args, ids['tumor.bai'], name='tumor.bai')
 
     # Output file
     output = os.path.join(input_args['work_dir'], 'tumor.indel.bam')
@@ -410,8 +411,8 @@ def tumor_ir(target, target_vars):
     target.fileStore.updateGlobalFile(ids['tumor.indel.bai'], os.path.splitext(output)[0] + '.bai' )
 
     # Remove files created by target.readGlobalFile()
-    target_teardown(gatk_jar, ref_fasta, tumor_bam, phase_vcf, mills_vcf, tumor_intervals, ref_fai, ref_dict,
-                    tumor_bai, os.path.join(input_args['work_dir'], 'tumor.bam'))
+    # target_teardown(gatk_jar, ref_fasta, tumor_bam, phase_vcf, mills_vcf, tumor_intervals, ref_fai, ref_dict,
+    #                 tumor_bai, os.path.join(input_args['work_dir'], 'tumor.bam'))
 
 
     # Spawn Child
@@ -428,12 +429,12 @@ def normal_br(target, target_vars):
     # Retrieve input files
     dbsnp_vcf = download_input(target, input_args, ids, 'dbsnp.vcf')
 
-    gatk_jar = read_and_rename_global_file(target, input_args, ids['gatk.jar'], new_extension='.jar')
-    ref_fasta = read_and_rename_global_file(target, input_args, ids['ref.fasta'], new_extension='.fasta')
-    normal_indel_bam = read_and_rename_global_file(target, input_args, ids['normal.indel.bam'], new_extension='.bam')
-    normal_indel_bai = read_and_rename_global_file(target, input_args, ids['normal.indel.bai'], new_extension='.bai', alternate_name=normal_indel_bam)
-    ref_fai = read_and_rename_global_file(target, input_args, ids['ref.fai'], new_extension='.fasta.fai', alternate_name=ref_fasta)
-    ref_dict = read_and_rename_global_file(target, input_args, ids['ref.dict'], new_extension='.dict', alternate_name=ref_fasta)
+    gatk_jar = read_and_rename_global_file(target, input_args, ids['gatk.jar'], name='gatk.jar')
+    ref_fasta = read_and_rename_global_file(target, input_args, ids['ref.fasta'], name='ref.fasta')
+    normal_indel_bam = read_and_rename_global_file(target, input_args, ids['normal.indel.bam'], name='normal.indel.bam')
+    normal_indel_bai = read_and_rename_global_file(target, input_args, ids['normal.indel.bai'], name='normal.indel.bai')
+    ref_fai = read_and_rename_global_file(target, input_args, ids['ref.fai'], name='ref.fasta.fai')
+    ref_dict = read_and_rename_global_file(target, input_args, ids['ref.dict'], name='ref.dict')
 
     # Output file
     output = os.path.join(input_args['work_dir'], 'normal.recal.table')
@@ -452,7 +453,7 @@ def normal_br(target, target_vars):
     target.fileStore.updateGlobalFile(ids['normal.recal.table'], output)
 
     # Remove files created by target.readGlobalFile()
-    target_teardown(gatk_jar, ref_fasta, normal_indel_bam, normal_indel_bai, ref_fai, ref_dict)
+    # target_teardown(gatk_jar, ref_fasta, normal_indel_bam, normal_indel_bai, ref_fai, ref_dict)
 
 
     # Spawn Child
@@ -469,12 +470,12 @@ def tumor_br(target, target_vars):
     # Retrieve input files
     dbsnp_vcf = download_input(target, input_args, ids, 'dbsnp.vcf')
 
-    gatk_jar = read_and_rename_global_file(target, input_args, ids['gatk.jar'], new_extension='.jar')
-    ref_fasta = read_and_rename_global_file(target, input_args, ids['ref.fasta'], new_extension='.fasta')
-    tumor_indel_bam = read_and_rename_global_file(target, input_args, ids['tumor.indel.bam'], new_extension='.bam')
-    tumor_indel_bai = read_and_rename_global_file(target, input_args, ids['tumor.indel.bai'], new_extension='.bai', alternate_name=tumor_indel_bam)
-    ref_fai = read_and_rename_global_file(target, input_args, ids['ref.fai'], new_extension='.fasta.fai', alternate_name=ref_fasta)
-    ref_dict = read_and_rename_global_file(target, input_args, ids['ref.dict'], new_extension='.dict', alternate_name=ref_fasta)
+    gatk_jar = read_and_rename_global_file(target, input_args, ids['gatk.jar'], name='gatk.jar')
+    ref_fasta = read_and_rename_global_file(target, input_args, ids['ref.fasta'], name='ref.fasta')
+    tumor_indel_bam = read_and_rename_global_file(target, input_args, ids['tumor.indel.bam'], name='tumor.indel.bam')
+    tumor_indel_bai = read_and_rename_global_file(target, input_args, ids['tumor.indel.bai'], name='tumor.indel.bai')
+    ref_fai = read_and_rename_global_file(target, input_args, ids['ref.fai'], name='ref.fasta.fai')
+    ref_dict = read_and_rename_global_file(target, input_args, ids['ref.dict'], name='ref.dict')
 
     # Output file
     output = os.path.join(input_args['work_dir'], 'tumor.recal.table')
@@ -493,7 +494,7 @@ def tumor_br(target, target_vars):
     target.fileStore.updateGlobalFile(ids['tumor.recal.table'], output)
 
     # Remove files created by target.readGlobalFile()
-    target_teardown(gatk_jar, ref_fasta, tumor_indel_bam, tumor_indel_bai, ref_fai, ref_dict)
+    # target_teardown(gatk_jar, ref_fasta, tumor_indel_bam, tumor_indel_bai, ref_fai, ref_dict)
 
 
     # Spawn Child
@@ -508,13 +509,13 @@ def normal_pr(target, target_vars):
     input_args, symbolic_inputs, ids, tools = target_vars
 
     # Retrieve input files
-    gatk_jar = read_and_rename_global_file(target, input_args, ids['gatk.jar'], new_extension='.jar')
-    ref_fasta = read_and_rename_global_file(target, input_args, ids['ref.fasta'], new_extension='.fasta')
-    normal_indel_bam = read_and_rename_global_file(target, input_args, ids['normal.indel.bam'], new_extension='.bam')
-    normal_recal = read_and_rename_global_file(target, input_args, ids['normal.recal.table'], new_extension='.table')
-    normal_indel_bai = read_and_rename_global_file(target, input_args, ids['normal.indel.bai'], new_extension='.bai', alternate_name=normal_indel_bam)
-    ref_fai = read_and_rename_global_file(target, input_args, ids['ref.fai'], new_extension='.fasta.fai', alternate_name=ref_fasta)
-    ref_dict = read_and_rename_global_file(target, input_args, ids['ref.dict'], new_extension='.dict', alternate_name=ref_fasta)
+    gatk_jar = read_and_rename_global_file(target, input_args, ids['gatk.jar'], name='gatk.jar')
+    ref_fasta = read_and_rename_global_file(target, input_args, ids['ref.fasta'], name='ref.fasta')
+    normal_indel_bam = read_and_rename_global_file(target, input_args, ids['normal.indel.bam'], name='normal.indel.bam')
+    normal_recal = read_and_rename_global_file(target, input_args, ids['normal.recal.table'], name='normal.recal.table')
+    normal_indel_bai = read_and_rename_global_file(target, input_args, ids['normal.indel.bai'], name='normal.indel.bai')
+    ref_fai = read_and_rename_global_file(target, input_args, ids['ref.fai'], name='ref.fasta.fai')
+    ref_dict = read_and_rename_global_file(target, input_args, ids['ref.dict'], name='ref.dict')
 
     # Output file
     output = os.path.join(input_args['work_dir'], 'normal.bqsr.bam')
@@ -534,8 +535,8 @@ def normal_pr(target, target_vars):
     target.fileStore.updateGlobalFile(ids['normal.bqsr.bai'], os.path.splitext(output)[0] + '.bai')
 
     # Remove files created by target.readGlobalFile()
-    target_teardown(gatk_jar, ref_fasta, normal_indel_bam, normal_indel_bai, ref_fai, ref_dict,
-                    os.path.join(input_args['work_dir'], 'normal.indel.bam'))
+    # target_teardown(gatk_jar, ref_fasta, normal_indel_bam, normal_indel_bai, ref_fai, ref_dict,
+    #                 os.path.join(input_args['work_dir'], 'normal.indel.bam'))
 
 
 def tumor_pr(target, target_vars):
@@ -546,13 +547,13 @@ def tumor_pr(target, target_vars):
     input_args, symbolic_inputs, ids, tools = target_vars
 
     # Retrieve input files
-    gatk_jar = read_and_rename_global_file(target, input_args, ids['gatk.jar'], new_extension='.jar')
-    ref_fasta = read_and_rename_global_file(target, input_args, ids['ref.fasta'], new_extension='.fasta')
-    tumor_indel_bam = read_and_rename_global_file(target, input_args, ids['tumor.indel.bam'], new_extension='.bam')
-    tumor_recal = read_and_rename_global_file(target, input_args, ids['tumor.recal.table'], new_extension='.table')
-    tumor_indel_bai = read_and_rename_global_file(target, input_args, ids['tumor.indel.bai'], new_extension='.bai', alternate_name=tumor_indel_bam)
-    ref_fai = read_and_rename_global_file(target, input_args, ids['ref.fai'], new_extension='.fasta.fai', alternate_name=ref_fasta)
-    ref_dict = read_and_rename_global_file(target, input_args, ids['ref.dict'], new_extension='.dict', alternate_name=ref_fasta)
+    gatk_jar = read_and_rename_global_file(target, input_args, ids['gatk.jar'], name='gatk.jar')
+    ref_fasta = read_and_rename_global_file(target, input_args, ids['ref.fasta'], name='ref.fasta')
+    tumor_indel_bam = read_and_rename_global_file(target, input_args, ids['tumor.indel.bam'], name='tumor.indel.bam')
+    tumor_recal = read_and_rename_global_file(target, input_args, ids['tumor.recal.table'], name='tumor.recal.table')
+    tumor_indel_bai = read_and_rename_global_file(target, input_args, ids['tumor.indel.bai'], name='tumor.indel.bai')
+    ref_fai = read_and_rename_global_file(target, input_args, ids['ref.fai'], name='ref.fasta.fai')
+    ref_dict = read_and_rename_global_file(target, input_args, ids['ref.dict'], name='ref.dict')
 
     # Output file
     output = os.path.join(input_args['work_dir'], 'tumor.bqsr.bam')
@@ -572,8 +573,8 @@ def tumor_pr(target, target_vars):
     target.fileStore.updateGlobalFile(ids['tumor.bqsr.bai'], os.path.splitext(output)[0] + '.bai')
 
     # Remove files created by target.readGlobalFile()
-    target_teardown(gatk_jar, ref_fasta, tumor_indel_bam, tumor_indel_bai, ref_fai, ref_dict,
-                    os.path.join(input_args['work_dir'], 'tumor.indel.bam'))
+    # target_teardown(gatk_jar, ref_fasta, tumor_indel_bam, tumor_indel_bai, ref_fai, ref_dict,
+    #                 os.path.join(input_args['work_dir'], 'tumor.indel.bam'))
 
 
 def mutect(target, target_vars):
@@ -584,15 +585,15 @@ def mutect(target, target_vars):
     mutect_jar = download_input(target, input_args, ids, name='mutect.jar')
     cosmic_vcf = download_input(target, input_args, ids, name='cosmic.vcf')
 
-    dbsnp_vcf = read_and_rename_global_file(target, input_args, ids['dbsnp.vcf'], new_extension='.vcf')
-    normal_bqsr_bam = read_and_rename_global_file(target, input_args, ids['normal.bqsr.bam'], new_extension='.bam')
-    tumor_bqsr_bam = read_and_rename_global_file(target, input_args, ids['tumor.bqsr.bam'], new_extension='.bam')
-    ref_fasta = read_and_rename_global_file(target, input_args, ids['ref.fasta'], new_extension='.fasta')
+    dbsnp_vcf = read_and_rename_global_file(target, input_args, ids['dbsnp.vcf'], name='dbsnp.vcf')
+    normal_bqsr_bam = read_and_rename_global_file(target, input_args, ids['normal.bqsr.bam'], name='normal.bqsr.bam')
+    tumor_bqsr_bam = read_and_rename_global_file(target, input_args, ids['tumor.bqsr.bam'], name='tumor.bqsr.bam')
+    ref_fasta = read_and_rename_global_file(target, input_args, ids['ref.fasta'], name='ref.fasta')
 
-    read_and_rename_global_file(target, input_args, ids['normal.bqsr.bai'], new_extension='.bai', alternate_name=normal_bqsr_bam)
-    read_and_rename_global_file(target, input_args, ids['tumor.bqsr.bai'], new_extension='.bai', alternate_name=tumor_bqsr_bam)
-    read_and_rename_global_file(target, input_args, ids['ref.fai'], new_extension='.fasta.fai', alternate_name=ref_fasta)
-    read_and_rename_global_file(target, input_args, ids['ref.dict'], new_extension='.dict', alternate_name=ref_fasta)
+    read_and_rename_global_file(target, input_args, ids['normal.bqsr.bai'], name='normal.bqsr.bai')
+    read_and_rename_global_file(target, input_args, ids['tumor.bqsr.bai'], name='tumor.bqsr.bai')
+    read_and_rename_global_file(target, input_args, ids['ref.fai'], name='ref.fasta.fai')
+    read_and_rename_global_file(target, input_args, ids['ref.dict'], name='ref.dict')
 
     # Output VCF
     normal_uuid = input_args['normal.bam'].split('/')[-1].split('.')[0]
@@ -635,6 +636,7 @@ def teardown(target, target_vars):
     files = [os.path.join(input_args['work_dir'], f) for f in os.listdir(work_dir) if 'tumor.vcf' not in f]
     for f in files:
         os.remove(f)
+
 
 if __name__ == '__main__':
     parser = build_parser()
