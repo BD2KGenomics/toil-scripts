@@ -141,7 +141,7 @@ def docker_call(input_args, tool_command, tool):
     try:
         subprocess.check_call(base_docker_call.split() + [tool] + tool_command.split())
     except subprocess.CalledProcessError:
-        raise RuntimeError('docker command returned a non-zero exit status. Check error logs.')
+        raise RuntimeError('docker command returned a non-zero exit status. Check logs.')
     except OSError:
         raise RuntimeError('docker not found on system. Install on all nodes.')
 
@@ -162,7 +162,7 @@ def start(target, input_args):
     ids = {x: target.fileStore.getEmptyFileStoreID() for x in symbolic_inputs}
     tools = {'samtools': 'jvivian/samtools:1.2',
              'picard': 'jvivian/picardtools:1.113',
-             'mutect': 'jvivian/mutect:1.1.7'}
+             'mutect': 'computationalgenomicslab/mutect'}
     target_vars = (input_args, symbolic_inputs, ids, tools)
 
     target.addChildTargetFn(create_reference_index, target_vars)
@@ -580,14 +580,13 @@ def mutect(target, target_vars):
     input_args, symbolic_inputs, ids, tools = target_vars
 
     # Retrieve input files
-    mutect_jar = download_input(target, input_args, ids, name='mutect.jar')
-    cosmic_vcf = download_input(target, input_args, ids, name='cosmic.vcf')
+    mutect_jar = docker_path(download_input(target, input_args, ids, name='mutect.jar'))
+    cosmic_vcf = docker_path(download_input(target, input_args, ids, name='cosmic.vcf'))
 
-    dbsnp_vcf = read_and_rename_global_file(target, input_args, ids['dbsnp.vcf'], name='dbsnp.vcf')
-    normal_bqsr_bam = read_and_rename_global_file(target, input_args, ids['normal.bqsr.bam'], name='normal.bqsr.bam')
-    tumor_bqsr_bam = read_and_rename_global_file(target, input_args, ids['tumor.bqsr.bam'], name='tumor.bqsr.bam')
-    ref_fasta = read_and_rename_global_file(target, input_args, ids['ref.fasta'], name='ref.fasta')
-
+    dbsnp_vcf = docker_path(read_and_rename_global_file(target, input_args, ids['dbsnp.vcf'], name='dbsnp.vcf'))
+    normal_bqsr_bam = docker_path(read_and_rename_global_file(target, input_args, ids['normal.bqsr.bam'], name='normal.bqsr.bam'))
+    tumor_bqsr_bam = docker_path(read_and_rename_global_file(target, input_args, ids['tumor.bqsr.bam'], name='tumor.bqsr.bam'))
+    ref_fasta = docker_path(read_and_rename_global_file(target, input_args, ids['ref.fasta'], name='ref.fasta'))
     read_and_rename_global_file(target, input_args, ids['normal.bqsr.bai'], name='normal.bqsr.bai')
     read_and_rename_global_file(target, input_args, ids['tumor.bqsr.bai'], name='tumor.bqsr.bai')
     read_and_rename_global_file(target, input_args, ids['ref.fai'], name='ref.fasta.fai')
@@ -596,32 +595,27 @@ def mutect(target, target_vars):
     # Output VCF
     normal_uuid = input_args['normal.bam'].split('/')[-1].split('.')[0]
     tumor_uuid = input_args['tumor.bam'].split('/')[-1].split('.')[0]
-    output = os.path.join(input_args['work_dir'], '{}-normal:{}-tumor.vcf'.format(normal_uuid, tumor_uuid))
-    mut_out = os.path.join(input_args['work_dir'], 'mutect.out')
-    mut_cov = os.path.join(input_args['work_dir'], 'mutect.cov')
+    output = docker_path(os.path.join(input_args['work_dir'], '{}-normal:{}-tumor.vcf'.format(normal_uuid, tumor_uuid)))
+    mut_out = docker_path(os.path.join(input_args['work_dir'], 'mutect.out'))
+    mut_cov = docker_path(os.path.join(input_args['work_dir'], 'mutect.cov'))
 
     # Tool call
-    command = 'java -Xmx{0}g -jar {1} ' \
-              '--analysis_type MuTect ' \
-              '--reference_sequence {2} ' \
-              '--cosmic {3} ' \
-              '--dbsnp {4} ' \
-              '--input_file:normal {5} ' \
-              '--input_file:tumor {6} ' \
+    command = '--analysis_type MuTect ' \
+              '--reference_sequence {0} ' \
+              '--cosmic {1} ' \
+              '--dbsnp {2} ' \
+              '--input_file:normal {3} ' \
+              '--input_file:tumor {4} ' \
               '--tumor_lod 10 ' \
-              '--out {7} ' \
-              '--coverage_file {8} ' \
-              '--vcf {9} '.format(15, mutect_jar, ref_fasta, cosmic_vcf, dbsnp_vcf, normal_bqsr_bam,
+              '--out {5} ' \
+              '--coverage_file {6} ' \
+              '--vcf {7} '.format(ref_fasta, cosmic_vcf, dbsnp_vcf, normal_bqsr_bam,
                                   tumor_bqsr_bam, mut_out, mut_cov, output)
-    try:
-        subprocess.check_call(command)
-    except subprocess.CalledProcessError:
-        raise RuntimeError('MuTect failed to finish')
-    except OSError:
-        raise RuntimeError('Failed to find "java" or mutect_jar')
+
+    docker_call(input_args, command, tool=tools['mutect'])
 
     # Update FileStoreID
-    target.updateGlobalFile(ids['mutect.vcf'],
+    target.fileStore.updateGlobalFile(ids['mutect.vcf'],
                             os.path.join(input_args['work_dir'], '{}-normal:{}-tumor.vcf'.format(normal_uuid, tumor_uuid)))
 
     target.addChildTargetFn(teardown, target_vars)
@@ -630,8 +624,9 @@ def mutect(target, target_vars):
 def teardown(target, target_vars):
     # Unpack target variables
     input_args, symbolic_inputs, ids, tools = target_vars
+    work_dir = input_args['work_dir']
 
-    files = [os.path.join(input_args['work_dir'], f) for f in os.listdir(work_dir) if 'tumor.vcf' not in f]
+    files = [os.path.join(work_dir, f) for f in os.listdir(work_dir) if 'tumor.vcf' not in f]
     for f in files:
         os.remove(f)
 
