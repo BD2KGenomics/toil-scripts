@@ -14,10 +14,12 @@ Toil:       pip install git+https://github.com/BD2KGenomics/toil.git
 
 import argparse
 from collections import OrderedDict
+import glob
 import os
 import subprocess
 import errno
 import multiprocessing
+import shutil
 from toil.job import Job
 
 
@@ -106,9 +108,9 @@ def move_to_output_dir(work_dir, output_dir, uuid=None, files=list()):
     """
     for fname in files:
         if uuid is None:
-            os.rename(os.path.join(work_dir, fname), os.path.join(output_dir, fname))
+            shutil.move(os.path.join(work_dir, fname), os.path.join(output_dir, fname))
         else:
-            os.rename(os.path.join(work_dir, fname), os.path.join(output_dir, '{}.{}'.format(uuid, fname)))
+            shutil.move(os.path.join(work_dir, fname), os.path.join(output_dir, '{}.{}'.format(uuid, fname)))
 
 
 # Start of job Functions
@@ -175,10 +177,12 @@ def unzip(job, job_vars):
     # Remove large files before creating concat versions.
     os.remove(os.path.join(work_dir, 'sample.zip'))
     # Zcat files in parallel
+    R1_files = glob.glob(os.path.join(work_dir, '*R1*'))
+    R2_files = glob.glob(os.path.join(work_dir, '*R2*'))
     with open(os.path.join(work_dir, 'R1.fastq'), 'w') as f1:
-        p1 = subprocess.Popen('zcat {}'.format(os.path.join(work_dir, '*R1*')), shell=True, stdout=f1)
+        p1 = subprocess.Popen(['zcat'] + R1_files, stdout=f1)
     with open(os.path.join(work_dir, 'R2.fastq'), 'w') as f2:
-        p2 = subprocess.Popen('zcat {}'.format(os.path.join(work_dir, '*R2*')), shell=True, stdout=f2)
+        p2 = subprocess.Popen(['zcat'] + R2_files, stdout=f2)
     p1.wait()
     p2.wait()
     # Update FileStore
