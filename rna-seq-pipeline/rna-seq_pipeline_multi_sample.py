@@ -310,7 +310,24 @@ def bamsort_and_index(job, job_vars):
     job.fileStore.updateGlobalFile(ids['sorted.bam'], output)
     job.fileStore.updateGlobalFile(ids['sorted.bam.bai'], os.path.join(work_dir, 'sorted.bam.bai'))
     # Run child job
-    job.addChildJobFn(sort_bam_by_reference, job_vars)
+    job.addChildJobFn(sort_bam_by_reference, job_vars, disk='50 G')
+    job.addChildJobFn(rseq_qc, job_vars, disk='20 G')
+
+
+def rseq_qc(job, job_vars):
+    input_args, ids = job_vars
+    work_dir = job.fileStore.getLocalTempDir()
+    output_dir = os.path.join(input_args['output_dir'], 'rseq_qc')
+    mkdir_p(output_dir)
+    uuid = input_args['uuid']
+
+    #I/O
+    sorted_bam, sorted_bai = return_input_paths(job, work_dir, ids, 'sorted.bam', 'sorted.bam.bai')
+    # Command
+    docker_call(tool='jvivian/qc', tool_parameters=['/opt/cgl-docker-lib/RseqQC_v2.sh', docker_path(sorted_bam), uuid], work_dir=work_dir)
+    # Update FileStore
+    output_files = [f for f in glob.glob(os.path.join(work_dir, '*')) if 'sorted.bam' not in f]
+    move_to_output_dir(work_dir, output_dir, uuid=None, files=[os.path.basename(x) for x in output_files])
 
 
 def sort_bam_by_reference(job, job_vars):
