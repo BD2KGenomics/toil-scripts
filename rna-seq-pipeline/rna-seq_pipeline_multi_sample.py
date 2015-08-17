@@ -13,8 +13,10 @@ Toil:       pip install git+https://github.com/BD2KGenomics/toil.git
 """
 
 import argparse
+import base64
 from collections import OrderedDict
 import glob
+import hashlib
 import os
 import subprocess
 import errno
@@ -33,6 +35,7 @@ def build_parser():
     parser.add_argument('-r', '--rsem_ref', required=True, help='RSEM_REF URL')
     parser.add_argument('-chr', '--chromosomes', required=True, help='Chromosomes Directory')
     parser.add_argument('-e', '--ebwt', required=True, help='EBWT Directory')
+    parser.add_argument('-s', '--ssec', help='Path to Key File for SSE-C Encryption')
     parser.add_argument('-o', '--output_dir', required=True, help='Directory to output final results')
     return parser
 
@@ -50,15 +53,43 @@ def mkdir_p(path):
         else: raise
 
 
+def download_encrypted_file(job, input_args, ids, name):
+    """
+    Downloads encrypted files
+    """
+    work_dir = job.fileStore.getLocalTempDir()
+    key_path = input_args['ssec']
+    file_path = os.path.join(work_dir, name)
+    url = input_args[name]
+
+    with open(key_path, 'r') as f:
+        key = f.read()
+    if len(key) != 32:
+        raise RuntimeError('Invalid Key! Must be 32 bytes: {}'.format(key))
+    encoded_key = base64.b64encode(key)
+    encoded_key_md5 = base64.b64encode( hashlib.md5(key).digest() )
+    h1 = 'x-amz-server-side-encryption-customer-algorithm:AES256'
+    h2 = 'x-amz-server-side-encryption-customer-key:{}'.format(encoded_key)
+    h3 = 'x-amz-server-side-encryption-customer-key-md5:{}'.format(encoded_key_md5)
+    try:
+        subprocess.check_call(['curl', '-fs', '--retry', '5', '-H', h1, '-H', h2, '-H', h3, url, '-o', file_path])
+    except OSError:
+        raise RuntimeError('Failed to find "curl". Install via "apt-get install curl"')
+    assert os.path.exists(file_path)
+    job.fileStore.updateGlobalFile(ids[name], file_path)
+
+
 def download_from_url(job, input_args, ids, name):
+    """
+    Downloads a URL that was supplied as an argument to running this script in LocalTempDir.
+    After downloading the file, it is stored in the FileStore.
+    """
     work_dir = job.fileStore.getLocalTempDir()
     file_path = os.path.join(work_dir, name)
     url = input_args[name]
     if not os.path.exists(file_path):
         try:
             subprocess.check_call(['curl', '-fs', '--retry', '5', '--create-dir', url, '-o', file_path])
-        # except subprocess.CalledProcessError:
-        #     raise RuntimeError('\nNecessary file could not be acquired: {}. Check input URL'.format(url))
         except OSError:
             raise RuntimeError('Failed to find "curl". Install via "apt-get install curl"')
     assert os.path.exists(file_path)
