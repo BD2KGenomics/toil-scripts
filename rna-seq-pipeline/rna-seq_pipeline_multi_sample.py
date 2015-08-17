@@ -218,8 +218,11 @@ def unzip(job, job_vars):
     # Remove large files before creating concat versions.
     os.remove(os.path.join(work_dir, 'sample.zip'))
     # Zcat files in parallel
-    R1_files = glob.glob(os.path.join(work_dir, '*R1*'))
-    R2_files = glob.glob(os.path.join(work_dir, '*R2*'))
+    # TODO: FIX THIS! Files should follow R1 and R2 format. NOT left/right -- change interleaved script.
+    # R1_files = glob.glob(os.path.join(work_dir, '*R1*'))
+    # R2_files = glob.glob(os.path.join(work_dir, '*R2*'))
+    R1_files = glob.glob(os.path.join(work_dir, '*left*'))
+    R2_files = glob.glob(os.path.join(work_dir, '*right*'))
     with open(os.path.join(work_dir, 'R1.fastq'), 'w') as f1:
         p1 = subprocess.Popen(['zcat'] + R1_files, stdout=f1)
     with open(os.path.join(work_dir, 'R2.fastq'), 'w') as f2:
