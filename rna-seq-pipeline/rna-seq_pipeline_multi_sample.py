@@ -98,9 +98,8 @@ def download_from_url(job, input_args, ids, name):
 
 def return_input_paths(job, work_dir, ids, *args):
     """
-    Given one or more strings representing file_names, return the paths to those files.
+    Returns the paths of files from the FileStore if they are not present.
     """
-    # for every file in *args, place in work_dir via the FileStore and then return the mounted docker path.
     paths = OrderedDict()
     for name in args:
         if not os.path.exists(os.path.join(work_dir, name)):
@@ -115,6 +114,9 @@ def return_input_paths(job, work_dir, ids, *args):
 
 
 def docker_path(filepath):
+    """
+    Given a path, returns that files path inside the docker mount directory (/data).
+    """
     return os.path.join('/data', os.path.basename(filepath))
 
 
@@ -146,6 +148,10 @@ def move_to_output_dir(work_dir, output_dir, uuid=None, files=list()):
 
 # Start of job Functions
 def batch_start(job, input_args):
+    """
+    Creates FileStoreIDs for files that are shared as input by every sample.
+    Downloads and stores these files in the FileStore.
+    """
     shared_files = ['unc.bed', 'hg19.transcripts.fa','composite_exons.bed', 'normalize.pl', 'rsem_ref.zip',
                     'ebwt.zip', 'chromosomes.zip']
     shared_ids = {x: job.fileStore.getEmptyFileStoreID() for x in shared_files}
@@ -156,7 +162,9 @@ def batch_start(job, input_args):
 
 
 def spawn_batch_jobs(job, shared_ids, input_args):
-    # Launch pipeline for each sample
+    """
+    Launches pipeline for each sample.
+    """
     samples = []
     config = input_args['config']
     with open(config, 'r') as f:
@@ -169,7 +177,7 @@ def spawn_batch_jobs(job, shared_ids, input_args):
 
 def start_node(job, shared_ids, input_args, sample):
     """
-    Launchpoint for the script. Defines variables used in the rest of the pipeline.
+    Defines variables unique to a sample that are used in the rest of the pipeline.
     """
     uuid, sample_url = sample
     # Symbolic names for sample specific files
@@ -548,6 +556,7 @@ if __name__ == "__main__":
               'ebwt.zip': args.ebwt,
               'uuid': None,
               'samples.zip': None,
+              'ssec': args.ssec,
               'cpu_count': multiprocessing.cpu_count()}
 
     # Launch jobs
