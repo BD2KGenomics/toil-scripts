@@ -196,16 +196,17 @@ def start_node(job, shared_ids, input_args, sample):
     # Update input
     sample_input['uuid'] = uuid
     sample_input['sample.zip'] = sample_url
+    sample_input['output_dir'] = os.path.join(input_args['output_dir'], uuid)
     job_vars = (sample_input, ids)
 
     # Download sample fastqs and launch pipeline
-    job.addChildJobFn(download_from_url, sample_input, ids, 'sample.zip')
-    job.addFollowOnJobFn(unzip, job_vars)
+    job.addChildJobFn(download_encrypted_file, sample_input, ids, 'sample.zip', disk='12 G')
+    job.addFollowOnJobFn(unzip, job_vars, disk='50 G')
 
 
 def unzip(job, job_vars):
     """
-    Unzips input sample files
+    Unzips input sample and concats the Read1 and Read2 groups together.
     """
     input_args, ids = job_vars
     work_dir = job.fileStore.getLocalTempDir()
@@ -226,28 +227,17 @@ def unzip(job, job_vars):
     p1.wait()
     p2.wait()
     # Update FileStore
-    job.fileStore.deleteGlobalFile(ids['sample.zip'])
     job.fileStore.updateGlobalFile(ids['R1.fastq'], os.path.join(work_dir, 'R1.fastq'))
     job.fileStore.updateGlobalFile(ids['R2.fastq'], os.path.join(work_dir, 'R2.fastq'))
+    job.fileStore.deleteGlobalFile(ids['sample.zip'])
     # Run children and follow-on
-    job.addFollowOnJobFn(mapsplice, job_vars)
-
-
-def unzip_worker_fn(job, job_vars, symbolic_name, output_name):
-    input_args, ids = job_vars
-    work_dir = job.fileStore.getLocalTempDir()
-    # I/O
-    sample = return_input_paths(job, work_dir, ids, symbolic_name)
-    # Command
-    command = ['zcat', '*' + sample + '*gz']
-    with open(os.path.join(work_dir, output_name), 'w') as f:
-        subprocess.check_call(command, stdout=f)
-    # Update FileStore
-    job.fileStore.updateGlobalFile(ids[output_name], os.path.join(work_dir, output_name))
-    job.fileStore.deleteGlobalFile(ids[os.path.basename(sample)])
+    job.addFollowOnJobFn(mapsplice, job_vars, cpu=36, memory='30 G', disk='100 G')
 
 
 def mapsplice(job, job_vars):
+    """
+    Maps RNA-Seq reads to a reference genome.
+    """
     input_args, ids = job_vars
     work_dir = job.fileStore.getLocalTempDir()
     cpus = input_args['cpu_count']
@@ -268,12 +258,12 @@ def mapsplice(job, job_vars):
                   '-o', '/data']
     docker_call(tool='computationalgenomicslab/mapsplice', tool_parameters=parameters, work_dir=work_dir)
     # Update FileStore
-    for fname in ['R1.fastq', 'R2.fastq']:
-        job.fileStore.deleteGlobalFile(ids[fname])
     for fname in ['alignments.bam', 'stats.txt']:
         job.fileStore.updateGlobalFile(ids[fname], os.path.join(work_dir, fname))
+    for fname in ['R1.fastq', 'R2.fastq']:
+        job.fileStore.deleteGlobalFile(ids[fname])
     # Run child job
-    job.addChildJobFn(add_read_groups, job_vars)
+    job.addChildJobFn(add_read_groups, job_vars, disk='30 G')
     job.addChildJobFn(mapping_stats, job_vars)
 
 
@@ -298,7 +288,7 @@ def add_read_groups(job, job_vars):
     # Update FileStore
     job.fileStore.updateGlobalFile(ids['rg_alignments.bam'], output)
     # Run child job
-    job.addChildJobFn(bamsort_and_index, job_vars)
+    job.addChildJobFn(bamsort_and_index, job_vars, disk='30 G')
 
 
 def bamsort_and_index(job, job_vars):
@@ -348,14 +338,15 @@ def sort_bam_by_reference(job, job_vars):
     subprocess.check_call(cmd)
     # Update FileStore
     job.fileStore.updateGlobalFile(ids['sort_by_ref.bam'], output)
-    job.addChildJobFn(transcriptome, job_vars)
-    job.addChildJobFn(exon_count, job_vars)
+    job.addChildJobFn(transcriptome, job_vars, disk='30 G')
+    job.addChildJobFn(exon_count, job_vars, disk='30 G')
 
 
 def exon_count(job, job_vars):
     input_args, ids = job_vars
     work_dir = job.fileStore.getLocalTempDir()
     output_dir = input_args['output_dir']
+    mkdir_p(output_dir)
 
     # I/O
     sort_by_ref, normalize_pl, composite_bed = return_input_paths(job, work_dir, ids, 'sort_by_ref.bam',
@@ -408,7 +399,7 @@ def transcriptome(job, job_vars):
     # Update FileStore
     job.fileStore.updateGlobalFile(ids['transcriptome.bam'], output)
     # Run child job
-    job.addChildJobFn(filter_bam, job_vars)
+    job.addChildJobFn(filter_bam, job_vars, disk='30 G')
 
 
 def filter_bam(job, job_vars):
@@ -429,7 +420,7 @@ def filter_bam(job, job_vars):
     # Update FileStore
     job.fileStore.updateGlobalFile(ids['filtered.bam'], output)
     # Run child job
-    job.addChildJobFn(rsem, job_vars)
+    job.addChildJobFn(rsem, job_vars, cpu=32, disk='30 G')
 
 
 def rsem(job, job_vars):
