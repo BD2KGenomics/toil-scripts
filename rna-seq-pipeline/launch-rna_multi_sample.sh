@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-export TMPDIR=/home/ubuntu/fake_mnt
-mkdir -p "/home/ubuntu/final_output"
+# export TMPDIR=/mesos/workspace
+# mkdir -p "/home/ubuntu/final_output"
 python rna-seq_pipeline_multi_sample.py \
 --retryCount 3 \
 -c config.txt \
@@ -11,4 +11,5 @@ python rna-seq_pipeline_multi_sample.py \
 --rsem_ref "https://s3-us-west-2.amazonaws.com/rna-seq-pipeline/rsem_ref.zip" \
 --chromosomes "https://s3-us-west-2.amazonaws.com/rna-seq-pipeline/chromosomes.zip" \
 --ebwt "https://s3-us-west-2.amazonaws.com/rna-seq-pipeline/ebwt.zip" \
--o "/home/ubuntu/final_output" \
+--ssec "/home/mesosbox/shared/foo.key" \
+-o "/mesos/workspace"
