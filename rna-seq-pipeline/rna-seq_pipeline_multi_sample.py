@@ -478,6 +478,9 @@ def rsem(job, job_vars):
 def rsem_postprocess(job, job_vars):
     input_args, ids = job_vars
     work_dir = job.fileStore.getLocalTempDir()
+    uuid = input_args['uuid']
+    output_dir = input_args['output_dir']
+    mkdir_p(output_dir)
 
     # I/O
     return_input_paths(job, work_dir, ids, 'rsem_gene.tab', 'rsem_isoform.tab')
@@ -493,41 +496,12 @@ def rsem_postprocess(job, job_vars):
     job.fileStore.updateGlobalFile(ids['rsem.isoform.raw_counts.tab'], os.path.join(work_dir, 'rsem.isoform.raw_counts.tab'))
     job.fileStore.updateGlobalFile(ids['rsem.isoform.norm_fpkm.tab'], os.path.join(work_dir, 'rsem.isoform.norm_fpkm.tab'))
     job.fileStore.updateGlobalFile(ids['rsem.isoform.norm_tpm.tab'], os.path.join(work_dir, 'rsem.isoform.norm_tpm.tab'))
-    # Run child job
-    job.addChildJobFn(rsem_reduce, job_vars)
 
-
-def rsem_reduce(job, job_vars):
-    input_args, ids = job_vars
-    work_dir = job.fileStore.getLocalTempDir()
-
-    # I/O
-    uuid = input_args['uuid']
-    output_dir = input_args['output_dir']
-    return_input_paths(job, work_dir, ids, 'rsem.genes.norm_counts.tab', 'rsem.genes.raw_counts.tab',
-                       'rsem.genes.norm_fpkm.tab', 'rsem.genes.norm_tpm.tab', 'rsem.isoform.norm_counts.tab',
-                       'rsem.isoform.raw_counts.tab', 'rsem.isoform.norm_fpkm.tab', 'rsem.isoform.norm_tpm.tab')
-
-    # Command
-    docker_call(tool='jvivian/reduce', tool_parameters=[uuid], work_dir=work_dir)
-    # Update FileStore
-    job.fileStore.updateGlobalFile(ids['gene_raw_count.tab'], os.path.join(work_dir, '{}.gene_raw_count.tab'.format(uuid)))
-    job.fileStore.updateGlobalFile(ids['gene_norm_count.tab'], os.path.join(work_dir, '{}.gene_norm_count.tab'.format(uuid)))
-    job.fileStore.updateGlobalFile(ids['gene_fpkm.tab'], os.path.join(work_dir, '{}.gene_fpkm.tab'.format(uuid)))
-    job.fileStore.updateGlobalFile(ids['gene_tpm.tab'], os.path.join(work_dir, '{}.gene_tpm.tab'.format(uuid)))
-    job.fileStore.updateGlobalFile(ids['isoform_raw_count.tab'], os.path.join(work_dir, '{}.isoform_raw_count.tab'.format(uuid)))
-    job.fileStore.updateGlobalFile(ids['isoform_norm_count.tab'], os.path.join(work_dir, '{}.isoform_norm_count.tab'.format(uuid)))
-    job.fileStore.updateGlobalFile(ids['isoform_fpkm.tab'], os.path.join(work_dir, '{}.isoform_fpkm.tab'.format(uuid)))
-    job.fileStore.updateGlobalFile(ids['isoform_tpm.tab'], os.path.join(work_dir, '{}.isoform_tpm.tab'.format(uuid)))
-    # Move files to output
-    move_to_output_dir(work_dir, output_dir, uuid=None, files=['{}.gene_raw_count.tab'.format(uuid),
-                                                               '{}.gene_norm_count.tab'.format(uuid),
-                                                               '{}.gene_fpkm.tab'.format(uuid),
-                                                               '{}.gene_tpm.tab'.format(uuid),
-                                                               '{}.isoform_raw_count.tab'.format(uuid),
-                                                               '{}.isoform_norm_count.tab'.format(uuid),
-                                                               '{}.isoform_fpkm.tab'.format(uuid),
-                                                               '{}.isoform_tpm.tab'.format(uuid)])
+    move_to_output_dir(work_dir, output_dir, uuid=uuid, files=['rsem.genes.norm_counts.tab', 'rsem.genes.raw_counts.tab',
+                                                               'rsem.genes.norm_fpkm.tab', 'rsem.genes.norm_tpm.tab',
+                                                               'rsem.isoform.norm_counts.tab', 'rsem.isoform.raw_counts.tab',
+                                                               'rsem.isoform.norm_fpkm.tab', 'rsem.isoform.norm_tpm.tab',
+                                                               'rsem.genes.results', 'rsem.isoform.results'])
 
 
 def mapping_stats(job, job_vars):
@@ -538,6 +512,7 @@ def mapping_stats(job, job_vars):
     return_input_paths(job, work_dir, ids, 'stats.txt')
     uuid = input_args['uuid']
     output_dir = input_args['output_dir']
+    mkdir_p(output_dir)
     # Command
     docker_call(tool='jvivian/mapping_stats', tool_parameters=[uuid], work_dir=work_dir)
     # Update FileStore
