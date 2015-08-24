@@ -544,4 +544,3 @@ if __name__ == "__main__":
 
     # Launch jobs
     Job.Runner.startToil(Job.wrapJobFn(batch_start, inputs), args)
-    Job.Runner.cleanup(args)
