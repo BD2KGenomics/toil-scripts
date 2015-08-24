@@ -210,6 +210,7 @@ def unzip(job, job_vars):
     """
     input_args, ids = job_vars
     work_dir = job.fileStore.getLocalTempDir()
+    cores = input_args['cpu_count']
 
     # I/O
     sample = return_input_paths(job, work_dir, ids, 'sample.zip')
@@ -231,7 +232,7 @@ def unzip(job, job_vars):
     job.fileStore.updateGlobalFile(ids['R2.fastq'], os.path.join(work_dir, 'R2.fastq'))
     job.fileStore.deleteGlobalFile(ids['sample.zip'])
     # Run children and follow-on
-    job.addFollowOnJobFn(mapsplice, job_vars, cpu=36, memory='30 G', disk='100 G')
+    job.addFollowOnJobFn(mapsplice, job_vars, cores=cores, memory='30 G', disk='100 G')
 
 
 def mapsplice(job, job_vars):
@@ -422,6 +423,7 @@ def transcriptome(job, job_vars):
 def filter_bam(job, job_vars):
     input_args, ids = job_vars
     work_dir = job.fileStore.getLocalTempDir()
+    cores = input_args['cpu_count']
 
     # I/O
     transcriptome_bam = return_input_paths(job, work_dir, ids, 'transcriptome.bam')
@@ -437,7 +439,7 @@ def filter_bam(job, job_vars):
     # Update FileStore
     job.fileStore.updateGlobalFile(ids['filtered.bam'], output)
     # Run child job
-    job.addChildJobFn(rsem, job_vars, cpu=32, disk='30 G')
+    job.addChildJobFn(rsem, job_vars, cores=cores, disk='30 G')
 
 
 def rsem(job, job_vars):
