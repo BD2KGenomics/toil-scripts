@@ -125,8 +125,7 @@ def docker_call(tool, tool_parameters, work_dir):
     Makes subprocess call of a command to a docker container.
     work_dir MUST BE AN ABSOLUTE PATH or the call will fail.
     """
-    # base_docker_call = 'sudo docker run -v {}:/data'.format(work_dir)
-    base_docker_call = 'docker run -v {}:/data'.format(work_dir)
+    base_docker_call = 'sudo docker run -v {}:/data'.format(work_dir)
     call = base_docker_call.split() + [tool] + tool_parameters
     try:
         subprocess.check_call(call)
