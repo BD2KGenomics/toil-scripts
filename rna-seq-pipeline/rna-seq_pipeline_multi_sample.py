@@ -497,8 +497,7 @@ def rsem_postprocess(job, job_vars):
     move_to_output_dir(work_dir, output_dir, uuid=uuid, files=['rsem.genes.norm_counts.tab', 'rsem.genes.raw_counts.tab',
                                                                'rsem.genes.norm_fpkm.tab', 'rsem.genes.norm_tpm.tab',
                                                                'rsem.isoform.norm_counts.tab', 'rsem.isoform.raw_counts.tab',
-                                                               'rsem.isoform.norm_fpkm.tab', 'rsem.isoform.norm_tpm.tab',
-                                                               'rsem.genes.results', 'rsem.isoform.results'])
+                                                               'rsem.isoform.norm_fpkm.tab', 'rsem.isoform.norm_tpm.tab'])
 
 
 def mapping_stats(job, job_vars):
