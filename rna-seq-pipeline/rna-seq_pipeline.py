@@ -37,7 +37,7 @@ Tree Structure of RNA-Seq Pipeline (per sample)
 12 = RSEM
 13 = RSEM Post-Process
 
-4,7,9,13 conribute to producing the final output
+4,7,9,13 contribute to producing the final output
 
 Dependencies:
 Curl:       apt-get install curl
