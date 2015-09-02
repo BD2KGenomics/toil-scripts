@@ -231,6 +231,7 @@ def start_node(job, shared_ids, input_args, sample):
     sample_input['uuid'] = uuid
     sample_input['sample.zip'] = sample_url
     sample_input['output_dir'] = os.path.join(input_args['output_dir'], uuid)
+    sample_input['cpu_count'] = multiprocessing.cpu_count()
     job_vars = (sample_input, ids)
 
     # Download sample fastqs and launch pipeline
@@ -573,10 +574,10 @@ if __name__ == "__main__":
               'rsem_ref.zip': args.rsem_ref,
               'chromosomes.zip': args.chromosomes,
               'ebwt.zip': args.ebwt,
+              'ssec': args.ssec,
               'uuid': None,
               'samples.zip': None,
-              'ssec': args.ssec,
-              'cpu_count': multiprocessing.cpu_count()}
+              'cpu_count': None}
 
     # Launch jobs
     Job.Runner.startToil(Job.wrapJobFn(batch_start, inputs), args)
