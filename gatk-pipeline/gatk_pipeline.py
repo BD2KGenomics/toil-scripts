@@ -125,12 +125,15 @@ def docker_path(file_path):
     return os.path.join('/data', os.path.basename(file_path))
 
 
-def docker_call(work_dir, tool_parameters, tool):
+def docker_call(work_dir, tool_parameters, tool, java_opts=None):
     """
     Makes subprocess call of a command to a docker container.
     :parameter tool: name of the Docker image to be used (e.g. computationalgenomicslab/samtools)
     """
-    base_docker_call = 'sudo docker run -v {}:/data'.format(work_dir)
+    if java_opts:
+        base_docker_call = 'sudo docker run -e JAVA_OPTS={} -v {}:/data'.format(java_opts, work_dir)
+    else:
+        base_docker_call = 'sudo docker run -v {}:/data'.format(work_dir)
     try:
         subprocess.check_call(base_docker_call.split() + [tool] + tool_parameters)
     except subprocess.CalledProcessError:
@@ -139,7 +142,7 @@ def docker_call(work_dir, tool_parameters, tool):
         raise RuntimeError('docker not found on system. Install on all nodes.')
 
 
-# Start of Target Functions
+# Start of Job Functions
 def batch_start(job, input_args):
     # Create IDs for the shared files in the pipeline
     shared_ids = {x: job.fileStore.getEmptyFileStoreID() for x in ['ref.fasta', 'phase.vcf', 'mills.vcf', 'cosmic.vcf',
@@ -247,7 +250,7 @@ def start_preprocessing(job, job_vars):
     # Add children and followOn jobs
     job.addChildJobFn(index, job_vars, 'normal', cores=1, memory='1 G', disk='8 G')
     job.addChildJobFn(index, job_vars, 'tumor', cores=1, memory='1 G', disk='8 G')
-    job.addFollowOnJobFn(mutect, job_vars, cores=1, memory='3 G', disk='30 G')
+    job.addFollowOnJobFn(mutect, job_vars, cores=1, memory='7 G', disk='30 G')
 
 
 def rtc(job, job_vars, sample):
@@ -274,10 +277,10 @@ def rtc(job, job_vars, sample):
                   '--downsampling_type', 'NONE',
                   '-o', docker_path(output)]
 
-    docker_call(work_dir, tool_parameters=parameters, tool='computationalgenomicslab/gatk')
+    docker_call(work_dir, tool_parameters=parameters, tool='computationalgenomicslab/gatk', java_opts='-Xmx10g')
     # Update fileStore and spawn child job
     job.fileStore.updateGlobalFile(ids['{}.intervals'.format(sample)], output)
-    job.addChildJobFn(ir, job_vars, sample, cores=1, memory='4 G', disk='12 G')
+    job.addChildJobFn(ir, job_vars, sample, cores=1, memory='10 G', disk='12 G')
 
 
 def ir(job, job_vars, sample):
@@ -306,11 +309,11 @@ def ir(job, job_vars, sample):
               '-maxReads', str(720000),
               '-maxInMemory', str(5400000),
               '-o', docker_path(output)]
-    docker_call(work_dir, command, tool='computationalgenomicslab/gatk')
+    docker_call(work_dir, command, tool='computationalgenomicslab/gatk', java_opts='-Xmx10g')
     # Update fileStore and spawn child job
     job.fileStore.updateGlobalFile(ids['{}.indel.bam'.format(sample)], output)
     job.fileStore.updateGlobalFile(ids['{}.indel.bai'.format(sample)], os.path.splitext(output)[0] + '.bai')
-    job.addChildJobFn(br, job_vars, sample, cores=int(input_args['cpu_count']), memory='10 G', disk='15 G')
+    job.addChildJobFn(br, job_vars, sample, cores=int(input_args['cpu_count']), memory='15 G', disk='15 G')
 
 
 def br(job, job_vars, sample):
@@ -333,7 +336,7 @@ def br(job, job_vars, sample):
               '-I', indel_bam,
               '-knownSites', dbsnp_vcf,
               '-o', docker_path(output)]
-    docker_call(work_dir, command, tool='computationalgenomicslab/gatk')
+    docker_call(work_dir, command, tool='computationalgenomicslab/gatk', java_opts='-Xmx15g')
     # Update fileStore and spawn child job
     job.fileStore.updateGlobalFile(ids['{}.recal.table'.format(sample)], output)
     job.addChildJobFn(pr, job_vars, sample, cores=int(input_args['cpu_count']), memory='15 G', disk='30 G')
@@ -380,7 +383,7 @@ def mutect(job, job_vars):
                                            'dbsnp.vcf', 'normal.bqsr.bai', 'tumor.bqsr.bai', 'ref.fasta.fai', 'ref.dict', 'cosmic.vcf')
     # Output VCF
     uuid = input_args['uuid']
-    output_name = '{}_mutect.vcf'.format(uuid)
+    output_name = '{}.mutect.vcf'.format(uuid)
     mut_out = docker_path(os.path.join(work_dir, 'mutect.out'))
     mut_cov = docker_path(os.path.join(work_dir, 'mutect.cov'))
     # Call: MuTect
@@ -391,13 +394,14 @@ def mutect(job, job_vars):
               '--input_file:normal', normal_bqsr_bam,
               '--input_file:tumor', tumor_bqsr_bam,
               '--tumor_lod', str(10),
+              '--initial_tumor_lod', str(4.0),
               '--out', mut_out,
               '--coverage_file', mut_cov,
               '--vcf', docker_path(output_name)]
     docker_call(work_dir, command, tool='computationalgenomicslab/mutect')
     # Update FileStoreID
     job.fileStore.updateGlobalFile(ids['mutect.vcf'], os.path.join(work_dir, output_name))
-    move_to_output_dir(work_dir, output_dir, uuid=None, files=[os.path.join(work_dir, output_name)] )
+    move_to_output_dir(work_dir, output_dir, uuid=None, files=[output_name])
 
 
 if __name__ == '__main__':
