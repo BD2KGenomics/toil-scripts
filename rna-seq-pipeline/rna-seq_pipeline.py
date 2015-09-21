@@ -50,6 +50,7 @@ Toil:       pip install git+https://github.com/BD2KGenomics/toil.git
 import argparse
 import base64
 from collections import OrderedDict
+from contextlib import closing
 import glob
 import hashlib
 import os
@@ -57,6 +58,7 @@ import subprocess
 import errno
 import multiprocessing
 import shutil
+import tarfile
 from toil.job import Job
 
 
@@ -71,7 +73,9 @@ def build_parser():
     parser.add_argument('-chr', '--chromosomes', required=True, help='Chromosomes Directory')
     parser.add_argument('-e', '--ebwt', required=True, help='EBWT Directory')
     parser.add_argument('-s', '--ssec', help='Path to Key File for SSE-C Encryption')
-    parser.add_argument('-o', '--output_dir', required=True, help='Directory to output final results')
+    parser.add_argument('-o', '--output_dir', required=True, help='full path where final results will be output')
+    parser.add_argument('-3', '--s3_dir', default=None, help='S3 Directory, starting with bucket name. e.g.: '
+                                                             'cgl-driver-projects/ckcc/rna-seq-samples/')
     return parser
 
 
@@ -181,6 +185,15 @@ def move_to_output_dir(work_dir, output_dir, uuid=None, files=list()):
             shutil.move(os.path.join(work_dir, fname), os.path.join(output_dir, '{}.{}'.format(uuid, fname)))
 
 
+def tarball_files(work_dir, zip_name, uuid=None, files=None):
+    with tarfile.open(os.path.join(work_dir, zip_name), 'w:gz') as f_out:
+        for fname in files:
+            if uuid:
+                f_out.add(os.path.join(work_dir, fname), arcname=uuid + '.' + fname)
+            else:
+                f_out.add(os.path.join(work_dir, fname), arcname=fname)
+
+
 # Start of job Functions
 def batch_start(job, input_args):
     """
@@ -223,7 +236,8 @@ def start_node(job, shared_ids, input_args, sample):
                       'rsem.isoform.norm_counts.tab', 'rsem.isoform.norm_fpkm.tab', 'rsem.isoform.norm_tpm.tab',
                       'gene_raw_count.tab', 'gene_norm_count.tab', 'gene_fpkm.tab', 'gene_tpm.tab',
                       'isoform_raw_count.tab', 'isoform_norm_count.tab', 'isoform_fpkm.tab', 'isoform_tpm.tab',
-                      'stats.txt', 'stats2.txt', 'stats_all.txt', 'mapping.tab', 'exon_quant', 'exon_quant.bed']
+                      'stats.txt', 'stats2.txt', 'stats_all.txt', 'mapping.tab', 'exon_quant', 'exon_quant.bed',
+                      'map.tar.gz', 'exon.tar.gz', 'qc.tar.gz', 'rsem.tar.gz', 'uuid.tar.gz']
     ids = shared_ids.copy()
     ids.update( {x: job.fileStore.getEmptyFileStoreID() for x in symbolic_names} )
     sample_input = dict(input_args)
@@ -303,6 +317,27 @@ def mapsplice(job, job_vars):
     job.addChildJobFn(mapping_stats, job_vars)
 
 
+def mapping_stats(job, job_vars):
+    input_args, ids = job_vars
+    work_dir = job.fileStore.getLocalTempDir()
+
+    # I/O
+    return_input_paths(job, work_dir, ids, 'stats.txt')
+    uuid = input_args['uuid']
+    output_dir = input_args['output_dir']
+    mkdir_p(output_dir)
+    # Command
+    docker_call(tool='jvivian/mapping_stats', tool_parameters=[uuid], work_dir=work_dir)
+    # Update FileStore
+    job.fileStore.updateGlobalFile(ids['stats2.txt'], os.path.join(work_dir, '{}_stats2.txt'.format(uuid)))
+    job.fileStore.updateGlobalFile(ids['stats_all.txt'], os.path.join(work_dir, '{}_stats_all.txt'.format(uuid)))
+    job.fileStore.updateGlobalFile(ids['mapping.tab'], os.path.join(work_dir, '{}_mapping.tab'.format(uuid)))
+    # Zip output files and store
+    output_files = ['{}_stats2.txt'.format(uuid), '{}_stats_all.txt'.format(uuid), '{}_mapping.tab'.format(uuid)]
+    tarball_files(work_dir, zip_name='map.tar.gz', files=output_files)
+    job.fileStore.updateGlobalFile(ids['map.tar.gz'], os.path.join(work_dir, 'map.tar.gz'))
+
+
 def add_read_groups(job, job_vars):
     input_args, ids = job_vars
     work_dir = job.fileStore.getLocalTempDir()
@@ -360,7 +395,8 @@ def rseq_qc(job, job_vars):
     docker_call(tool='jvivian/qc', tool_parameters=['/opt/cgl-docker-lib/RseqQC_v2.sh', docker_path(sorted_bam), uuid], work_dir=work_dir)
     # Update FileStore
     output_files = [f for f in glob.glob(os.path.join(work_dir, '*')) if 'sorted.bam' not in f]
-    move_to_output_dir(work_dir, output_dir, uuid=None, files=[os.path.basename(x) for x in output_files])
+    tarball_files(work_dir, zip_name='qc.tar.gz', uuid=None, files=output_files)
+    job.fileStore.updateGlobalFile(ids['qc.tar.gz'], os.path.join(work_dir, 'qc.tar.gz'))
 
 
 def sort_bam_by_reference(job, job_vars):
@@ -399,6 +435,7 @@ def exon_count(job, job_vars):
     input_args, ids = job_vars
     work_dir = job.fileStore.getLocalTempDir()
     output_dir = input_args['output_dir']
+    uuid = input_args['uuid']
     mkdir_p(output_dir)
 
     # I/O
@@ -424,12 +461,10 @@ def exon_count(job, job_vars):
     p3 = subprocess.Popen(['tr', '"-"', '"\t"'], stdin=p2.stdout, stdout=subprocess.PIPE)
     with open(os.path.join(work_dir, 'exon_quant.bed'), 'w') as f:
         subprocess.check_call(['cut', '-f1-4'], stdin=p3.stdout, stdout=f)
-
-    job.fileStore.updateGlobalFile(ids['exon_quant'], os.path.join(work_dir, 'exon_quant'))
-    job.fileStore.updateGlobalFile(ids['exon_quant.bed'], os.path.join(work_dir, 'exon_quant.bed'))
-
-    move_to_output_dir(work_dir, output_dir, uuid=input_args['uuid'],
-                       files=['exon_quant.bed', 'exon_quant'])
+    # Create zip, upload to fileStore, and move to output_dir as a backup
+    output_files = ['exon_quant.bed', 'exon_quant']
+    tarball_files(work_dir, zip_name='exon.tar.gz', uuid=uuid, files=output_files)
+    job.fileStore.updateGlobalFile(ids['exon.tar.gz'], os.path.join(work_dir, 'exon.tar.gz'))
 
 
 def transcriptome(job, job_vars):
@@ -531,31 +566,71 @@ def rsem_postprocess(job, job_vars):
     job.fileStore.updateGlobalFile(ids['rsem.isoform.norm_fpkm.tab'], os.path.join(work_dir, 'rsem.isoform.norm_fpkm.tab'))
     job.fileStore.updateGlobalFile(ids['rsem.isoform.norm_tpm.tab'], os.path.join(work_dir, 'rsem.isoform.norm_tpm.tab'))
 
-    move_to_output_dir(work_dir, output_dir, uuid=uuid, files=['rsem.genes.norm_counts.tab', 'rsem.genes.raw_counts.tab',
-                                                               'rsem.genes.norm_fpkm.tab', 'rsem.genes.norm_tpm.tab',
-                                                               'rsem.isoform.norm_counts.tab', 'rsem.isoform.raw_counts.tab',
-                                                               'rsem.isoform.norm_fpkm.tab', 'rsem.isoform.norm_tpm.tab'])
+    output_files = ['rsem.genes.norm_counts.tab', 'rsem.genes.raw_counts.tab', 'rsem.genes.norm_fpkm.tab',
+                    'rsem.genes.norm_tpm.tab', 'rsem.isoform.norm_counts.tab', 'rsem.isoform.raw_counts.tab',
+                    'rsem.isoform.norm_fpkm.tab', 'rsem.isoform.norm_tpm.tab']
+    tarball_files(work_dir, zip_name='rsem.tar.gz', uuid=uuid, files=output_files)
+    job.fileStore.updateGlobalFile(ids['rsem.tar.gz'], os.path.join(work_dir, 'rsem.tar.gz'))
+    # Run children
+    job.addChildJobFn(consolidate_output, job_vars)
 
 
-def mapping_stats(job, job_vars):
+
+def consolidate_output(job, job_vars):
+    """
+    Combine the contents of separate zipped outputs into one
+    """
     input_args, ids = job_vars
     work_dir = job.fileStore.getLocalTempDir()
-
-    # I/O
-    return_input_paths(job, work_dir, ids, 'stats.txt')
     uuid = input_args['uuid']
     output_dir = input_args['output_dir']
     mkdir_p(output_dir)
-    # Command
-    docker_call(tool='jvivian/mapping_stats', tool_parameters=[uuid], work_dir=work_dir)
-    # Update FileStore
-    job.fileStore.updateGlobalFile(ids['stats2.txt'], os.path.join(work_dir, '{}_stats2.txt'.format(uuid)))
-    job.fileStore.updateGlobalFile(ids['stats_all.txt'], os.path.join(work_dir, '{}_stats_all.txt'.format(uuid)))
-    job.fileStore.updateGlobalFile(ids['mapping.tab'], os.path.join(work_dir, '{}_mapping.tab'.format(uuid)))
-    # Move files to output_dir
-    move_to_output_dir(work_dir, output_dir, uuid=None, files=['{}_stats2.txt'.format(uuid),
-                                                               '{}_stats_all.txt'.format(uuid),
-                                                               '{}_mapping.tab'.format(uuid)])
+
+    # I/O
+    rsem_tar, map_tar, exon_tar, qc_tar =  return_input_paths(job, work_dir, ids, 'rsem.tar.gz', 'map.tar.gz',
+                                                              'exon.tar.gz', 'qc.tar.gz')
+    out_tar = os.path.join(work_dir, uuid + '.tar.gz')
+    # Consolidate separate tarballs
+    with tarfile.open(os.path.join(work_dir, out_tar), 'w:gz') as f_out:
+        for tar in [rsem_tar, map_tar, exon_tar, qc_tar]:
+            with tarfile.open(tar, 'r') as f_in:
+                for tarinfo in f_in:
+                    with closing(f_in.extractfile(tarinfo)) as f_in_file:
+                        if tar == qc_tar:
+                            tarinfo.name = os.path.join(uuid, 'rseq_qc', os.path.basename(tarinfo.name))
+                        else:
+                            tarinfo.name = os.path.join(uuid, os.path.basename(tarinfo.name))
+                        f_out.addfile(tarinfo, fileobj=f_in_file)
+    # Update file store
+    job.fileStore.updateGlobalFile(ids['uuid.tar.gz'], out_tar)
+    move_to_output_dir(work_dir, output_dir, uuid=None, files=[uuid + '.tar.gz'])
+    # If S3 bucket argument specified, upload to S3
+    if input_args['s3_dir']:
+        job.addChildJobFn(upload_to_s3, job_vars)
+
+
+def upload_to_s3(job, job_vars):
+    """
+    If s3_dir is specified in arguments, file will be uploaded to S3 using boto.
+    """
+    import boto
+    from boto.s3.key import Key
+
+    input_args, ids = job_vars
+    work_dir = job.fileStore.getLocalTempDir()
+    uuid = input_args['uuid']
+
+    s3_dir = input_args['s3_dir']
+    bucket_name = s3_dir.split('/')[0]
+    bucket_dir = '/'.join(s3_dir.split('/')[1:])
+    # I/O
+    uuid_tar = return_input_paths(job, work_dir, ids, 'uuid.tar.gz')
+    # Upload to S3
+    conn = boto.connect_s3()
+    bucket = conn.get_bucket(bucket_name)
+    k = Key(bucket)
+    k.key = os.path.join(bucket_dir, uuid + '.tar.gz')
+    k.set_contents_from_filename(uuid_tar)
 
 
 if __name__ == "__main__":
@@ -575,6 +650,7 @@ if __name__ == "__main__":
               'chromosomes.zip': args.chromosomes,
               'ebwt.zip': args.ebwt,
               'ssec': args.ssec,
+              's3_dir': args.s3_dir,
               'uuid': None,
               'samples.zip': None,
               'cpu_count': None}
