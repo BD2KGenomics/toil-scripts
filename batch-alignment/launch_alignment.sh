@@ -2,7 +2,7 @@
 export TMPDIR=/mnt
 mkdir -p "/mnt/final_output"
 python toil_alignment.py \
-/mnt/jobstore_bros \
+/mnt/jstore \
 --retryCount 3 \
 -c config.txt \
 --ref https://s3-us-west-2.amazonaws.com/cgl-alignment-inputs/genome.fa \
