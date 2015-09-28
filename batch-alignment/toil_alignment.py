@@ -3,6 +3,17 @@
 """
 Batch alignment script using Toil
 
+Runs BWA to produce the SAM followed by BAMSORT to produce the BAM
+
+If the option is specified (s3_dir), the output bam will be placed
+in S3.  ~/.boto config file and S3AM: https://github.com/BD2KGenomics/s3am
+are required for this step.
+
+Dependencies:
+Docker  -   apt-get install docker.io
+Toil    -   pip install toil
+S3AM*   -   pip install --pre S3AM  (optional)
+Curl    -   apt-get install curl
 """
 import argparse
 import base64
@@ -26,7 +37,7 @@ def build_parser():
     parser.add_argument('-a', '--sa', required=True, help='Reference fasta file (sa)')
     parser.add_argument('-f', '--fai', required=True, help='Reference fasta file (fai)')
     parser.add_argument('-s', '--ssec', help='Path to Key File for SSE-C Encryption')
-    parser.add_argument('-o', '--out', required=True, help='full path where final results will be output')
+    parser.add_argument('-o', '--out', default=None, help='full path where final results will be output')
     parser.add_argument('-3', '--s3_dir', default=None, help='S3 Directory, starting with bucket name. e.g.: '
                                                              'cgl-driver-projects/ckcc/rna-seq-samples/')
     return parser
@@ -34,6 +45,12 @@ def build_parser():
 
 # Convenience Functions
 def generate_unique_key(master_key_path, url):
+    """
+    Input1: Path to the BD2K Master Key (for S3 Encryption)
+    Input2: S3 URL (e.g. https://s3-us-west-2.amazonaws.com/cgl-driver-projects-encrypted/wcdt/exome_bams/DTB-111-N.bam)
+
+    Returns: 32-byte unique key generated for that URL
+    """
     with open(master_key_path, 'r') as f:
         master_key = f.read()
     assert len(master_key) == 32, 'Invalid Key! Must be 32 characters. ' \
@@ -45,10 +62,14 @@ def generate_unique_key(master_key_path, url):
 
 def download_encrypted_file(work_dir, url, key_path, name):
     """
-    Downloads encrypted files
+    Downloads encrypted file from S3
+
+    Input1: Working directory
+    Input2: S3 URL to be downloaded
+    Input3: Path to key necessary for decryption
+    Input4: name of file to be downloaded
     """
     file_path = os.path.join(work_dir, name)
-
     key = generate_unique_key(key_path, url)
     encoded_key = base64.b64encode(key)
     encoded_key_md5 = base64.b64encode(hashlib.md5(key).digest())
@@ -64,8 +85,12 @@ def download_encrypted_file(work_dir, url, key_path, name):
 
 def download_from_url(job, input_args, ids, name):
     """
-    Downloads a URL that was supplied as an argument to running this script in LocalTempDir.
-    After downloading the file, it is stored in the FileStore.
+    Downloads a file from a URL and places it in the jobStore
+
+    Input1: Toil job instance
+    Input2: Input arguments
+    Input3: jobstore id dictionary
+    Input4: Name of key used to access url in input_args
     """
     work_dir = job.fileStore.getLocalTempDir()
     file_path = os.path.join(work_dir, name)
@@ -81,7 +106,14 @@ def download_from_url(job, input_args, ids, name):
 
 def return_input_paths(job, work_dir, ids, *args):
     """
-    Returns the paths of files from the FileStore if they are not present.
+    Returns the paths of files from the FileStore
+
+    Input1: Toil job instance
+    Input2: Working directory
+    Input3: jobstore id dictionary
+    Input4: names of files to be returned from the jobstore
+
+    Returns: path(s) to the file(s) requested -- unpack these!
     """
     paths = OrderedDict()
     for name in args:
@@ -98,7 +130,12 @@ def return_input_paths(job, work_dir, ids, *args):
 
 def move_to_output_dir(work_dir, output_dir, uuid=None, files=list()):
     """
-    A list of files to move from work_dir to output_dir.
+    Moves files from work_dir to output_dir
+
+    Input1: Working directory
+    Input2: Output directory
+    Input3: UUID to be preprended onto file name
+    Input4: list of file names to be moved from working dir to output dir
     """
     for fname in files:
         if uuid is None:
@@ -109,6 +146,9 @@ def move_to_output_dir(work_dir, output_dir, uuid=None, files=list()):
 
 # Start of Job Functions
 def batch_start(job, input_args):
+    """
+    Downloads and places shared files that are used by all samples for alignment
+    """
     shared_files = ['ref.fa', 'ref.fa.amb', 'ref.fa.ann', 'ref.fa.bwt', 'ref.fa.pac', 'ref.fa.sa', 'ref.fa.fai']
     shared_ids = {x: job.fileStore.getEmptyFileStoreID() for x in shared_files}
     # Download shared files used by all samples in the pipeline
@@ -118,6 +158,9 @@ def batch_start(job, input_args):
 
 
 def spawn_batch_jobs(job, shared_ids, input_args):
+    """
+    Spawns an alignment job for every sample in the input configuration file
+    """
     samples = []
     config = input_args['config']
     with open(config, 'r') as f_in:
@@ -127,10 +170,18 @@ def spawn_batch_jobs(job, shared_ids, input_args):
             urls = line[1:]
             samples.append((uuid, urls))
     for sample in samples:
-        job.addChildJobFn(bwa, shared_ids, input_args, sample, cores=32, memory='20 G', disk='100 G')
+        job.addChildJobFn(alignment, shared_ids, input_args, sample, cores=32, memory='20 G', disk='100 G')
 
 
-def bwa(job, ids, input_args, sample):
+def alignment(job, ids, input_args, sample):
+    """
+    Runs BWA and then Bamsort on the supplied fastqs for this sample
+
+    Input1: Toil Job instance
+    Input2: jobstore id dictionary
+    Input3: Input arguments dictionary
+    Input4: Sample tuple -- contains uuid and urls for the sample
+    """
     uuid, urls = sample
     ids['bam'] = job.fileStore.getEmptyFileStoreID()
     work_dir = job.fileStore.getLocalTempDir()
@@ -174,15 +225,23 @@ def bwa(job, ids, input_args, sample):
 
     # Save in JobStore
     job.fileStore.updateGlobalFile(ids['bam'], os.path.join(work_dir, uuid + '.bam'))
-    # Place file in output_dir
-    # move_to_output_dir(work_dir, output_dir, uuid=None, files=[uuid + '.bam'])
-    # Move file to S3
+    # Copy file to S3
     if input_args['s3_dir']:
-        job.addChildJobFn(upload_bam_to_s3, ids, input_args, sample, cores=4, memory='20 G', disk='30 G')
-
+        job.addChildJobFn(upload_bam_to_s3, ids, input_args, sample, cores=32, memory='20 G', disk='30 G')
+    # Move file in output_dir
+    if input_args['output_dir']:
+        move_to_output_dir(work_dir, output_dir, uuid=None, files=[uuid + '.bam'])
 
 
 def upload_bam_to_s3(job, ids, input_args, sample):
+    """
+    Uploads output BAM from sample to S3
+
+    Input1: Toil Job instance
+    Input2: jobstore id dictionary
+    Input3: Input arguments dictionary
+    Input4: Sample tuple -- contains uuid and urls for the sample
+    """
     uuid, urls = sample
     key_path = input_args['ssec']
     work_dir = job.fileStore.getLocalTempDir()
