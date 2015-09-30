@@ -1,1 +1,1 @@
-DTB-011-BL,https://s3-us-west-2.amazonaws.com/cgl-driver-projects-encrypted/wcdt/exome_fastqs/DTB-011-BL-T-DNA_S4_L001_R1_001.fastq.gz,https://s3-us-west-2.amazonaws.com/cgl-driver-projects-encrypted/wcdt/exome_fastqs/DTB-011-BL-T-DNA_S4_L001_R2_001.fastq.gz
+DTB-005-BL-T,https://s3-us-west-2.amazonaws.com/cgl-driver-projects-encrypted/wcdt/exome_fastqs/DTB-005-BL-T-DNA_S1_L001_R1_001.fastq.gz,https://s3-us-west-2.amazonaws.com/cgl-driver-projects-encrypted/wcdt/exome_fastqs/DTB-005-BL-T-DNA_S1_L001_R2_001.fastq.gz
