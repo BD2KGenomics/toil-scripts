@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 export TMPDIR=/home/ubuntu/fake_mnt
 python gatk_pipeline.py \
+<absolute_path_to_jobStore> \
 --retryCount 3 \
 --config "config.txt" \
 --reference "https://s3-us-west-2.amazonaws.com/cgl-variant-inputs/Homo_sapiens_assembly19.fasta" \

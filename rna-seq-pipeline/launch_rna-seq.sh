@@ -12,4 +12,5 @@ python rna-seq_pipeline.py \
 --chromosomes "https://s3-us-west-2.amazonaws.com/cgl-rna-seq-inputs/chromosomes.zip" \
 --ebwt "https://s3-us-west-2.amazonaws.com/cgl-rna-seq-inputs/ebwt.zip" \
 --ssec "/mnt/rna-seq/shared/foo.key" \
--o "/home/ubuntu/final_output"
+-o "/home/ubuntu/final_output" \
+--s3_dir "cgl-driver-projects/wcdt/rna-seq-outputs/"
