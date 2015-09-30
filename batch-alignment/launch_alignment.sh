@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 export TMPDIR=/mnt
 mkdir -p "/mnt/final_output"
-python toil_alignment.py \
+python batch_align.py \
 /mnt/jstore \
 --retryCount 3 \
 -c config.txt \
