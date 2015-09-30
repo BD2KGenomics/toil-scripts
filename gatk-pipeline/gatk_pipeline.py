@@ -55,8 +55,10 @@ def build_parser():
     parser.add_argument('-m', '--mills', required=True, help='Mills_and_1000G_gold_standard.indels.hg19.sites.vcf URL')
     parser.add_argument('-d', '--dbsnp', required=True, help='dbsnp_132_b37.leftAligned.vcf URL')
     parser.add_argument('-c', '--cosmic', required=True, help='b37_cosmic_v54_120711.vcf URL')
-    parser.add_argument('-o', '--output_dir', required=True, help='Full path to final output dir')
+    parser.add_argument('-o', '--output_dir', default=None, help='Full path to final output dir')
     parser.add_argument('-s', '--ssec', help='A key that can be used to fetch encrypted data')
+    parser.add_argument('-3', '--s3_dir', default=None, help='S3 Directory, starting with bucket name. e.g.: '
+                                                             'cgl-driver-projects/ckcc/rna-seq-samples/')
     return parser
 
 
@@ -383,7 +385,7 @@ def mutect(job, job_vars):
                                            'dbsnp.vcf', 'normal.bqsr.bai', 'tumor.bqsr.bai', 'ref.fasta.fai', 'ref.dict', 'cosmic.vcf')
     # Output VCF
     uuid = input_args['uuid']
-    output_name = '{}.mutect.vcf'.format(uuid)
+    output_name = uuid + '.vcf'
     mut_out = docker_path(os.path.join(work_dir, 'mutect.out'))
     mut_cov = docker_path(os.path.join(work_dir, 'mutect.cov'))
     # Call: MuTect
@@ -401,8 +403,40 @@ def mutect(job, job_vars):
     docker_call(work_dir, command, tool='computationalgenomicslab/mutect')
     # Update FileStoreID
     job.fileStore.updateGlobalFile(ids['mutect.vcf'], os.path.join(work_dir, output_name))
-    move_to_output_dir(work_dir, output_dir, uuid=None, files=[output_name])
+    if input_args['output_dir']:
+        move_to_output_dir(work_dir, output_dir, uuid=None, files=[output_name])
+    if input_args['s3_dir']:
+        job.addChildJobFn(upload_vcf_to_s3, ids, input_args)
 
+
+def upload_vcf_to_s3(job, ids, input_args):
+    """
+    Uploads output BAM from sample to S3
+
+    Input1: Toil Job instance
+    Input2: jobstore id dictionary
+    Input3: Input arguments dictionary
+    Input4: Sample tuple -- contains uuid and urls for the sample
+    """
+    uuid = input_args['uuid']
+    key_path = input_args['ssec']
+    work_dir = job.fileStore.getLocalTempDir()
+    # Parse s3_dir to get bucket and s3 path
+    s3_dir = input_args['s3_dir']
+    bucket_name = s3_dir.split('/')[0]
+    bucket_dir = '/'.join(s3_dir.split('/')[1:])
+    base_url = 'https://s3-us-west-2.amazonaws.com/'
+    url = os.path.join(base_url, bucket_name, bucket_dir, uuid + '.bam')
+    #I/O
+    job.fileStore.readGlobalFile(ids['mutect.vcf'], os.path.join(work_dir, uuid + '.vcf'))
+    # Commands to upload to S3 via S3AM
+    s3am_command = ['s3am',
+                    'upload',
+                    'file://{}'.format(os.path.join(work_dir, uuid + '.vcf')),
+                    bucket_name,
+                    os.path.join(bucket_dir, uuid + '.bam')]
+
+    subprocess.check_call(s3am_command)
 
 if __name__ == '__main__':
     # Define Parser object and add to jobTree
