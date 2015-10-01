@@ -83,7 +83,7 @@ def download_encrypted_file(work_dir, url, key_path, name):
     assert os.path.exists(file_path)
 
 
-def download_from_url(job, input_args, ids, name):
+def download_from_url(job, url, fname):
     """
     Downloads a file from a URL and places it in the jobStore
 
@@ -93,15 +93,14 @@ def download_from_url(job, input_args, ids, name):
     Input4: Name of key used to access url in input_args
     """
     work_dir = job.fileStore.getLocalTempDir()
-    file_path = os.path.join(work_dir, name)
-    url = input_args[name]
+    file_path = os.path.join(work_dir, fname)
     if not os.path.exists(file_path):
         try:
             subprocess.check_call(['curl', '-fs', '--retry', '5', '--create-dir', url, '-o', file_path])
         except OSError:
             raise RuntimeError('Failed to find "curl". Install via "apt-get install curl"')
     assert os.path.exists(file_path)
-    job.fileStore.updateGlobalFile(ids[name], file_path)
+    return job.fileStore.writeGlobalFile(file_path)
 
 
 def return_input_paths(job, work_dir, ids, *args):
@@ -147,13 +146,13 @@ def move_to_output_dir(work_dir, output_dir, uuid=None, files=list()):
 # Start of Job Functions
 def batch_start(job, input_args):
     """
-    Downloads and places shared files that are used by all samples for alignment
+    Downloads shared files that are used by all samples for alignment and places them in the jobstore.
     """
     shared_files = ['ref.fa', 'ref.fa.amb', 'ref.fa.ann', 'ref.fa.bwt', 'ref.fa.pac', 'ref.fa.sa', 'ref.fa.fai']
-    shared_ids = {x: job.fileStore.getEmptyFileStoreID() for x in shared_files}
-    # Download shared files used by all samples in the pipeline
+    shared_ids = {}
     for fname in shared_files:
-        job.addChildJobFn(download_from_url, input_args, shared_ids, fname)
+        url = input_args[fname]
+        shared_ids[fname] = job.addChildJobFn(download_from_url, url, fname).rv()
     job.addFollowOnJobFn(spawn_batch_jobs, shared_ids, input_args)
 
 
@@ -183,7 +182,7 @@ def alignment(job, ids, input_args, sample):
     Input4: Sample tuple -- contains uuid and urls for the sample
     """
     uuid, urls = sample
-    ids['bam'] = job.fileStore.getEmptyFileStoreID()
+    # ids['bam'] = job.fileStore.getEmptyFileStoreID()
     work_dir = job.fileStore.getLocalTempDir()
     output_dir = input_args['output_dir']
     key_path = input_args['ssec']
@@ -224,7 +223,8 @@ def alignment(job, ids, input_args, sample):
         subprocess.check_call(docker_cmd + bamsort_command, stdout=f_out)
 
     # Save in JobStore
-    job.fileStore.updateGlobalFile(ids['bam'], os.path.join(work_dir, uuid + '.bam'))
+    # job.fileStore.updateGlobalFile(ids['bam'], os.path.join(work_dir, uuid + '.bam'))
+    ids['bam'] = job.fileStore.writeGlobalFile(os.path.join(work_dir, uuid + '.bam'))
     # Copy file to S3
     if input_args['s3_dir']:
         job.addChildJobFn(upload_bam_to_s3, ids, input_args, sample, cores=32, memory='20 G', disk='30 G')
@@ -247,8 +247,8 @@ def upload_bam_to_s3(job, ids, input_args, sample):
     work_dir = job.fileStore.getLocalTempDir()
     # Parse s3_dir to get bucket and s3 path
     s3_dir = input_args['s3_dir']
-    bucket_name = s3_dir.split('/')[0]
-    bucket_dir = '/'.join(s3_dir.split('/')[1:])
+    bucket_name = s3_dir.lstrip('/').split('/')[0]
+    bucket_dir = '/'.join(s3_dir.lstrip('/').split('/')[1:])
     base_url = 'https://s3-us-west-2.amazonaws.com/'
     url = os.path.join(base_url, bucket_name, bucket_dir, uuid + '.bam')
     #I/O
