@@ -73,7 +73,7 @@ def build_parser():
     parser.add_argument('-chr', '--chromosomes', required=True, help='Chromosomes Directory')
     parser.add_argument('-e', '--ebwt', required=True, help='EBWT Directory')
     parser.add_argument('-s', '--ssec', help='Path to Key File for SSE-C Encryption')
-    parser.add_argument('-o', '--output_dir', required=True, help='full path where final results will be output')
+    parser.add_argument('-o', '--output_dir', default=None, help='full path where final results will be output')
     parser.add_argument('-3', '--s3_dir', default=None, help='S3 Directory, starting with bucket name. e.g.: '
                                                              'cgl-driver-projects/ckcc/rna-seq-samples/')
     return parser
@@ -94,7 +94,11 @@ def mkdir_p(path):
 
 def download_encrypted_file(job, input_args, ids, name):
     """
-    Downloads encrypted files
+    Downloads encrypted files from S3 via header injection
+
+    Input1: input arguments defined in main()
+    Input2: dictionary of jobStore IDs
+    Input3: symbolic name associated with file
     """
     work_dir = job.fileStore.getLocalTempDir()
     key_path = input_args['ssec']
@@ -122,6 +126,10 @@ def download_from_url(job, input_args, ids, name):
     """
     Downloads a URL that was supplied as an argument to running this script in LocalTempDir.
     After downloading the file, it is stored in the FileStore.
+
+    Input1: input arguments defined in main()
+    Input2: dictionary of jobStore IDs
+    Input3: symbolic name associated with file
     """
     work_dir = job.fileStore.getLocalTempDir()
     file_path = os.path.join(work_dir, name)
@@ -138,6 +146,12 @@ def download_from_url(job, input_args, ids, name):
 def return_input_paths(job, work_dir, ids, *args):
     """
     Returns the paths of files from the FileStore if they are not present.
+    This function should be unpacked for every item being returned, unless none
+    of the paths are needed in which case it should be unassigned.
+
+    Input1: working directory files should be placed in
+    Input2: dictionary of jobStore IDs
+    Input3: symoblic filenames that are being retrieved
     """
     paths = OrderedDict()
     for name in args:
@@ -163,6 +177,10 @@ def docker_call(tool, tool_parameters, work_dir):
     """
     Makes subprocess call of a command to a docker container.
     work_dir MUST BE AN ABSOLUTE PATH or the call will fail.
+
+    Input1: Docker tool to be pulled and run (repo/tool_name)
+    Input2: parameters to the Docker tool being called
+    Input3: working directory where input files are located
     """
     base_docker_call = 'sudo docker run -v {}:/data'.format(work_dir)
     call = base_docker_call.split() + [tool] + tool_parameters
@@ -578,7 +596,7 @@ def rsem_postprocess(job, job_vars):
 
 def consolidate_output(job, job_vars):
     """
-    Combine the contents of separate zipped outputs into one
+    Combine the contents of separate zipped outputs into one via streaming
     """
     input_args, ids = job_vars
     work_dir = job.fileStore.getLocalTempDir()
@@ -603,7 +621,8 @@ def consolidate_output(job, job_vars):
                         f_out.addfile(tarinfo, fileobj=f_in_file)
     # Update file store
     job.fileStore.updateGlobalFile(ids['uuid.tar.gz'], out_tar)
-    move_to_output_dir(work_dir, output_dir, uuid=None, files=[uuid + '.tar.gz'])
+    if input_args['output_dir']:
+        move_to_output_dir(work_dir, output_dir, uuid=None, files=[uuid + '.tar.gz'])
     # If S3 bucket argument specified, upload to S3
     if input_args['s3_dir']:
         job.addChildJobFn(upload_to_s3, job_vars)
@@ -612,6 +631,7 @@ def consolidate_output(job, job_vars):
 def upload_to_s3(job, job_vars):
     """
     If s3_dir is specified in arguments, file will be uploaded to S3 using boto.
+    WARNING: ~/.boto credentials are necessary for this to succeed!
     """
     import boto
     from boto.s3.key import Key
@@ -619,13 +639,13 @@ def upload_to_s3(job, job_vars):
     input_args, ids = job_vars
     work_dir = job.fileStore.getLocalTempDir()
     uuid = input_args['uuid']
-
+    # Parse s3_dir
     s3_dir = input_args['s3_dir']
     bucket_name = s3_dir.split('/')[0]
     bucket_dir = '/'.join(s3_dir.split('/')[1:])
     # I/O
     uuid_tar = return_input_paths(job, work_dir, ids, 'uuid.tar.gz')
-    # Upload to S3
+    # Upload to S3 via boto
     conn = boto.connect_s3()
     bucket = conn.get_bucket(bucket_name)
     k = Key(bucket)
