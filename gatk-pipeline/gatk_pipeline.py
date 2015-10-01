@@ -366,7 +366,7 @@ def pr(job, job_vars, sample):
               '-I', indel_bam,
               '-BQSR', recal_table,
               '-o', docker_path(output)]
-    docker_call(work_dir, command, tool='computationalgenomicslab/gatk')
+    docker_call(work_dir, command, tool='computationalgenomicslab/gatk', java_opts='-Xmx15g')
     # Update GlobalFileStore
     job.fileStore.updateGlobalFile(ids['{}.bqsr.bam'.format(sample)], output)
     job.fileStore.updateGlobalFile(ids['{}.bqsr.bai'.format(sample)], os.path.splitext(output)[0] + '.bai')
@@ -452,6 +452,7 @@ if __name__ == '__main__':
                   'cosmic.vcf': args.cosmic,
                   'output_dir': args.output_dir,
                   'ssec': args.ssec,
+                  's3_dir': args.s3_dir,
                   'uuid': None,
                   'normal.bam': None,
                   'tumor.bam': None,
