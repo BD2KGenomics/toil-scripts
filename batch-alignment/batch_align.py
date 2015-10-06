@@ -149,6 +149,7 @@ def batch_start(job, input_args):
     """
     Downloads and places shared files that are used by all samples for alignment
     """
+    input_args['cpu_count'] = multiprocessing.cpu_count()
     shared_files = ['ref.fa', 'ref.fa.amb', 'ref.fa.ann', 'ref.fa.bwt', 'ref.fa.pac', 'ref.fa.sa', 'ref.fa.fai']
     shared_ids = {x: job.fileStore.getEmptyFileStoreID() for x in shared_files}
     # Download shared files used by all samples in the pipeline
@@ -163,6 +164,7 @@ def spawn_batch_jobs(job, shared_ids, input_args):
     """
     samples = []
     config = input_args['config']
+    cores = input_args['cpu_count']
     with open(config, 'r') as f_in:
         for line in f_in:
             line = line.strip().split(',')
@@ -170,7 +172,7 @@ def spawn_batch_jobs(job, shared_ids, input_args):
             urls = line[1:]
             samples.append((uuid, urls))
     for sample in samples:
-        job.addChildJobFn(alignment, shared_ids, input_args, sample, cores=32, memory='20 G', disk='100 G')
+        job.addChildJobFn(alignment, shared_ids, input_args, sample, cores=cores, memory='20 G', disk='100 G')
 
 
 def alignment(job, ids, input_args, sample):
@@ -187,7 +189,7 @@ def alignment(job, ids, input_args, sample):
     work_dir = job.fileStore.getLocalTempDir()
     output_dir = input_args['output_dir']
     key_path = input_args['ssec']
-    cores = str(multiprocessing.cpu_count())
+    cores = input_args['cpu_count']
 
     # I/O
     return_input_paths(job, work_dir, ids, 'ref.fa', 'ref.fa.amb', 'ref.fa.ann',
@@ -227,7 +229,7 @@ def alignment(job, ids, input_args, sample):
     job.fileStore.updateGlobalFile(ids['bam'], os.path.join(work_dir, uuid + '.bam'))
     # Copy file to S3
     if input_args['s3_dir']:
-        job.addChildJobFn(upload_bam_to_s3, ids, input_args, sample, cores=32, memory='20 G', disk='30 G')
+        job.addChildJobFn(upload_bam_to_s3, ids, input_args, sample, cores=cores, memory='20 G', disk='30 G')
     # Move file in output_dir
     if input_args['output_dir']:
         move_to_output_dir(work_dir, output_dir, uuid=None, files=[uuid + '.bam'])
