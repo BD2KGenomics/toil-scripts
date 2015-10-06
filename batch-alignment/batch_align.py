@@ -149,7 +149,7 @@ def batch_start(job, input_args):
     """
     Downloads and places shared files that are used by all samples for alignment
     """
-    input_args['cpu_count'] = multiprocessing.cpu_count()
+    input_args['cpu_count'] = str(multiprocessing.cpu_count())
     shared_files = ['ref.fa', 'ref.fa.amb', 'ref.fa.ann', 'ref.fa.bwt', 'ref.fa.pac', 'ref.fa.sa', 'ref.fa.fai']
     shared_ids = {x: job.fileStore.getEmptyFileStoreID() for x in shared_files}
     # Download shared files used by all samples in the pipeline
