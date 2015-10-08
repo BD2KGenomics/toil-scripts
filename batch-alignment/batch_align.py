@@ -186,7 +186,7 @@ def alignment(job, ids, input_args, sample):
     work_dir = job.fileStore.getLocalTempDir()
     output_dir = input_args['output_dir']
     key_path = input_args['ssec']
-    cores = str(multiprocessing.cpu_count())
+    cores = multiprocessing.cpu_count()
 
     # I/O
     return_input_paths(job, work_dir, ids, 'ref.fa', 'ref.fa.amb', 'ref.fa.ann',
@@ -202,7 +202,7 @@ def alignment(job, ids, input_args, sample):
                    "mem",
                    "-R", "@RG\tID:{0}\tPL:Illumina\tSM:{0}\tLB:KapaHyper".format(uuid),
                    "-T", str(0),
-                   "-t", cores,
+                   "-t", str(cores),
                    "/data/ref.fa"] + [os.path.join('/data/',  os.path.basename(x)) for x in urls]
 
     bamsort_command = ["jeltje/biobambam",
