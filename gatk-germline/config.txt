@@ -1,0 +1,1 @@
+test_uuid,https://s3-us-west-2.amazonaws.com/bd2k-test-data/pair0.normal.bam,https://s3-us-west-2.amazonaws.com/bd2k-test-data/pair0.tumor.bam
