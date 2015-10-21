@@ -205,140 +205,147 @@ def haplotype_caller(job, ids, input_args, sample, debug=False, **kwargs):
    work_dir = job.fileStore.getLocalTempDir()
    if not debug:
        pass
-       # ref_fasta, bam = return_input_paths(job, work_dir, ids,
-       #                                 'ref.fa', '{}'.format(sample))
-       # output = os.path.join(work_dir, '{}.unified.raw.BOTH.gatk.vcf'.format(sample))
+       ref_fasta, bam = return_input_paths(job, work_dir, ids, 'ref.fa', 'bam')
+       output = os.path.join(work_dir, 'unified.raw.BOTH.gatk.vcf')
        # Call GATK -- HaplotypeCaller
-       # command = ['-nct', multiprocessing.cpu_count,
-       #            '-R', docker_path(ref_fasta),
-       #            '-T', 'HaplotypeCaller',
-       #            '--genotyping_mode', 'Discovery',
-       #            '--output_mode', 'EMIT_VARIANTS_ONLY',
-       #            '-I', docker_path(bam),
-       #            '-o', docker_path(output),
-       #            '-stand_emit_conf', '10.0',
-       #            '-stand_call_conf', '30.0']
-      # docker_call(work_dir, command, 'computationalgenomicslab/gatk')
-      #  Update fileStore and spawn child job
-#       ids['unified.raw.BOTH.gatk.vcf'] = job.fileStore.writeGlobalFile(output)
-#       job.addChildJobFn(vqsr_snp, ids, input_args, sample)
-#       job.addChildJobFn(vqsr_indel, ids, input_args, sample)
+       command = ['-nct', multiprocessing.cpu_count,
+                  '-R', docker_path(ref_fasta),
+                  '-T', 'HaplotypeCaller',
+                  '--genotyping_mode', 'Discovery',
+                  '--output_mode', 'EMIT_VARIANTS_ONLY',
+                  '-I', docker_path(bam),
+                  '-o', docker_path(output),
+                  '-stand_emit_conf', '10.0',
+                  '-stand_call_conf', '30.0']
+       docker_call(work_dir, command, 'computationalgenomicslab/gatk')
+      #Update fileStore and spawn child job
+      # ids['unified.raw.BOTH.gatk.vcf'] = job.fileStore.writeGlobalFile(output)
+      # job.addChildJobFn(vqsr_snp, ids, input_args, sample)
+      # job.addChildJobFn(vqsr_indel, ids, input_args, sample)
    else:
        fileid = job.fileStore.readGlobalFile(ids['debug'])
        ids['debug_haplotype_caller'] = job.fileStore.writeGlobalFile(fileid)
-#       job.addChildJobFn(vqsr_snp, ids, input_args, sample, debug=True)
+       job.addChildJobFn(vqsr_snp, ids, input_args, sample, debug=True)
 
-# def vqsr_snp(job, ids, input_args, sample, input_args):
-#    work_dir = job.fileStore.getLocalTempDir()
-#    ref_fasta, raw_vcf, hapmap, omni, \
-#    dbsnp, phase = return_input_paaths(job, word_dir, ids, 'ref.fa', '{}.unified.raw.BOTH.gatk.vcf'.format(sample),
-#                                       'hapmap.vcf', 'omni.vcf', 'dbsnp.vcf', 'phase.vcf')
-#
-#    output_recalFile = os.path.join(work_dir, '{}.HAPSNP.recalFile'.format(sample))
-#    output_tranches = os.path.join(work_dir, '{}.HAPSNP.tranches'.format(sample))
-#    output_rscriptFile = os.path.join(work_dir, '{}.HAPSNP.plots'.format(sample))
-#    command = ['-T', 'VariantRecalibrator',
-#               '-R', ref_fasta,
-#               '-input', raw_vcf,
-#               '-nt', input_args['cpu_count'],
-#               '-resource:hapmap,known=false,training=true,truth=true,prior=15.0',
-#               hapmap,
-#               '-resource:omni,known=false,training=true,truth=false,prior=12.0',
-#               omni,
-#               '-resource:dbsnp,known=true,training=false,truth=false,prior=2.0',
-#               dbsnp,
-#               '-resource:1000G,known=false,training=true,truth=false,prior=10.0',
-#               phase,
-#               '-an QD',
-#               '-an DP',
-#               '-an FS',
-#               '-an ReadPosRankSum',
-#               '-mode SNP',
-#               '-minNumBad 1000',
-#               '-recalFile', docker_path(ouput_recalFile),
-#               '-tranchesFile', docker_path(ouput_tranches)
-#               '-rscriptFile', docker_path(output_rscriptFile)]
-#    docker_call(work_dir, command, tool='computationalgenomicslab/gatk')
-#    job.fileStore.updateGlobalFile(ids['{}.HAPSNP.recal'.format(sample)], ouput_recalFile)
-#    job.fileStore.updateGlobalFile(ids['{}.HAPSNP.tranches'.format(sample)], ouput_tranches)
-#    job.fileStore.updateGlobalFile(ids['{}.HAPSNP.plots'.format(sample)], ouput_rscriptFile)
-#    job.addChildJobFn(apply_vqsr_snp, ids, input_args, sample, cores=int(input_args['cpu_count']), memory='10 G', disk='15 G')
-#
-##Apply Snp Recalibration
-# def apply_vqsr_snp(job, ids, input_args, sample):
-#    work_dir = job.fileStore.getLocalTempDir()
-#    output_dir = input_args['output_dir']
-#    mkdir_p(output_dir)
-#    uuid = input_args['uuid']
-#    ouput_name = '{}.HAPSNP.vqsr.SNP.vcf'.format(uuid)
-#    output_path = docker_path(os.path.join(work_dir, output_name))
-#    uuid = input_args['uuid']
-#    command = ['-T', 'ApplyRecalibration',
-#               '-input',
-#               ids['{}.unified.raw.BOTH.gatk.vcf'.format(sample)],
-#               '-o', output_path,
-#               '-R', ids['ref.fa'],
-#               '-nt', input_args['cpu_count'],
-#               '-ts_filter_level 99.0',
-#               '-tranchesFile', ids['{}.HAPSNP.tranches'.format(sample)]
-#               '-recalFile', ids['{}.HAPSNP.recal'.format(sample),
-#               '-mode', 'SNP']
-#    docker_call(work_dir, command, tool='computationalgenomicslab/gatk')
-#    job.fileStore.updateGlobalFile(ids['{}.HAPSNP.vqsr.SNP.vcf'.format(sample), output))
-#    move_to_output_dir(work_dir, ouput_dir, uuid=None, files=[os.path.join(work_dir, ouput_name)])
-#
-##Indel Recalibration
-# def vqsr_indel(job, ids, input_args, sample):
-#    work_dir = job.fileStore.getLocalTempDir()
-#    ref_fasta, raw_vcf, mills = return_input_paaths(job, word_dir, ids, 'ref.fa', '{}.unified.raw.BOTH.gatk.vcf'.format(sample),
-#                                       'mills.vcf')
-#    output_recalFile = os.path.join(work_dir, '{}.HAPINDEL.recalFile'.format(sample))
-#    output_tranches = os.path.join(work_dir, '{}.HAPINDEL.tranches'.format(sample))
-#    output_rscriptFile = os.path.join(work_dir, '{}.HAPINDEL.plots'.format(sample))
-#    command = ['-T', 'VariantRecalibrator',
-#             '-R', ref_fasta,
-#             '-input', raw_vcf,
-#             '-nt', input_args['cpu_count'],
-#             '-resource:mills,known=true,training=true,truth=true,prior=12.0',
-#             mills,
-#            '-an DP',
-#            '-an FS',
-#            '-an ReadPosRankSum',
-#            '-mode INDEL',
-#            '-minNumBad 1000'
-#            '-recalFile',
-#            docker_path(output_recalFile),
-#            '-tranchesFile',
-#            docker_path(output_tranches),
-#            '-rscriptFile',
-#            docker_path(output_rscriptFile)]
-#    docker_call(work_dir, command, tool='computationalgenomicslab/gatk')
-#    job.fileStore.updateGlobalFile(ids['{}.HAPINDEL.recal'.format(sample)], ouput_recalFile)
-#    job.fileStore.updateGlobalFile(ids['{}.HAPINDEL.tranches'.format(sample)], ouput_tranches)
-#    job.fileStore.updateGlobalFile(ids['{}.HAPINDEL.plots'.format(sample)], ouput_rscriptFile)
-#    job.addChildJobFn(apply_vqsr_indel, ids, input_args, sample,
-#                      cores=int(input_args['cpu_count']), memory='10 G', disk='15 G')
-#
+def vqsr_snp(job, ids, input_args, sample, debug=False):
+    if not debug:
+        work_dir = job.fileStore.getLocalTempDir()
+        ref_fasta, raw_vcf, hapmap, omni, \
+        dbsnp, phase = return_input_paths(job, work_dir, ids, 'ref.fa', 'unified.raw.BOTH.gatk.vcf',
+                                        'hapmap.vcf', 'omni.vcf', 'dbsnp.vcf', 'phase.vcf')
+
+        output_recalFile = os.path.join(work_dir, 'HAPSNP.recalFile')
+        output_tranches = os.path.join(work_dir, 'HAPSNP.tranches')
+        output_rscriptFile = os.path.join(work_dir, 'HAPSNP.plots')
+        command = ['-T', 'VariantRecalibrator',
+                   '-R', ref_fasta,
+                   '-input', raw_vcf,
+                   '-nt', input_args['cpu_count'],
+                   '-resource:hapmap,known=false,training=true,truth=true,prior=15.0', hapmap,
+                   '-resource:omni,known=false,training=true,truth=false,prior=12.0', omni,
+                   '-resource:dbsnp,known=true,training=false,truth=false,prior=2.0', dbsnp,
+                   '-resource:1000G,known=false,training=true,truth=false,prior=10.0', phase,
+                   '-an QD', '-an DP', '-an FS', '-an ReadPosRankSum', '-mode SNP', '-minNumBad 1000',
+                   '-recalFile', docker_path(output_recalFile),
+                   '-tranchesFile', docker_path(output_tranches),
+                   '-rscriptFile', docker_path(output_rscriptFile)]
+        docker_call(work_dir, command, tool='computationalgenomicslab/gatk')
+        ids['HAPSNP.recal'] = job.fileStore.writeGlobalFile(output_recalFile)
+        ids['HAPSNP.tranches'] = job.fileStore.writeGlobalFile(output_tranches)
+        ids['HAPSNP.plots'] = job.fileStore.writeGlobalFile(output_rscriptFile)
+        job.addChildJobFn(apply_vqsr_snp, ids, input_args, sample, cores=int(input_args['cpu_count']), memory='10 G', disk='15 G')
+    else:
+        fileid = job.fileStore.readGlobalFile(ids['debug_haplotype_caller'])
+        ids['debug_vqsr_snp'] = job.fileStore.writeGlobalFile(fileid)
+        job.addChildJobFn(apply_vqsr_snp, ids, input_args, debug=True)
+
+#TODO Figure out out to move to output_dir
+#Apply Snp Recalibration
+def apply_vqsr_snp(job, ids, input_args, debug=False):
+    if not debug:
+        work_dir = job.fileStore.getLocalTempDir()
+        output_dir = input_args['output_dir']
+        mkdir_p(output_dir)
+        uuid = input_args['uuid']
+        output_name = '{}.HAPSNP.vqsr.SNP.vcf'.format(uuid)
+        output_path = docker_path(os.path.join(output_dir, output_name))
+        ref_fasta, raw_vcf, tranches, recal = return_input_paths(job, work_dir, ids, 'ref.fa', 'unified.raw.BOTH.gatk.vcf',
+                                                                  'HAPSNP.tranches', 'HAPSNP.recal')
+        command = ['-T', 'ApplyRecalibration',
+                   '-input', raw_vcf,
+                   '-o', output_path, '-R', ref_fasta,
+                   '-nt', multiprocessing.cpu_count(),
+                   '-ts_filter_level 99.0',
+                   '-tranchesFile', tranches,
+                   '-recalFile', recal,
+                   '-mode', 'SNP']
+        docker_call(work_dir, command, tool='computationalgenomicslab/gatk')
+        move_to_output_dir(work_dir, output_dir, uuid=None, files=[os.path.join(work_dir, output_name)])
+    else:
+        fileid = job.fileStore.readGlobalFile(ids['debug_vqsr_snp'])
+        ids['debug_apply_vqsr_snp'] = job.fileStore.writeGlobalFile(fileid)
+
+
+
+#Indel Recalibration
+def vqsr_indel(job, ids, input_args, sample, debug=False):
+    if not debug:
+        work_dir = job.fileStore.getLocalTempDir()
+        ref_fasta, raw_vcf, mills = return_input_paths(job, work_dir, ids, 'ref.fa', 'unified.raw.BOTH.gatk.vcf',
+                                                       'mills.vcf')
+        output_recalFile = os.path.join(work_dir, 'HAPINDEL.recalFile')
+        output_tranches = os.path.join(work_dir, 'HAPINDEL.tranches')
+        output_rscriptFile = os.path.join(work_dir, 'HAPINDEL.plots')
+        command = ['-T', 'VariantRecalibrator',
+                   '-R', ref_fasta,
+                   '-input', raw_vcf,
+                   '-nt', multiprocessing.cpu_count(),
+                   '-resource:mills,known=true,training=true,truth=true,prior=12.0', mills,
+                   '-an DP', '-an FS', '-an ReadPosRankSum', '-mode INDEL',
+                   '-minNumBad 1000',
+                   '-recalFile', docker_path(output_recalFile),
+                   '-tranchesFile', docker_path(output_tranches),
+                   '-rscriptFile', docker_path(output_rscriptFile)]
+        docker_call(work_dir, command, tool='computationalgenomicslab/gatk')
+        ids['HAPINDEL.recal'] = job.fileStore.writeGlobalFile(output_recalFile)
+        ids['HAPINDEL.tranches'] = job.fileStore.writeGlobalFile(output_tranches)
+        ids['HAPINDEL.plots'] = job.fileStore.writeGlobalFile(output_rscriptFile)
+        # job.addChildJobFn(apply_vqsr_indel, ids, input_args, sample, cores=int(input_args['cpu_count']), memory='10 G', disk='15 G')
+    else:
+        fileid = job.fileStore.readGlobalFile(ids['debug_haplotype_caller'])
+        ids['debug_apply_vqsr_indel'] = job.fileStore.writeGlobalFile(fileid)
+        job.addChildJobFn(apply_vqsr_indel, ids, input_args, debug=True)
+
 # Apply Indel Recalibration
-# def apply_vqsr_indel(job, ids, input_args, sample, **kwargs):
-#    work_dir = job.fileStore.getLocalTempDir()
-#    output_dir = input_args['output_dir']
-#    mkdir_p(output_dir)
-#    uuid = input_args['uuid']
-#    ouput_name = '{}.HAPSNP.vqsr.SNP.vcf'.format(uuid)
-#    output_path = docker_path(os.path.join(work_dir, output_name))
-#    command = ['-T', 'ApplyRecalibration',
-#               '-input', ids['{}.unified.raw.BOTH.gatk.vcf'.format(sample)],
-#               '-o', ouput_path,
-#               '-R', ids['ref.fa'],
-#               '-nt', input_args['cpu_count'],
-#               '-ts_filter_level', 99.0,
-#               '-tranchesFile', ids['{}.HAPINDEL.tranches'.format(sample)],
-#               '-recalFile', ids['{}.HAPINDEL.recal'.format(sample)],
-#               '-mode', 'INDEL']
-#    docker_call(work_dir, command, tool='computationalgenmicslab/gatk')
-#    job.fileStore.updateGlobalFile(ids['{}.HAPINDEL.vqsr.SNP.vcf'.format(sample), output))
-#    move_to_output_dir(work_dir, ouput_dir, uuid=None, files=[os.path.join(work_dir, ouput_name)])
+def apply_vqsr_indel(job, ids, input_args, sample, debug=False, **kwargs):
+    if not debug:
+        work_dir = job.fileStore.getLocalTempDir()
+        output_dir = input_args['output_dir']
+        mkdir_p(output_dir)
+        uuid = input_args['uuid']
+        output_name = '{}.HAPSNP.vqsr.SNP.vcf'.format(uuid)
+        output_path = docker_path(os.path.join(work_dir, output_name))
+        ref_fasta, raw_vcf, tranches, recal = return_input_paths(job, work_dir, ids,
+                                                                 'ref.fa',
+                                                                 'unified.raw.BOTH.gatk.vcf',
+                                                                 'HAPINDEL.tranches',
+                                                                 'HAPINDEL.recal')
+        command = ['-T', 'ApplyRecalibration',
+                   '-input', ids['{}.unified.raw.BOTH.gatk.vcf'.format(sample)],
+                   '-o', output_path,
+                   '-R', ref_fasta,
+                   '-nt', multiprocessing.cpu_count(),
+                   '-ts_filter_level', 99.0,
+                   '-tranchesFile', tranches,
+                   '-recalFile', recal,
+                   '-mode', 'INDEL']
+        docker_call(work_dir, command, tool='computationalgenmicslab/gatk')
+        move_to_output_dir(work_dir, output_dir, uuid=None, files=[os.path.join(work_dir, output_name)])
+    else:
+        fileid = job.fileStore.readGlobalFile(ids['debug_vqsr_indel'])
+        ids['debug_apply_vqsr_indel'] = job.fileStore.writeGlobalFile(fileid)
+
+
 
 if __name__ == '__main__':
     parser = build_parser()
