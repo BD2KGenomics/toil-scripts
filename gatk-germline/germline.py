@@ -35,6 +35,7 @@ from collections import OrderedDict
 from toil.job import Job
 
 debug = False
+debug_log = open('debug_log', 'w')
 
 def build_parser():
     """
@@ -148,8 +149,6 @@ def move_to_output_dir(work_dir, output_dir, uuid=None, filenames=None):
         if uuid is None:
             origin = os.path.join(work_dir, fname)
             dest = os.path.join(output_dir, fname)
-            debug_log.write(origin)
-            debug_log.write(dest)
             shutil.move(origin, dest)
         else:
             shutil.move(os.path.join(work_dir, fname), os.path.join(output_dir, '{}.{}'.format(uuid, fname)))
@@ -162,6 +161,7 @@ def batch_start(job, input_args):
     Downloads shared files that are used by all samples for alignment and calibration and places 
     them in job store
     """
+    debug_log.write("Made it to batch start\n")
     shared_files = ['ref.fa', 'phase.vcf', 'omni.vcf', 'dbsnp.vcf', 'hapmap.vcf', 'mills.vcf']
     shared_ids = {}
     for file_name in shared_files:
@@ -175,6 +175,7 @@ def spawn_batch_jobs(job, shared_ids, input_args):
     Reads in the input files with uuid and url information and starts a job
     for each sample
     """
+    debug_log.write("Made it to spawn batch jobs\n")
     #Names for every input file used in the pipeline by each sample
     samples = []
     config = input_args['config']
@@ -191,6 +192,7 @@ def start(job, shared_ids, input_args, sample):
     Takes a sample and creates a copy of shared data, then
     starts the index function
     """
+    debug_log.write("Made it to start\n")
     uuid, url = sample
     ids = shared_ids.copy()
     #Update input
@@ -207,6 +209,7 @@ def start(job, shared_ids, input_args, sample):
 
 # TODO remove debug path
 def index(job, ids, input_args):
+    debug_log.write("Made it to index\n")
     work_dir = job.fileStore.getLocalTempDir()
     #Retrieve file path
     bam_path = return_input_paths(job, work_dir, ids, 'bam')
@@ -222,6 +225,7 @@ def index(job, ids, input_args):
 ##TODO There is something wrong with this function ... it crashes every time
 def haplotype_caller(job, ids, input_args):
     """ snps & indels together """
+    debug_log.write("Made it to haplotype_caller\n")
     work_dir = job.fileStore.getLocalTempDir()
     ref_fasta, bam, bai = return_input_paths(job, work_dir, ids, 'ref.fa', 'bam', 'bai')
     output = os.path.join(work_dir, 'unified.raw.BOTH.gatk.vcf')
@@ -243,6 +247,7 @@ def haplotype_caller(job, ids, input_args):
 
 
 def vqsr_snp(job, ids, input_args):
+    debug_log.write("Made it to snp vqsr\n")
     work_dir = job.fileStore.getLocalTempDir()
     ref_fasta, raw_vcf, hapmap, omni, \
     dbsnp, phase = return_input_paths(job, work_dir, ids, 'ref.fa', 'unified.raw.BOTH.gatk.vcf',
@@ -274,6 +279,7 @@ def vqsr_snp(job, ids, input_args):
 #TODO Figure out out to move to output_dir
 #Apply Snp Recalibration
 def apply_vqsr_snp(job, ids, input_args):
+    debug_log.write("Made it to apply snp vqsr\n")
     work_dir = job.fileStore.getLocalTempDir()
     output_dir = input_args['output_dir']
     mkdir_p(output_dir)
@@ -297,6 +303,7 @@ def apply_vqsr_snp(job, ids, input_args):
 
 #Indel Recalibration
 def vqsr_indel(job, ids, input_args):
+    debug_log.write("Made it to vqsr indel\n")
     work_dir = job.fileStore.getLocalTempDir()
     ref_fasta, raw_vcf, mills = return_input_paths(job, work_dir, ids, 'ref.fa', 'unified.raw.BOTH.gatk.vcf',
                                                    'mills.vcf')
@@ -323,6 +330,7 @@ def vqsr_indel(job, ids, input_args):
 
 #Apply Indel Recalibration
 def apply_vqsr_indel(job, ids, input_args):
+    debug_log.write("Made it to apply indel vqsr\n")
     work_dir = job.fileStore.getLocalTempDir()
     output_dir = input_args['output_dir']
     mkdir_p(output_dir)
@@ -367,3 +375,5 @@ if __name__ == '__main__':
                   'ssec':None}
     
     Job.Runner.startToil(Job.wrapJobFn(batch_start, input_args), args)
+
+    debug_log.close()
