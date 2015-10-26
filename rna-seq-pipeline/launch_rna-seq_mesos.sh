@@ -15,4 +15,4 @@ aws:us-west-2:rna-seq-toil-1 \
 --batchSystem="mesos" \
 --masterIP=mesos-master:5050 \
 --workDir=/var/lib/toil \
---s3_dir "cgl-driver-projects/wcdt/rna-seq-outputs/"
+--s3_dir "cgl-driver-projects/treehouse/rna-seq-neuroblastoma-outputs/"

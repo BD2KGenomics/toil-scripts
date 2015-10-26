@@ -6,7 +6,7 @@ Tree Structure of RNA-Seq Pipeline (per sample)
 
     0---> 2
     |     |
-    1     3
+    1     3 - - - - -> Consolidate Output -> Upload_to_S3
          / \
        *4   5
             |
@@ -201,7 +201,8 @@ def docker_call(tool, tool_parameters, work_dir):
     Input2: parameters to the Docker tool being called
     Input3: working directory where input files are located
     """
-    base_docker_call = 'sudo docker run -v {}:/data'.format(work_dir)
+    # base_docker_call = 'sudo docker run -v {}:/data'.format(work_dir)
+    base_docker_call = 'docker run -v {}:/data'.format(work_dir)
     call = base_docker_call.split() + [tool] + tool_parameters
     try:
         subprocess.check_call(call)
@@ -266,7 +267,7 @@ def start_node(job, shared_ids, input_args, sample):
     """
     uuid, sample_url = sample
     # Symbolic names for sample specific files
-    symbolic_names = ['sample.zip', 'R1.fastq.gz', 'R2.fastq.gz', 'R1.fastq', 'R2.fastq', 'alignments.bam',
+    symbolic_names = ['sample.tar', 'R1.fastq.gz', 'R2.fastq.gz', 'R1.fastq', 'R2.fastq', 'alignments.bam',
                       'rg_alignments.bam', 'sorted.bam', 'sorted.bam.bai', 'sort_by_ref.bam', 'transcriptome.bam',
                       'filtered.bam', 'rsem_gene.tab', 'rsem_isoform.tab', 'rsem.genes.norm_counts.tab', 'rsem.genes.raw_counts.tab',
                       'rsem.genes.norm_fpkm.tab', 'rsem.genes.norm_tpm.tab', 'rsem.isoform.raw_counts.tab',
@@ -280,14 +281,15 @@ def start_node(job, shared_ids, input_args, sample):
     sample_input = dict(input_args)
     # Update input
     sample_input['uuid'] = uuid
-    sample_input['sample.zip'] = sample_url
-    sample_input['output_dir'] = os.path.join(input_args['output_dir'], uuid)
+    sample_input['sample.tar'] = sample_url
+    if sample_input['output_dir']:
+        sample_input['output_dir'] = os.path.join(input_args['output_dir'], uuid)
     sample_input['cpu_count'] = multiprocessing.cpu_count()
     job_vars = (sample_input, ids)
 
     # Download sample fastqs and launch pipeline
-    job.addChildJobFn(download_encrypted_file, sample_input, ids, 'sample.zip', disk='12 G')
-    job.addFollowOnJobFn(unzip, job_vars, disk='50 G')
+    job.addChildJobFn(download_encrypted_file, sample_input, ids, 'sample.tar', disk='25 G')
+    job.addFollowOnJobFn(unzip, job_vars, disk='70 G')
 
 
 def unzip(job, job_vars):
@@ -299,11 +301,12 @@ def unzip(job, job_vars):
     cores = input_args['cpu_count']
 
     # I/O
-    sample = return_input_paths(job, work_dir, ids, 'sample.zip')
+    sample = return_input_paths(job, work_dir, ids, 'sample.tar')
     # Unzip File
-    subprocess.check_call(['unzip', sample, '-d', work_dir])
+    # subprocess.check_call(['unzip', sample, '-d', work_dir])
+    subprocess.check_call(['tar', '-xvf', sample, '-C', work_dir])
     # Remove large files before creating concat versions.
-    os.remove(os.path.join(work_dir, 'sample.zip'))
+    os.remove(os.path.join(work_dir, 'sample.tar'))
     # Zcat files in parallel
     R1_files = sorted(glob.glob(os.path.join(work_dir, '*R1*')))
     R2_files = sorted(glob.glob(os.path.join(work_dir, '*R2*')))
@@ -316,9 +319,9 @@ def unzip(job, job_vars):
     # Update FileStore
     job.fileStore.updateGlobalFile(ids['R1.fastq'], os.path.join(work_dir, 'R1.fastq'))
     job.fileStore.updateGlobalFile(ids['R2.fastq'], os.path.join(work_dir, 'R2.fastq'))
-    job.fileStore.deleteGlobalFile(ids['sample.zip'])
+    job.fileStore.deleteGlobalFile(ids['sample.tar'])
     # Run children and follow-on
-    job.addChildJobFn(mapsplice, job_vars, cores=cores, memory='30 G', disk='100 G')
+    job.addChildJobFn(mapsplice, job_vars, cores=cores, memory='30 G', disk='130 G')
 
 
 def mapsplice(job, job_vars):
@@ -352,6 +355,7 @@ def mapsplice(job, job_vars):
     # Run child job
     job.addChildJobFn(add_read_groups, job_vars, disk='30 G')
     job.addChildJobFn(mapping_stats, job_vars)
+    job.addFollowOnJobFn(consolidate_output, job_vars)
 
 
 def mapping_stats(job, job_vars):
@@ -361,8 +365,6 @@ def mapping_stats(job, job_vars):
     # I/O
     return_input_paths(job, work_dir, ids, 'stats.txt')
     uuid = input_args['uuid']
-    output_dir = input_args['output_dir']
-    mkdir_p(output_dir)
     # Command
     docker_call(tool='jvivian/mapping_stats', tool_parameters=[uuid], work_dir=work_dir)
     # Update FileStore
@@ -422,8 +424,6 @@ def bamsort_and_index(job, job_vars):
 def rseq_qc(job, job_vars):
     input_args, ids = job_vars
     work_dir = job.fileStore.getLocalTempDir()
-    output_dir = os.path.join(input_args['output_dir'], 'rseq_qc')
-    mkdir_p(output_dir)
     uuid = input_args['uuid']
 
     #I/O
@@ -471,9 +471,7 @@ def sort_bam_by_reference(job, job_vars):
 def exon_count(job, job_vars):
     input_args, ids = job_vars
     work_dir = job.fileStore.getLocalTempDir()
-    output_dir = input_args['output_dir']
     uuid = input_args['uuid']
-    mkdir_p(output_dir)
 
     # I/O
     sort_by_ref, normalize_pl, composite_bed = return_input_paths(job, work_dir, ids, 'sort_by_ref.bam',
@@ -489,7 +487,8 @@ def exon_count(job, job_vars):
               sort_by_ref,
               composite_bed]
 
-    p = subprocess.Popen(['sudo', 'docker', 'run', '-v', '{}:/data'.format(work_dir), tool] + cmd_1, stdout=subprocess.PIPE)
+    # p = subprocess.Popen(['sudo', 'docker', 'run', '-v', '{}:/data'.format(work_dir), tool] + cmd_1, stdout=subprocess.PIPE)
+    p = subprocess.Popen(['docker', 'run', '-v', '{}:/data'.format(work_dir), tool] + cmd_1, stdout=subprocess.PIPE)
     with open(os.path.join(work_dir, 'exon_quant'), 'w') as f:
         subprocess.check_call(cmd_2, stdin=p.stdout, stdout=f)
 
@@ -585,8 +584,6 @@ def rsem_postprocess(job, job_vars):
     input_args, ids = job_vars
     work_dir = job.fileStore.getLocalTempDir()
     uuid = input_args['uuid']
-    output_dir = input_args['output_dir']
-    mkdir_p(output_dir)
 
     # I/O
     return_input_paths(job, work_dir, ids, 'rsem_gene.tab', 'rsem_isoform.tab')
@@ -609,8 +606,6 @@ def rsem_postprocess(job, job_vars):
     tarball_files(work_dir, zip_name='rsem.tar.gz', uuid=uuid, files=output_files)
     job.fileStore.updateGlobalFile(ids['rsem.tar.gz'], os.path.join(work_dir, 'rsem.tar.gz'))
     # Run children
-    job.addChildJobFn(consolidate_output, job_vars)
-
 
 
 def consolidate_output(job, job_vars):
@@ -620,8 +615,6 @@ def consolidate_output(job, job_vars):
     input_args, ids = job_vars
     work_dir = job.fileStore.getLocalTempDir()
     uuid = input_args['uuid']
-    output_dir = input_args['output_dir']
-    mkdir_p(output_dir)
 
     # I/O
     rsem_tar, map_tar, exon_tar, qc_tar =  return_input_paths(job, work_dir, ids, 'rsem.tar.gz', 'map.tar.gz',
@@ -641,6 +634,8 @@ def consolidate_output(job, job_vars):
     # Update file store
     job.fileStore.updateGlobalFile(ids['uuid.tar.gz'], out_tar)
     if input_args['output_dir']:
+        output_dir = input_args['output_dir']
+        mkdir_p(output_dir)
         move_to_output_dir(work_dir, output_dir, uuid=None, files=[uuid + '.tar.gz'])
     # If S3 bucket argument specified, upload to S3
     if input_args['s3_dir']:
