@@ -35,7 +35,7 @@ from collections import OrderedDict
 from toil.job import Job
 
 debug = False
-debug_log = open('debug_log', 'w')
+debug_path = '/home/ubuntu/debug_data'
 
 def build_parser():
     """
@@ -78,6 +78,8 @@ def docker_call(work_dir, tool_parameters, tool, input_files=None, output_files=
     """
     Takes parameters to run a docker container and checks input and output files
     """
+    debug_file = os.path.basename(input_files[0])
+    debug_log = open('dlog_{}_{}'.format(tool.split(os.sep)[-1], debug_file), 'w')
     for input_file in input_files:
         assert os.path.exists(input_file)
     base_docker_call = 'sudo docker run -v {}:/data'.format(work_dir)
@@ -88,6 +90,8 @@ def docker_call(work_dir, tool_parameters, tool, input_files=None, output_files=
             f.write('debug')
             f.close()
     try:
+        cmd = base_docker_call.split() + [tool] + tool_parameters
+        debug_log.write(repr(cmd))
         subprocess.check_call(base_docker_call.split() + [tool] + tool_parameters)
     except subprocess.CalledProcessError:
         raise RuntimeError('docker command returned a non-zero exit status. Check error logs.')
@@ -105,8 +109,12 @@ def download_from_url(job, url, fname):
     Input3: jobstore id dictionary
     Input4: Name of key used to access url in input_args
     """
+    debug_log = open("dlog_download_from_url_{}".format(fname), "w")
     work_dir = job.fileStore.getLocalTempDir()
     file_path = os.path.join(work_dir, fname)
+    debug_data_path = os.path.join(debug_path, fname)
+    if os.path.exists(debug_data_path):
+        return job.fileStore.writeGlobalFile(debug_data_path)
     if not os.path.exists(file_path):
         try:
             if debug:
@@ -114,6 +122,7 @@ def download_from_url(job, url, fname):
                 f.write('debug')
                 f.close()
             else:
+                debug_log.write("Downloading reference"+'\n')
                 subprocess.check_call(['curl', '-fs', '--retry', '5', '--create-dir', url, '-o', file_path])
         except subprocess.CalledProcessError:
             raise RuntimeError(
@@ -121,6 +130,7 @@ def download_from_url(job, url, fname):
         except OSError:
             raise RuntimeError('Failed to find "curl". Install via "apt-get install curl"')
     assert os.path.exists(file_path)
+    debug_log.close()
     return job.fileStore.writeGlobalFile(file_path)
 
 
@@ -161,13 +171,16 @@ def batch_start(job, input_args):
     Downloads shared files that are used by all samples for alignment and calibration and places 
     them in job store
     """
+    debug_log = open("dlog_batch_start", "w")
     debug_log.write("Made it to batch start\n")
-    shared_files = ['ref.fa', 'phase.vcf', 'omni.vcf', 'dbsnp.vcf', 'hapmap.vcf', 'mills.vcf']
+    shared_files = ['ref.fa', 'phase', 'omni', 'dbsnp', 'hapmap', 'mills']
     shared_ids = {}
     for file_name in shared_files:
+        debug_log.write(file_name + '\n')
         url = input_args[file_name]
         shared_ids[file_name] = job.addChildJobFn(download_from_url, url, file_name).rv()
     job.addFollowOnJobFn(spawn_batch_jobs, shared_ids, input_args)
+    debug_log.close()
 
 
 def spawn_batch_jobs(job, shared_ids, input_args):
@@ -175,7 +188,6 @@ def spawn_batch_jobs(job, shared_ids, input_args):
     Reads in the input files with uuid and url information and starts a job
     for each sample
     """
-    debug_log.write("Made it to spawn batch jobs\n")
     #Names for every input file used in the pipeline by each sample
     samples = []
     config = input_args['config']
@@ -192,7 +204,6 @@ def start(job, shared_ids, input_args, sample):
     Takes a sample and creates a copy of shared data, then
     starts the index function
     """
-    debug_log.write("Made it to start\n")
     uuid, url = sample
     ids = shared_ids.copy()
     #Update input
@@ -204,50 +215,50 @@ def start(job, shared_ids, input_args, sample):
         ids['bam'] = job.addChildJobFn(download_from_url, url, 'bam').rv()
     else:
         pass
-    job.addChildJobFn(index, ids, input_args)
+    job.addFollowOnJobFn(index, ids, input_args)
 
 
 # TODO remove debug path
 def index(job, ids, input_args):
-    debug_log.write("Made it to index\n")
+    debug_log = open('dlog_index', 'w')
     work_dir = job.fileStore.getLocalTempDir()
     #Retrieve file path
     bam_path = return_input_paths(job, work_dir, ids, 'bam')
-    #Call: index the normal.bam
-    parameters = ['index', bam_path]
     output_path = '{}.bai'.format(bam_path)
+    debug_log.write(output_path + '\n')
+    #Call: index the normal.bam
+    parameters = ['index', 'bam']
     docker_call(work_dir, parameters, 'computationalgenomicslab/samtools', [bam_path], [output_path])
     #Update FileStore and call child
-    ids['bai'] = job.fileStore.writeGlobalFile(os.path.join(work_dir, output_path))
-    job.addChildJobFn(haplotype_caller, ids, input_args)
+    ids['bai'] = job.fileStore.writeGlobalFile(output_path)
+#    job.addChildJobFn(haplotype_caller, ids, input_args)
 
 
 ##TODO There is something wrong with this function ... it crashes every time
+# In docker, it doesn't need the path, just the name of the file
 def haplotype_caller(job, ids, input_args):
     """ snps & indels together """
-    debug_log.write("Made it to haplotype_caller\n")
     work_dir = job.fileStore.getLocalTempDir()
     ref_fasta, bam, bai = return_input_paths(job, work_dir, ids, 'ref.fa', 'bam', 'bai')
     output = os.path.join(work_dir, 'unified.raw.BOTH.gatk.vcf')
     #Call GATK -- HaplotypeCaller
     command = ['-nct', input_args['cpu_count'],
-               '-R', ref_fasta,
+               '-R', 'ref.fa',
                '-T', 'HaplotypeCaller',
                '--genotyping_mode', 'Discovery',
                '--output_mode', 'EMIT_VARIANTS_ONLY',
-               '-I', bam,
-               '-o', output,
+               '-I', 'bam',
+               '-o', 'unified.raw.BOTH.gatk.vcf',
                '-stand_emit_conf', '10.0',
                '-stand_call_conf', '30.0']
     docker_call(work_dir, command, 'computationalgenomicslab/gatk', [ref_fasta, bam, bai], [output])
     #Update fileStore and spawn child job
     ids['unified.raw.BOTH.gatk.vcf'] = job.fileStore.writeGlobalFile(output)
-    job.addChildJobFn(vqsr_snp, ids, input_args)
-    job.addChildJobFn(vqsr_indel, ids, input_args)
+#    job.addChildJobFn(vqsr_snp, ids, input_args)
+#    job.addChildJobFn(vqsr_indel, ids, input_args)
 
 
 def vqsr_snp(job, ids, input_args):
-    debug_log.write("Made it to snp vqsr\n")
     work_dir = job.fileStore.getLocalTempDir()
     ref_fasta, raw_vcf, hapmap, omni, \
     dbsnp, phase = return_input_paths(job, work_dir, ids, 'ref.fa', 'unified.raw.BOTH.gatk.vcf',
@@ -279,7 +290,6 @@ def vqsr_snp(job, ids, input_args):
 #TODO Figure out out to move to output_dir
 #Apply Snp Recalibration
 def apply_vqsr_snp(job, ids, input_args):
-    debug_log.write("Made it to apply snp vqsr\n")
     work_dir = job.fileStore.getLocalTempDir()
     output_dir = input_args['output_dir']
     mkdir_p(output_dir)
@@ -303,7 +313,6 @@ def apply_vqsr_snp(job, ids, input_args):
 
 #Indel Recalibration
 def vqsr_indel(job, ids, input_args):
-    debug_log.write("Made it to vqsr indel\n")
     work_dir = job.fileStore.getLocalTempDir()
     ref_fasta, raw_vcf, mills = return_input_paths(job, work_dir, ids, 'ref.fa', 'unified.raw.BOTH.gatk.vcf',
                                                    'mills.vcf')
@@ -330,7 +339,6 @@ def vqsr_indel(job, ids, input_args):
 
 #Apply Indel Recalibration
 def apply_vqsr_indel(job, ids, input_args):
-    debug_log.write("Made it to apply indel vqsr\n")
     work_dir = job.fileStore.getLocalTempDir()
     output_dir = input_args['output_dir']
     mkdir_p(output_dir)
@@ -364,16 +372,14 @@ if __name__ == '__main__':
 
     input_args = {'ref.fa': args.reference,
                   'config': args.config,
-                  'phase.vcf': args.phase,
-                  'mills.vcf': args.mills,
-                  'dbsnp.vcf': args.dbsnp,
-                  'hapmap.vcf': args.hapmap,
-                  'omni.vcf': args.omni,
+                  'phase': args.phase,
+                  'mills': args.mills,
+                  'dbsnp': args.dbsnp,
+                  'hapmap': args.hapmap,
+                  'omni': args.omni,
                   'output_dir': args.output_dir,
                   'uuid': None,
                   'cpu_count': str(multiprocessing.cpu_count()),
                   'ssec':None}
     
     Job.Runner.startToil(Job.wrapJobFn(batch_start, input_args), args)
-
-    debug_log.close()
