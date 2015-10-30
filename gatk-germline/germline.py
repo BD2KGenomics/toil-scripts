@@ -82,7 +82,7 @@ def docker_call(work_dir, tool_parameters, tool, input_files=None, output_files=
     debug_log = open('dlog_{}_{}'.format(tool.split(os.sep)[-1], debug_file), 'w')
     for input_file in input_files:
         assert os.path.exists(input_file)
-    base_docker_call = 'sudo docker run -v {}:/data'.format(work_dir)
+    base_docker_call = 'docker run -v {work_dir}:/data -u {uuid}'.format(work_dir=work_dir, uuid=os.getuid())
     if debug:
         base_docker_call = 'echo {}'.format(base_docker_call)
         for output_file in output_files:
@@ -91,7 +91,7 @@ def docker_call(work_dir, tool_parameters, tool, input_files=None, output_files=
             f.close()
     try:
         cmd = base_docker_call.split() + [tool] + tool_parameters
-        debug_log.write(repr(cmd))
+        debug_log.write(repr(cmd) + '\n')
         subprocess.check_call(base_docker_call.split() + [tool] + tool_parameters)
     except subprocess.CalledProcessError:
         raise RuntimeError('docker command returned a non-zero exit status. Check error logs.')
@@ -99,6 +99,9 @@ def docker_call(work_dir, tool_parameters, tool, input_files=None, output_files=
         raise RuntimeError('docker not found on system. Install on all nodes.')
     for output_file in output_files:
         assert os.path.exists(output_file)
+        debug_log.write(output_file + '\n')
+        stat = os.stat(output_file)
+        debug_log.write(repr(stat.st_uid) + '\n')
 
 
 def download_from_url(job, url, fname):
@@ -123,6 +126,7 @@ def download_from_url(job, url, fname):
                 f.close()
             else:
                 debug_log.write("Downloading reference"+'\n')
+                debug_log.write("Path: {}\n".format(file_path))
                 subprocess.check_call(['curl', '-fs', '--retry', '5', '--create-dir', url, '-o', file_path])
         except subprocess.CalledProcessError:
             raise RuntimeError(
@@ -130,6 +134,7 @@ def download_from_url(job, url, fname):
         except OSError:
             raise RuntimeError('Failed to find "curl". Install via "apt-get install curl"')
     assert os.path.exists(file_path)
+    debug_log.write("Assert path exists")
     debug_log.close()
     return job.fileStore.writeGlobalFile(file_path)
 
@@ -139,9 +144,14 @@ def return_input_paths(job, work_dir, ids, *args):
     Given one or more strings representing file_names, return the paths to those files.
     """
     # for every file in *args, place in work_dir via the FileStore and then return the mounted docker path.
+    debug_file = open('dlog_return_input_path', 'w')
     paths = OrderedDict()
     for name in args:
+        debug_file.write(name + '\n')
         if not os.path.exists(os.path.join(work_dir, name)):
+            debug_file.write('not in workdir\n')
+            debug_file.write(ids[name] + '\n')
+            debug_file.write(os.path.join(work_dir, name) + '\n')
             file_path = job.fileStore.readGlobalFile(ids[name], os.path.join(work_dir, name))
         else:
             file_path = os.path.join(work_dir, name)
@@ -231,13 +241,14 @@ def index(job, ids, input_args):
     docker_call(work_dir, parameters, 'computationalgenomicslab/samtools', [bam_path], [output_path])
     #Update FileStore and call child
     ids['bai'] = job.fileStore.writeGlobalFile(output_path)
-#    job.addChildJobFn(haplotype_caller, ids, input_args)
+    debug_log.write('Promise: ' + ids['bai'] + '\n')
+    job.addChildJobFn(haplotype_caller, ids, input_args)
 
 
-##TODO There is something wrong with this function ... it crashes every time
-# In docker, it doesn't need the path, just the name of the file
+# TODO Gatk needs the files to end with proper extensions: bam.bam bam.bam.bai
 def haplotype_caller(job, ids, input_args):
     """ snps & indels together """
+    debug_log = open('dlog_haplotye', 'w')
     work_dir = job.fileStore.getLocalTempDir()
     ref_fasta, bam, bai = return_input_paths(job, work_dir, ids, 'ref.fa', 'bam', 'bai')
     output = os.path.join(work_dir, 'unified.raw.BOTH.gatk.vcf')
@@ -254,7 +265,8 @@ def haplotype_caller(job, ids, input_args):
     docker_call(work_dir, command, 'computationalgenomicslab/gatk', [ref_fasta, bam, bai], [output])
     #Update fileStore and spawn child job
     ids['unified.raw.BOTH.gatk.vcf'] = job.fileStore.writeGlobalFile(output)
-#    job.addChildJobFn(vqsr_snp, ids, input_args)
+    debug_log.close()
+    job.addChildJobFn(vqsr_snp, ids, input_args)
 #    job.addChildJobFn(vqsr_indel, ids, input_args)
 
 
@@ -262,7 +274,7 @@ def vqsr_snp(job, ids, input_args):
     work_dir = job.fileStore.getLocalTempDir()
     ref_fasta, raw_vcf, hapmap, omni, \
     dbsnp, phase = return_input_paths(job, work_dir, ids, 'ref.fa', 'unified.raw.BOTH.gatk.vcf',
-                                      'hapmap.vcf', 'omni.vcf', 'dbsnp.vcf', 'phase.vcf')
+                                      'hapmap', 'omni', 'dbsnp', 'phase')
     inputs = [ref_fasta, raw_vcf, hapmap, omni, dbsnp, phase]
     recalFile = os.path.join(work_dir, 'HAPSNP.recalFile')
     tranches = os.path.join(work_dir, 'HAPSNP.tranches')
@@ -270,16 +282,16 @@ def vqsr_snp(job, ids, input_args):
     outputs = [recalFile, tranches, rscriptFile]
     command = ['-T', 'VariantRecalibrator',
                '-R', ref_fasta,
-               '-input', raw_vcf,
+               '-input', 'unified.raw.BOTH.gatk.vcf',
                '-nt', input_args['cpu_count'],
-               '-resource:hapmap,known=false,training=true,truth=true,prior=15.0', hapmap,
-               '-resource:omni,known=false,training=true,truth=false,prior=12.0', omni,
-               '-resource:dbsnp,known=true,training=false,truth=false,prior=2.0', dbsnp,
-               '-resource:1000G,known=false,training=true,truth=false,prior=10.0', phase,
+               '-resource:hapmap,known=false,training=true,truth=true,prior=15.0', 'hapmap',
+               '-resource:omni,known=false,training=true,truth=false,prior=12.0', 'omni',
+               '-resource:dbsnp,known=true,training=false,truth=false,prior=2.0', 'dbsnp',
+               '-resource:1000G,known=false,training=true,truth=false,prior=10.0', 'phase',
                '-an QD', '-an DP', '-an FS', '-an ReadPosRankSum', '-mode SNP', '-minNumBad 1000',
-               '-recalFile', recalFile,
-               '-tranchesFile', tranches,
-               '-rscriptFile', rscriptFile]
+               '-recalFile', 'HAPSNP.recalFile',
+               '-tranchesFile', 'HAPSNP.tranches',
+               '-rscriptFile', 'HAPSNP.plots']
     docker_call(work_dir, command, 'computationalgenomicslab/gatk', inputs, outputs)
     ids['HAPSNP.recal'] = job.fileStore.writeGlobalFile(recalFile)
     ids['HAPSNP.tranches'] = job.fileStore.writeGlobalFile(tranches)
@@ -300,12 +312,12 @@ def apply_vqsr_snp(job, ids, input_args):
                                                              'HAPSNP.tranches', 'HAPSNP.recal')
     inputs = [ref_fasta, raw_vcf, tranches, recal]
     command = ['-T', 'ApplyRecalibration',
-               '-input', raw_vcf,
-               '-o', output_path, '-R', ref_fasta,
+               '-input', 'unified.raw.BOTH.gatk.vcf',
+               '-o', output_name, '-R', 'ref.fa',
                '-nt', input_args['cpu_count'],
                '-ts_filter_level 99.0',
-               '-tranchesFile', tranches,
-               '-recalFile', recal,
+               '-tranchesFile', 'HAPSNP.tranches',
+               '-recalFile', 'HAPSNP.recal',
                '-mode', 'SNP']
     docker_call(work_dir, command, 'computationalgenomicslab/gatk', inputs, [output_path])
     move_to_output_dir(work_dir, output_dir, uuid=None, filenames=[output_name])
