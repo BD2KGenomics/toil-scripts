@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
 data=/mnt/ephemeral/toil
-mkdir -p $data/tmp
 export TMPDIR=$data/tmp
 python germline.py \
 $data/store \
@@ -12,3 +11,4 @@ $data/store \
 --hapmap "https://s3-us-west-2.amazonaws.com/cgl-pipeline-inputs/germline/hapmap_3.3.b37.vcf" \
 --omni "https://s3-us-west-2.amazonaws.com/cgl-pipeline-inputs/germline/1000G_omni2.5.b37.vcf" \
 -o /home/$USER/ \
+--restart

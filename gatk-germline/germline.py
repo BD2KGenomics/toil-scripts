@@ -92,14 +92,15 @@ def docker_call(work_dir, tool_parameters, tool, input_files=None, output_files=
     try:
         cmd = base_docker_call.split() + [tool] + tool_parameters
         debug_log.write(repr(cmd) + '\n')
-        subprocess.check_call(base_docker_call.split() + [tool] + tool_parameters)
+        subprocess.call(base_docker_call.split() + [tool] + tool_parameters)
+        debug_log.write("At least started job")
     except subprocess.CalledProcessError:
         raise RuntimeError('docker command returned a non-zero exit status. Check error logs.')
     except OSError:
         raise RuntimeError('docker not found on system. Install on all nodes.')
     for output_file in output_files:
-        assert os.path.exists(output_file)
         debug_log.write(output_file + '\n')
+        assert os.path.exists(output_file)
         stat = os.stat(output_file)
         debug_log.write(repr(stat.st_uid) + '\n')
 
@@ -183,7 +184,7 @@ def batch_start(job, input_args):
     """
     debug_log = open("dlog_batch_start", "w")
     debug_log.write("Made it to batch start\n")
-    shared_files = ['ref.fa', 'phase', 'omni', 'dbsnp', 'hapmap', 'mills']
+    shared_files = ['ref.fa', 'phase.vcf', 'omni.vcf', 'dbsnp.vcf', 'hapmap.vcf', 'mills.vcf']
     shared_ids = {}
     for file_name in shared_files:
         debug_log.write(file_name + '\n')
@@ -222,7 +223,7 @@ def start(job, shared_ids, input_args, sample):
     input_args['bam_url'] = url
     input_args['output_dir'] = os.path.join(input_args['output_dir'], uuid)
     if input_args['ssec'] is None:
-        ids['bam'] = job.addChildJobFn(download_from_url, url, 'bam').rv()
+        ids['toil.bam'] = job.addChildJobFn(download_from_url, url, 'toil.bam').rv()
     else:
         pass
     job.addFollowOnJobFn(index, ids, input_args)
@@ -233,15 +234,15 @@ def index(job, ids, input_args):
     debug_log = open('dlog_index', 'w')
     work_dir = job.fileStore.getLocalTempDir()
     #Retrieve file path
-    bam_path = return_input_paths(job, work_dir, ids, 'bam')
-    output_path = '{}.bai'.format(bam_path)
+    bam_path = return_input_paths(job, work_dir, ids, 'toil.bam')
+    output_path = os.path.join(work_dir, 'toil.bam.bai')
     debug_log.write(output_path + '\n')
     #Call: index the normal.bam
-    parameters = ['index', 'bam']
+    parameters = ['index', 'toil.bam']
     docker_call(work_dir, parameters, 'computationalgenomicslab/samtools', [bam_path], [output_path])
     #Update FileStore and call child
-    ids['bai'] = job.fileStore.writeGlobalFile(output_path)
-    debug_log.write('Promise: ' + ids['bai'] + '\n')
+    ids['toil.bam.bai'] = job.fileStore.writeGlobalFile(output_path)
+    debug_log.write('Promise: ' + ids['toil.bam.bai'] + '\n')
     job.addChildJobFn(haplotype_caller, ids, input_args)
 
 
@@ -250,15 +251,20 @@ def haplotype_caller(job, ids, input_args):
     """ snps & indels together """
     debug_log = open('dlog_haplotye', 'w')
     work_dir = job.fileStore.getLocalTempDir()
-    ref_fasta, bam, bai = return_input_paths(job, work_dir, ids, 'ref.fa', 'bam', 'bai')
+    debug_log.write(work_dir + '\n')
+    ref_fasta, bam, bai = return_input_paths(job, work_dir, ids, 'ref.fa', 'toil.bam', 'toil.bam.bai')
     output = os.path.join(work_dir, 'unified.raw.BOTH.gatk.vcf')
+    debug_log.write(ref_fasta + '\n')
+    debug_log.write(bam + '\n')
+    debug_log.write(bai + '\n')
+    debug_log.write('OUTPUT: ' + output + '\n')
     #Call GATK -- HaplotypeCaller
     command = ['-nct', input_args['cpu_count'],
                '-R', 'ref.fa',
                '-T', 'HaplotypeCaller',
                '--genotyping_mode', 'Discovery',
                '--output_mode', 'EMIT_VARIANTS_ONLY',
-               '-I', 'bam',
+               '-I', 'toil.bam',
                '-o', 'unified.raw.BOTH.gatk.vcf',
                '-stand_emit_conf', '10.0',
                '-stand_call_conf', '30.0']
@@ -266,7 +272,7 @@ def haplotype_caller(job, ids, input_args):
     #Update fileStore and spawn child job
     ids['unified.raw.BOTH.gatk.vcf'] = job.fileStore.writeGlobalFile(output)
     debug_log.close()
-    job.addChildJobFn(vqsr_snp, ids, input_args)
+#    job.addChildJobFn(vqsr_snp, ids, input_args)
 #    job.addChildJobFn(vqsr_indel, ids, input_args)
 
 
