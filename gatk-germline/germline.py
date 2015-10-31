@@ -92,7 +92,7 @@ def docker_call(work_dir, tool_parameters, tool, input_files=None, output_files=
     try:
         cmd = base_docker_call.split() + [tool] + tool_parameters
         debug_log.write(repr(cmd) + '\n')
-        subprocess.call(base_docker_call.split() + [tool] + tool_parameters)
+        subprocess.check_call(base_docker_call.split() + [tool] + tool_parameters)
         debug_log.write("At least started job")
     except subprocess.CalledProcessError:
         raise RuntimeError('docker command returned a non-zero exit status. Check error logs.')
@@ -190,8 +190,26 @@ def batch_start(job, input_args):
         debug_log.write(file_name + '\n')
         url = input_args[file_name]
         shared_ids[file_name] = job.addChildJobFn(download_from_url, url, file_name).rv()
-    job.addFollowOnJobFn(spawn_batch_jobs, shared_ids, input_args)
+    job.addFollowOnJobFn(create_reference_index, shared_ids, input_args)
     debug_log.close()
+
+def create_reference_index(job, shared_ids, input_args):
+    """
+    Uses Samtools to create reference index file (.fasta.fai)
+    """
+    debug_log = open('dlog_create_reference_index', 'w')
+    # Unpack convenience variables for job
+    work_dir = job.fileStore.getLocalTempDir()
+    # Retrieve file path
+    ref_path = return_input_paths(job, work_dir, shared_ids, 'ref.fa')
+    output = os.path.join(work_dir, 'ref.fa.fai')
+    # Call: Samtools
+    command = ['faidx', 'ref.fa']
+    docker_call(work_dir, command, 'computationalgenomicslab/samtools', [ref_path], [output])
+    # Update fileStore for output
+    shared_ids['ref.fa.fai'] = job.fileStore.writeGlobalFile(output)
+    debug_log.close()
+    job.addChildJobFn(spawn_batch_jobs, shared_ids, input_args)
 
 
 def spawn_batch_jobs(job, shared_ids, input_args):
@@ -228,7 +246,6 @@ def start(job, shared_ids, input_args, sample):
         pass
     job.addFollowOnJobFn(index, ids, input_args)
 
-
 # TODO remove debug path
 def index(job, ids, input_args):
     debug_log = open('dlog_index', 'w')
@@ -246,15 +263,17 @@ def index(job, ids, input_args):
     job.addChildJobFn(haplotype_caller, ids, input_args)
 
 
-# TODO Gatk needs the files to end with proper extensions: bam.bam bam.bam.bai
+# TODO File can't see ref.fa.faix. Check to see if return input paths can rind it
 def haplotype_caller(job, ids, input_args):
     """ snps & indels together """
     debug_log = open('dlog_haplotye', 'w')
     work_dir = job.fileStore.getLocalTempDir()
     debug_log.write(work_dir + '\n')
-    ref_fasta, bam, bai = return_input_paths(job, work_dir, ids, 'ref.fa', 'toil.bam', 'toil.bam.bai')
+    ref_fasta, ref_faix, bam, bai = return_input_paths(job, work_dir, ids, 'ref.fa', 'ref.fa.fai',
+                                                                           'toil.bam', 'toil.bam.bai')
     output = os.path.join(work_dir, 'unified.raw.BOTH.gatk.vcf')
     debug_log.write(ref_fasta + '\n')
+    debug_log.write(ref_faix + '\n')
     debug_log.write(bam + '\n')
     debug_log.write(bai + '\n')
     debug_log.write('OUTPUT: ' + output + '\n')
@@ -278,22 +297,22 @@ def haplotype_caller(job, ids, input_args):
 
 def vqsr_snp(job, ids, input_args):
     work_dir = job.fileStore.getLocalTempDir()
-    ref_fasta, raw_vcf, hapmap, omni, \
-    dbsnp, phase = return_input_paths(job, work_dir, ids, 'ref.fa', 'unified.raw.BOTH.gatk.vcf',
-                                      'hapmap', 'omni', 'dbsnp', 'phase')
+    ref_fasta, ref_faix = return_input_paths(job, work_dir, ids, 'ref.fa', 'ref.fa.faix')
+    raw_vcf, hapmap  = return_input_paths(job, work_dir, ids, 'unified.raw.BOTH.gatk.vcf', 'hapmap.vcf')
+    omni, dbsnp, phase = return_input_paths(job, work_dir, ids, 'omni.vcf', 'dbsnp.vcf', 'phase.vcf')
     inputs = [ref_fasta, raw_vcf, hapmap, omni, dbsnp, phase]
     recalFile = os.path.join(work_dir, 'HAPSNP.recalFile')
     tranches = os.path.join(work_dir, 'HAPSNP.tranches')
     rscriptFile = os.path.join(work_dir, 'HAPSNP.plots')
     outputs = [recalFile, tranches, rscriptFile]
     command = ['-T', 'VariantRecalibrator',
-               '-R', ref_fasta,
+               '-R', 'ref.fa',
                '-input', 'unified.raw.BOTH.gatk.vcf',
                '-nt', input_args['cpu_count'],
-               '-resource:hapmap,known=false,training=true,truth=true,prior=15.0', 'hapmap',
-               '-resource:omni,known=false,training=true,truth=false,prior=12.0', 'omni',
-               '-resource:dbsnp,known=true,training=false,truth=false,prior=2.0', 'dbsnp',
-               '-resource:1000G,known=false,training=true,truth=false,prior=10.0', 'phase',
+               '-resource:hapmap,known=false,training=true,truth=true,prior=15.0', 'hapmap.vcf',
+               '-resource:omni,known=false,training=true,truth=false,prior=12.0', 'omni.vcf',
+               '-resource:dbsnp,known=true,training=false,truth=false,prior=2.0', 'dbsnp.vcf',
+               '-resource:1000G,known=false,training=true,truth=false,prior=10.0', 'phase.vcf',
                '-an QD', '-an DP', '-an FS', '-an ReadPosRankSum', '-mode SNP', '-minNumBad 1000',
                '-recalFile', 'HAPSNP.recalFile',
                '-tranchesFile', 'HAPSNP.tranches',
@@ -390,11 +409,11 @@ if __name__ == '__main__':
 
     input_args = {'ref.fa': args.reference,
                   'config': args.config,
-                  'phase': args.phase,
-                  'mills': args.mills,
-                  'dbsnp': args.dbsnp,
-                  'hapmap': args.hapmap,
-                  'omni': args.omni,
+                  'phase.vcf': args.phase,
+                  'mills.vcf': args.mills,
+                  'dbsnp.vcf': args.dbsnp,
+                  'hapmap.vcf': args.hapmap,
+                  'omni.vcf': args.omni,
                   'output_dir': args.output_dir,
                   'uuid': None,
                   'cpu_count': str(multiprocessing.cpu_count()),
