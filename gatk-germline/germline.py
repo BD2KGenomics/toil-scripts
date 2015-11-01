@@ -202,15 +202,30 @@ def create_reference_index(job, shared_ids, input_args):
     work_dir = job.fileStore.getLocalTempDir()
     # Retrieve file path
     ref_path = return_input_paths(job, work_dir, shared_ids, 'ref.fa')
-    output = os.path.join(work_dir, 'ref.fa.fai')
+    faidx_output = os.path.join(work_dir, 'ref.fa.fai')
     # Call: Samtools
-    command = ['faidx', 'ref.fa']
-    docker_call(work_dir, command, 'computationalgenomicslab/samtools', [ref_path], [output])
+    faidx_command = ['faidx', 'ref.fa']
+    docker_call(work_dir, faidx_command, 'computationalgenomicslab/samtools', [ref_path], [faidx_output])
     # Update fileStore for output
-    shared_ids['ref.fa.fai'] = job.fileStore.writeGlobalFile(output)
+    shared_ids['ref.fa.fai'] = job.fileStore.writeGlobalFile(faidx_output)
+    job.addChildJobFn(create_reference_dict, shared_ids, input_args)
     debug_log.close()
-    job.addChildJobFn(spawn_batch_jobs, shared_ids, input_args)
 
+def create_reference_dict(job, shared_ids, input_args):
+    """
+    Uses Picardtools to create reference dictionary (.dict) for the sample
+    """
+    # Unpack convenience variables for job
+    work_dir = job.fileStore.getLocalTempDir()
+    # Retrieve file path
+    ref_path = return_input_paths(job, work_dir, shared_ids, 'ref.fa')
+    # Call: picardtools
+    picard_output = os.path.join(work_dir, 'ref.dict')
+    command = ['CreateSequenceDictionary', 'R=ref.fa', 'O=ref.dict']
+    docker_call(work_dir, command, 'computationalgenomicslab/picardtools', [ref_path], [picard_output])
+    # Update fileStore for output
+    shared_ids['ref.dict'] = job.fileStore.writeGlobalFile(picard_output)
+    job.addChildJobFn(spawn_batch_jobs, shared_ids, input_args)
 
 def spawn_batch_jobs(job, shared_ids, input_args):
     """
@@ -269,14 +284,14 @@ def haplotype_caller(job, ids, input_args):
     debug_log = open('dlog_haplotye', 'w')
     work_dir = job.fileStore.getLocalTempDir()
     debug_log.write(work_dir + '\n')
-    ref_fasta, ref_faix, bam, bai = return_input_paths(job, work_dir, ids, 'ref.fa', 'ref.fa.fai',
-                                                                           'toil.bam', 'toil.bam.bai')
-    output = os.path.join(work_dir, 'unified.raw.BOTH.gatk.vcf')
+    ref_fasta, ref_faix, ref_dict, bam, bai = return_input_paths(job, work_dir, ids, 'ref.fa', 'ref.fa.fai',
+                                                                 'ref.dict', 'toil.bam', 'toil.bam.bai')
+    haplotype_output = os.path.join(work_dir, 'unified.raw.BOTH.gatk.vcf')
     debug_log.write(ref_fasta + '\n')
     debug_log.write(ref_faix + '\n')
     debug_log.write(bam + '\n')
     debug_log.write(bai + '\n')
-    debug_log.write('OUTPUT: ' + output + '\n')
+    debug_log.write('OUTPUT: ' + haplotype_output + '\n')
     #Call GATK -- HaplotypeCaller
     command = ['-nct', input_args['cpu_count'],
                '-R', 'ref.fa',
@@ -287,9 +302,9 @@ def haplotype_caller(job, ids, input_args):
                '-o', 'unified.raw.BOTH.gatk.vcf',
                '-stand_emit_conf', '10.0',
                '-stand_call_conf', '30.0']
-    docker_call(work_dir, command, 'computationalgenomicslab/gatk', [ref_fasta, bam, bai], [output])
+    docker_call(work_dir, command, 'computationalgenomicslab/gatk', [ref_fasta, bam, bai], [haplotype_output])
     #Update fileStore and spawn child job
-    ids['unified.raw.BOTH.gatk.vcf'] = job.fileStore.writeGlobalFile(output)
+    ids['unified.raw.BOTH.gatk.vcf'] = job.fileStore.writeGlobalFile(haplotype_output)
     debug_log.close()
 #    job.addChildJobFn(vqsr_snp, ids, input_args)
 #    job.addChildJobFn(vqsr_indel, ids, input_args)
@@ -297,7 +312,7 @@ def haplotype_caller(job, ids, input_args):
 
 def vqsr_snp(job, ids, input_args):
     work_dir = job.fileStore.getLocalTempDir()
-    ref_fasta, ref_faix = return_input_paths(job, work_dir, ids, 'ref.fa', 'ref.fa.faix')
+    ref_fasta, ref_faix, ref_dict = return_input_paths(job, work_dir, ids, 'ref.fa', 'ref.fa.faix', 'ref.dict')
     raw_vcf, hapmap  = return_input_paths(job, work_dir, ids, 'unified.raw.BOTH.gatk.vcf', 'hapmap.vcf')
     omni, dbsnp, phase = return_input_paths(job, work_dir, ids, 'omni.vcf', 'dbsnp.vcf', 'phase.vcf')
     inputs = [ref_fasta, raw_vcf, hapmap, omni, dbsnp, phase]
@@ -333,8 +348,9 @@ def apply_vqsr_snp(job, ids, input_args):
     uuid = input_args['uuid']
     output_name = '{}.HAPSNP.vqsr.SNP.vcf'.format(uuid)
     output_path = os.path.join(work_dir, output_name)
-    ref_fasta, raw_vcf, tranches, recal = return_input_paths(job, work_dir, ids, 'ref.fa', 'unified.raw.BOTH.gatk.vcf',
-                                                             'HAPSNP.tranches', 'HAPSNP.recal')
+    ref_fasta, ref_index, ref_dict = return_input_paths(job, work_dir, ids, 'ref.fa', 'ref.fa.faix', 'ref.dict')
+    raw_vcf, tranches, recal = return_input_paths(job, work_dir, ids, 'unified.raw.BOTH.gatk.vcf',
+                                                                       'HAPSNP.tranches', 'HAPSNP.recal')
     inputs = [ref_fasta, raw_vcf, tranches, recal]
     command = ['-T', 'ApplyRecalibration',
                '-input', 'unified.raw.BOTH.gatk.vcf',
