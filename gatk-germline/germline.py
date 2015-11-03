@@ -82,7 +82,7 @@ def docker_call(work_dir, tool_parameters, tool, input_files=None, output_files=
     debug_log = open('dlog_{}_{}'.format(tool.split(os.sep)[-1], debug_file), 'w')
     for input_file in input_files:
         assert os.path.exists(input_file)
-    base_docker_call = 'docker run -v {work_dir}:/data -u {uuid}'.format(work_dir=work_dir, uuid=os.getuid())
+    base_docker_call = 'docker run -v {work_dir}:/data'.format(work_dir=work_dir, uid=os.getuid())
     if debug:
         base_docker_call = 'echo {}'.format(base_docker_call)
         for output_file in output_files:
@@ -205,7 +205,7 @@ def create_reference_index(job, shared_ids, input_args):
     faidx_output = os.path.join(work_dir, 'ref.fa.fai')
     # Call: Samtools
     faidx_command = ['faidx', 'ref.fa']
-    docker_call(work_dir, faidx_command, 'computationalgenomicslab/samtools', [ref_path], [faidx_output])
+    docker_call(work_dir, faidx_command, 'quay.io/ucsc_cgl/samtools', [ref_path], [faidx_output])
     # Update fileStore for output
     shared_ids['ref.fa.fai'] = job.fileStore.writeGlobalFile(faidx_output)
     job.addChildJobFn(create_reference_dict, shared_ids, input_args)
@@ -222,7 +222,7 @@ def create_reference_dict(job, shared_ids, input_args):
     # Call: picardtools
     picard_output = os.path.join(work_dir, 'ref.dict')
     command = ['CreateSequenceDictionary', 'R=ref.fa', 'O=ref.dict']
-    docker_call(work_dir, command, 'computationalgenomicslab/picardtools', [ref_path], [picard_output])
+    docker_call(work_dir, command, 'quay.io/ucsc_cgl/picardtools', [ref_path], [picard_output])
     # Update fileStore for output
     shared_ids['ref.dict'] = job.fileStore.writeGlobalFile(picard_output)
     job.addChildJobFn(spawn_batch_jobs, shared_ids, input_args)
@@ -271,7 +271,7 @@ def index(job, ids, input_args):
     debug_log.write(output_path + '\n')
     #Call: index the normal.bam
     parameters = ['index', 'toil.bam']
-    docker_call(work_dir, parameters, 'computationalgenomicslab/samtools', [bam_path], [output_path])
+    docker_call(work_dir, parameters, 'quay.io/ucsc_cgl/samtools', [bam_path], [output_path])
     #Update FileStore and call child
     ids['toil.bam.bai'] = job.fileStore.writeGlobalFile(output_path)
     debug_log.write('Promise: ' + ids['toil.bam.bai'] + '\n')
@@ -302,12 +302,12 @@ def haplotype_caller(job, ids, input_args):
                '-o', 'unified.raw.BOTH.gatk.vcf',
                '-stand_emit_conf', '10.0',
                '-stand_call_conf', '30.0']
-    docker_call(work_dir, command, 'computationalgenomicslab/gatk', [ref_fasta, bam, bai], [haplotype_output])
+    docker_call(work_dir, command, 'quay.io/ucsc_cgl/gatk', [ref_fasta, bam, bai], [haplotype_output])
     #Update fileStore and spawn child job
     ids['unified.raw.BOTH.gatk.vcf'] = job.fileStore.writeGlobalFile(haplotype_output)
     debug_log.close()
-#    job.addChildJobFn(vqsr_snp, ids, input_args)
-#    job.addChildJobFn(vqsr_indel, ids, input_args)
+    job.addChildJobFn(vqsr_snp, ids, input_args)
+    job.addChildJobFn(vqsr_indel, ids, input_args)
 
 
 def vqsr_snp(job, ids, input_args):
@@ -332,7 +332,7 @@ def vqsr_snp(job, ids, input_args):
                '-recalFile', 'HAPSNP.recalFile',
                '-tranchesFile', 'HAPSNP.tranches',
                '-rscriptFile', 'HAPSNP.plots']
-    docker_call(work_dir, command, 'computationalgenomicslab/gatk', inputs, outputs)
+    docker_call(work_dir, command, 'quay.io/ucsc_cgl/gatk', inputs, outputs)
     ids['HAPSNP.recal'] = job.fileStore.writeGlobalFile(recalFile)
     ids['HAPSNP.tranches'] = job.fileStore.writeGlobalFile(tranches)
     ids['HAPSNP.plots'] = job.fileStore.writeGlobalFile(rscriptFile)
@@ -360,7 +360,7 @@ def apply_vqsr_snp(job, ids, input_args):
                '-tranchesFile', 'HAPSNP.tranches',
                '-recalFile', 'HAPSNP.recal',
                '-mode', 'SNP']
-    docker_call(work_dir, command, 'computationalgenomicslab/gatk', inputs, [output_path])
+    docker_call(work_dir, command, 'quay.io/ucsc_cgl/gatk', inputs, [output_path])
     move_to_output_dir(work_dir, output_dir, uuid=None, filenames=[output_name])
 
 
@@ -368,7 +368,7 @@ def apply_vqsr_snp(job, ids, input_args):
 def vqsr_indel(job, ids, input_args):
     work_dir = job.fileStore.getLocalTempDir()
     ref_fasta, raw_vcf, mills = return_input_paths(job, work_dir, ids, 'ref.fa', 'unified.raw.BOTH.gatk.vcf',
-                                                   'mills.vcf')
+                                                                       'mills.vcf')
     inputs = [ref_fasta, raw_vcf, mills]
     recalFile = os.path.join(work_dir, 'HAPINDEL.recalFile')
     tranches = os.path.join(work_dir, 'HAPINDEL.tranches')
@@ -384,7 +384,7 @@ def vqsr_indel(job, ids, input_args):
                '-recalFile', recalFile,
                '-tranchesFile', tranches,
                '-rscriptFile', rscriptFile]
-    docker_call(work_dir, command, 'computationalgenomicslab/gatk', inputs, outputs)
+    docker_call(work_dir, command, 'quay.io/ucsc_cgl/gatk', inputs, outputs)
     ids['HAPINDEL.recal'] = job.fileStore.writeGlobalFile(recalFile)
     ids['HAPINDEL.tranches'] = job.fileStore.writeGlobalFile(tranches)
     ids['HAPINDEL.plots'] = job.fileStore.writeGlobalFile(rscriptFile)
@@ -405,15 +405,15 @@ def apply_vqsr_indel(job, ids, input_args):
                                                              'HAPINDEL.recal')
     inputs = [ref_fasta, raw_vcf, tranches, recal]
     command = ['-T', 'ApplyRecalibration',
-               '-input', raw_vcf,
-               '-o', output_path,
-               '-R', ref_fasta,
+               '-input', 'unified.raw.BOTH.gatk.vcf',
+               '-o', output_name,
+               '-R', 'ref.fa',
                '-nt', input_args['cpu_count'],
                '-ts_filter_level', '99.0',
-               '-tranchesFile', tranches,
-               '-recalFile', recal,
+               '-tranchesFile', 'HAPINDEL.tranches',
+               '-recalFile', 'HAPINDEL.recal',
                '-mode', 'INDEL']
-    docker_call(work_dir, command, 'computationalgenmicslab/gatk', inputs, [output_path])
+    docker_call(work_dir, command, 'quay.io/ucsc_cgl/gatk', inputs, [output_path])
     move_to_output_dir(work_dir, output_dir, uuid=None, filenames=[output_name])
 
 
