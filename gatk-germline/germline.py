@@ -312,7 +312,7 @@ def haplotype_caller(job, ids, input_args):
 
 def vqsr_snp(job, ids, input_args):
     work_dir = job.fileStore.getLocalTempDir()
-    ref_fasta, ref_faix, ref_dict = return_input_paths(job, work_dir, ids, 'ref.fa', 'ref.fa.faix', 'ref.dict')
+    ref_fasta, ref_fai, ref_dict = return_input_paths(job, work_dir, ids, 'ref.fa', 'ref.fa.fai', 'ref.dict')
     raw_vcf, hapmap  = return_input_paths(job, work_dir, ids, 'unified.raw.BOTH.gatk.vcf', 'hapmap.vcf')
     omni, dbsnp, phase = return_input_paths(job, work_dir, ids, 'omni.vcf', 'dbsnp.vcf', 'phase.vcf')
     inputs = [ref_fasta, raw_vcf, hapmap, omni, dbsnp, phase]
@@ -328,7 +328,8 @@ def vqsr_snp(job, ids, input_args):
                '-resource:omni,known=false,training=true,truth=false,prior=12.0', 'omni.vcf',
                '-resource:dbsnp,known=true,training=false,truth=false,prior=2.0', 'dbsnp.vcf',
                '-resource:1000G,known=false,training=true,truth=false,prior=10.0', 'phase.vcf',
-               '-an QD', '-an DP', '-an FS', '-an ReadPosRankSum', '-mode SNP', '-minNumBad 1000',
+               '-an', 'QD', '-an', 'DP', '-an', 'FS', '-an', 'ReadPosRankSum',
+               '-mode', 'SNP', '-minNumBad', '1000',
                '-recalFile', 'HAPSNP.recalFile',
                '-tranchesFile', 'HAPSNP.tranches',
                '-rscriptFile', 'HAPSNP.plots']
@@ -348,13 +349,14 @@ def apply_vqsr_snp(job, ids, input_args):
     uuid = input_args['uuid']
     output_name = '{}.HAPSNP.vqsr.SNP.vcf'.format(uuid)
     output_path = os.path.join(work_dir, output_name)
-    ref_fasta, ref_index, ref_dict = return_input_paths(job, work_dir, ids, 'ref.fa', 'ref.fa.faix', 'ref.dict')
+    ref_fasta, ref_index, ref_dict = return_input_paths(job, work_dir, ids, 'ref.fa', 'ref.fa.fai', 'ref.dict')
     raw_vcf, tranches, recal = return_input_paths(job, work_dir, ids, 'unified.raw.BOTH.gatk.vcf',
                                                                        'HAPSNP.tranches', 'HAPSNP.recal')
     inputs = [ref_fasta, raw_vcf, tranches, recal]
     command = ['-T', 'ApplyRecalibration',
                '-input', 'unified.raw.BOTH.gatk.vcf',
-               '-o', output_name, '-R', 'ref.fa',
+               '-o', output_name,
+               '-R', 'ref.fa',
                '-nt', input_args['cpu_count'],
                '-ts_filter_level 99.0',
                '-tranchesFile', 'HAPSNP.tranches',
@@ -367,23 +369,24 @@ def apply_vqsr_snp(job, ids, input_args):
 #Indel Recalibration
 def vqsr_indel(job, ids, input_args):
     work_dir = job.fileStore.getLocalTempDir()
-    ref_fasta, raw_vcf, mills = return_input_paths(job, work_dir, ids, 'ref.fa', 'unified.raw.BOTH.gatk.vcf',
-                                                                       'mills.vcf')
+    ref_fasta, ref_faidx, ref_dict = return_input_paths(job, work_dir, ids, 'ref.fa', 'ref.fa.fai', 'ref.dict')
+    raw_vcf, mills = return_input_paths(job, work_dir, ids, 'unified.raw.BOTH.gatk.vcf', 'mills.vcf')
     inputs = [ref_fasta, raw_vcf, mills]
     recalFile = os.path.join(work_dir, 'HAPINDEL.recalFile')
     tranches = os.path.join(work_dir, 'HAPINDEL.tranches')
     rscriptFile = os.path.join(work_dir, 'HAPINDEL.plots')
     outputs = [recalFile, tranches, rscriptFile]
     command = ['-T', 'VariantRecalibrator',
-               '-R', ref_fasta,
-               '-input', raw_vcf,
+               '-R', 'ref.fa',
+               '-input', 'unified.raw.BOTH.gatk.vcf',
                '-nt', input_args['cpu_count'],
-               '-resource:mills,known=true,training=true,truth=true,prior=12.0', mills,
-               '-an DP', '-an FS', '-an ReadPosRankSum', '-mode INDEL',
-               '-minNumBad 1000',
-               '-recalFile', recalFile,
-               '-tranchesFile', tranches,
-               '-rscriptFile', rscriptFile]
+               '-resource:mills,known=true,training=true,truth=true,prior=12.0', 'mills.vcf',
+               '-an', 'DP', '-an', 'FS', '-an', 'ReadPosRankSum',
+               '-mode', 'INDEL',
+               '-minNumBad', '1000',
+               '-recalFile', 'HAPINDEL.recalFile',
+               '-tranchesFile', 'HAPINDEL.tranches',
+               '-rscriptFile', 'HAPINDEL.plots']
     docker_call(work_dir, command, 'quay.io/ucsc_cgl/gatk', inputs, outputs)
     ids['HAPINDEL.recal'] = job.fileStore.writeGlobalFile(recalFile)
     ids['HAPINDEL.tranches'] = job.fileStore.writeGlobalFile(tranches)
@@ -398,8 +401,8 @@ def apply_vqsr_indel(job, ids, input_args):
     uuid = input_args['uuid']
     output_name = '{}.HAPSNP.vqsr.INDEL.vcf'.format(uuid)
     output_path = os.path.join(work_dir, output_name)
-    ref_fasta, raw_vcf, tranches, recal = return_input_paths(job, work_dir, ids,
-                                                             'ref.fa',
+    ref_fasta, ref_faix, ref_dict = return_input_paths(job, work_dir, ids, 'ref.fa', 'ref.fa.fai', 'ref.dict')
+    raw_vcf, tranches, recal = return_input_paths(job, work_dir, ids,
                                                              'unified.raw.BOTH.gatk.vcf',
                                                              'HAPINDEL.tranches',
                                                              'HAPINDEL.recal')
@@ -416,12 +419,10 @@ def apply_vqsr_indel(job, ids, input_args):
     docker_call(work_dir, command, 'quay.io/ucsc_cgl/gatk', inputs, [output_path])
     move_to_output_dir(work_dir, output_dir, uuid=None, filenames=[output_name])
 
-
 if __name__ == '__main__':
     parser = build_parser()
     Job.Runner.addToilOptions(parser)
     args = parser.parse_args()
-
 
     input_args = {'ref.fa': args.reference,
                   'config': args.config,
