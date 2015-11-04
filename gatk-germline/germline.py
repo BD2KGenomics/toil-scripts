@@ -34,8 +34,6 @@ import multiprocessing
 from collections import OrderedDict
 from toil.job import Job
 
-debug = False
-debug_path = '/home/ubuntu/debug_data'
 
 def build_parser():
     """
@@ -73,36 +71,21 @@ def docker_path(file_path):
     return os.path.join('/data', os.path.basename(file_path))
 
 
-# TODO Assert files exist
 def docker_call(work_dir, tool_parameters, tool, input_files=None, output_files=None):
     """
     Takes parameters to run a docker container and checks input and output files
     """
-    debug_file = os.path.basename(input_files[0])
-    debug_log = open('dlog_{}_{}'.format(tool.split(os.sep)[-1], debug_file), 'w')
     for input_file in input_files:
         assert os.path.exists(input_file)
-    base_docker_call = 'docker run -v {work_dir}:/data'.format(work_dir=work_dir, uid=os.getuid())
-    if debug:
-        base_docker_call = 'echo {}'.format(base_docker_call)
-        for output_file in output_files:
-            f = open(output_file, 'w')
-            f.write('debug')
-            f.close()
+    base_docker_call = 'docker run -v {work_dir}:/data'.format(work_dir=work_dir)
     try:
-        cmd = base_docker_call.split() + [tool] + tool_parameters
-        debug_log.write(repr(cmd) + '\n')
         subprocess.check_call(base_docker_call.split() + [tool] + tool_parameters)
-        debug_log.write("At least started job")
     except subprocess.CalledProcessError:
         raise RuntimeError('docker command returned a non-zero exit status. Check error logs.')
     except OSError:
         raise RuntimeError('docker not found on system. Install on all nodes.')
     for output_file in output_files:
-        debug_log.write(output_file + '\n')
         assert os.path.exists(output_file)
-        stat = os.stat(output_file)
-        debug_log.write(repr(stat.st_uid) + '\n')
 
 
 def download_from_url(job, url, fname):
@@ -113,30 +96,17 @@ def download_from_url(job, url, fname):
     Input3: jobstore id dictionary
     Input4: Name of key used to access url in input_args
     """
-    debug_log = open("dlog_download_from_url_{}".format(fname), "w")
     work_dir = job.fileStore.getLocalTempDir()
     file_path = os.path.join(work_dir, fname)
-    debug_data_path = os.path.join(debug_path, fname)
-    if os.path.exists(debug_data_path):
-        return job.fileStore.writeGlobalFile(debug_data_path)
     if not os.path.exists(file_path):
         try:
-            if debug:
-                f = open(file_path, 'w')
-                f.write('debug')
-                f.close()
-            else:
-                debug_log.write("Downloading reference"+'\n')
-                debug_log.write("Path: {}\n".format(file_path))
-                subprocess.check_call(['curl', '-fs', '--retry', '5', '--create-dir', url, '-o', file_path])
+            subprocess.check_call(['curl', '-fs', '--retry', '5', '--create-dir', url, '-o', file_path])
         except subprocess.CalledProcessError:
             raise RuntimeError(
                 '\nNecessary file could not be acquired: {}. Check input URL'.format(url))
         except OSError:
             raise RuntimeError('Failed to find "curl". Install via "apt-get install curl"')
     assert os.path.exists(file_path)
-    debug_log.write("Assert path exists")
-    debug_log.close()
     return job.fileStore.writeGlobalFile(file_path)
 
 
@@ -145,14 +115,9 @@ def return_input_paths(job, work_dir, ids, *args):
     Given one or more strings representing file_names, return the paths to those files.
     """
     # for every file in *args, place in work_dir via the FileStore and then return the mounted docker path.
-    debug_file = open('dlog_return_input_path', 'w')
     paths = OrderedDict()
     for name in args:
-        debug_file.write(name + '\n')
         if not os.path.exists(os.path.join(work_dir, name)):
-            debug_file.write('not in workdir\n')
-            debug_file.write(ids[name] + '\n')
-            debug_file.write(os.path.join(work_dir, name) + '\n')
             file_path = job.fileStore.readGlobalFile(ids[name], os.path.join(work_dir, name))
         else:
             file_path = os.path.join(work_dir, name)
@@ -182,22 +147,17 @@ def batch_start(job, input_args):
     Downloads shared files that are used by all samples for alignment and calibration and places 
     them in job store
     """
-    debug_log = open("dlog_batch_start", "w")
-    debug_log.write("Made it to batch start\n")
     shared_files = ['ref.fa', 'phase.vcf', 'omni.vcf', 'dbsnp.vcf', 'hapmap.vcf', 'mills.vcf']
     shared_ids = {}
     for file_name in shared_files:
-        debug_log.write(file_name + '\n')
         url = input_args[file_name]
         shared_ids[file_name] = job.addChildJobFn(download_from_url, url, file_name).rv()
     job.addFollowOnJobFn(create_reference_index, shared_ids, input_args)
-    debug_log.close()
 
 def create_reference_index(job, shared_ids, input_args):
     """
     Uses Samtools to create reference index file (.fasta.fai)
     """
-    debug_log = open('dlog_create_reference_index', 'w')
     # Unpack convenience variables for job
     work_dir = job.fileStore.getLocalTempDir()
     # Retrieve file path
@@ -209,7 +169,6 @@ def create_reference_index(job, shared_ids, input_args):
     # Update fileStore for output
     shared_ids['ref.fa.fai'] = job.fileStore.writeGlobalFile(faidx_output)
     job.addChildJobFn(create_reference_dict, shared_ids, input_args)
-    debug_log.close()
 
 def create_reference_dict(job, shared_ids, input_args):
     """
@@ -261,37 +220,26 @@ def start(job, shared_ids, input_args, sample):
         pass
     job.addFollowOnJobFn(index, ids, input_args)
 
-# TODO remove debug path
 def index(job, ids, input_args):
-    debug_log = open('dlog_index', 'w')
     work_dir = job.fileStore.getLocalTempDir()
     #Retrieve file path
     bam_path = return_input_paths(job, work_dir, ids, 'toil.bam')
     output_path = os.path.join(work_dir, 'toil.bam.bai')
-    debug_log.write(output_path + '\n')
     #Call: index the normal.bam
     parameters = ['index', 'toil.bam']
     docker_call(work_dir, parameters, 'quay.io/ucsc_cgl/samtools', [bam_path], [output_path])
     #Update FileStore and call child
     ids['toil.bam.bai'] = job.fileStore.writeGlobalFile(output_path)
-    debug_log.write('Promise: ' + ids['toil.bam.bai'] + '\n')
     job.addChildJobFn(haplotype_caller, ids, input_args)
 
 
 # TODO Works with calling SNPs, Indels is another story
 def haplotype_caller(job, ids, input_args):
     """ snps & indels together """
-    debug_log = open('dlog_haplotye', 'w')
     work_dir = job.fileStore.getLocalTempDir()
-    debug_log.write(work_dir + '\n')
     ref_fasta, ref_faix, ref_dict, bam, bai = return_input_paths(job, work_dir, ids, 'ref.fa', 'ref.fa.fai',
                                                                  'ref.dict', 'toil.bam', 'toil.bam.bai')
     haplotype_output = os.path.join(work_dir, 'unified.raw.BOTH.gatk.vcf')
-    debug_log.write(ref_fasta + '\n')
-    debug_log.write(ref_faix + '\n')
-    debug_log.write(bam + '\n')
-    debug_log.write(bai + '\n')
-    debug_log.write('OUTPUT: ' + haplotype_output + '\n')
     #Call GATK -- HaplotypeCaller
     command = ['-nct', input_args['cpu_count'],
                '-R', 'ref.fa',
@@ -305,8 +253,7 @@ def haplotype_caller(job, ids, input_args):
     docker_call(work_dir, command, 'quay.io/ucsc_cgl/gatk', [ref_fasta, bam, bai], [haplotype_output])
     #Update fileStore and spawn child job
     ids['unified.raw.BOTH.gatk.vcf'] = job.fileStore.writeGlobalFile(haplotype_output)
-    debug_log.close()
-#    job.addChildJobFn(vqsr_snp, ids, input_args)
+    job.addChildJobFn(vqsr_snp, ids, input_args)
     job.addChildJobFn(vqsr_indel, ids, input_args)
 
 
