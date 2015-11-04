@@ -4,25 +4,27 @@
 GATK Haplotype VARIANT Callling
 
     Tree Structure of GATK Pipeline (per sample)
-                         0 --> 1 --> 2 --> 3
-                                          / \  
-                                         4   5
-                                        /     \
-                                       6       7
+            0 --> 1 --> 2 --> 3 --> 4 --> 5
+                                         / \
+                                        6   7
+                                       /     \
+                                      8       9
 0 = Start node
 1 = Download references
-2 = Index Samples
-3 = HaplotypeCaller SNP & Indel
-4 = VariantRecalibrator SNPs
-5 = VariantRecalibrator Indels
-6 = ApplyRecalibration SNPs
-7 = ApplyRecalibration Indels
+2 = Index Reference
+3 = Make Index Dictionary
+4 = Index Samples
+5 = HaplotypeCaller SNP & Indel
+6 = VariantRecalibrator SNPs
+7 = VariantRecalibrator Indels
+8 = ApplyRecalibration SNPs
+9 = ApplyRecalibration Indels
 
 ===================================================================
 :Dependencies:
 curl            - apt-get install curl
 docker          - apt-get install docker (or 'docker.io' for linux)
-jobTree         - https://github.com/benedictpaten/jobTree
+toil            - pip install --pre toil
 """
 from __future__ import print_function
 import argparse
@@ -37,7 +39,7 @@ from toil.job import Job
 
 def build_parser():
     """
-    Contains arguments for the all of necessary input files
+    Create parser object containing necessary input files
     """
     parser = argparse.ArgumentParser()
     parser.add_argument('-r', '--reference', required=True, help="Reference Genome URL")
@@ -54,7 +56,7 @@ def build_parser():
 # Convenience functions used in the pipeline
 def mkdir_p(path):
     """
-    It is Easier to Ask for Forgiveness than Permission
+    Makes an ouput directory if it does not already exist.
     """
     try:
         os.makedirs(path)
@@ -64,19 +66,16 @@ def mkdir_p(path):
         else: raise
 
 
-def docker_path(file_path):
-    """
-    Returns file names to the perceived path inside of the tools' Docker containers
-    """
-    return os.path.join('/data', os.path.basename(file_path))
-
-
 def docker_call(work_dir, tool_parameters, tool, input_files=None, output_files=None):
     """
-    Takes parameters to run a docker container and checks input and output files
+    Runs docker call and checks that input and output files exist.
     """
     for input_file in input_files:
-        assert os.path.exists(input_file)
+        try:
+            path = os.path.join(work_dir, input_file)
+            assert os.path.exists(path)
+        except AssertionError:
+            assert os.path.exists(input_file)
     base_docker_call = 'docker run -v {work_dir}:/data'.format(work_dir=work_dir)
     try:
         subprocess.check_call(base_docker_call.split() + [tool] + tool_parameters)
@@ -85,16 +84,16 @@ def docker_call(work_dir, tool_parameters, tool, input_files=None, output_files=
     except OSError:
         raise RuntimeError('docker not found on system. Install on all nodes.')
     for output_file in output_files:
-        assert os.path.exists(output_file)
+        try:
+            path = os.path.join(work_dir, output_file)
+            assert os.path.exists(path)
+        except AssertionError:
+            assert os.path.exists(output_file)
 
 
 def download_from_url(job, url, fname):
     """
     Downloads a file from a URL and places it in the jobStore
-    Input1: Toil job instance
-    Input2: Input arguments
-    Input3: jobstore id dictionary
-    Input4: Name of key used to access url in input_args
     """
     work_dir = job.fileStore.getLocalTempDir()
     file_path = os.path.join(work_dir, fname)
@@ -114,7 +113,6 @@ def return_input_paths(job, work_dir, ids, *args):
     """
     Given one or more strings representing file_names, return the paths to those files.
     """
-    # for every file in *args, place in work_dir via the FileStore and then return the mounted docker path.
     paths = OrderedDict()
     for name in args:
         if not os.path.exists(os.path.join(work_dir, name)):
@@ -126,6 +124,24 @@ def return_input_paths(job, work_dir, ids, *args):
             return file_path
     return paths.values()
 
+
+def write_to_filestore(job, work_dir, ids, *args):
+    """
+    Given one or more file names in working directory, write
+    files to filestore and store the id in a dictionary
+    """
+    for name in args:
+        ids[name] = job.writeGlobalFile(os.path.join(work_dir, name))
+    return ids
+
+
+def read_from_filestore(job, work_dir, ids, *args):
+    """
+    Given one or more file_names, move file in working directory.
+    """
+    for name in args:
+        if not os.path.exists(os.path.join(work_dir, name)):
+            job.fileStore.readGlobalFile(ids[name], os.path.join(work_dir, name))
 
 def move_to_output_dir(work_dir, output_dir, uuid=None, filenames=None):
     """`
@@ -221,6 +237,9 @@ def start(job, shared_ids, input_args, sample):
     job.addFollowOnJobFn(index, ids, input_args)
 
 def index(job, ids, input_args):
+    '''
+    Index input bam files using samtools container.
+    '''
     work_dir = job.fileStore.getLocalTempDir()
     #Retrieve file path
     bam_path = return_input_paths(job, work_dir, ids, 'toil.bam')
@@ -235,11 +254,13 @@ def index(job, ids, input_args):
 
 # TODO Works with calling SNPs, Indels is another story
 def haplotype_caller(job, ids, input_args):
-    """ snps & indels together """
+    """
+        Use GATK HaplotypeCaller to identify SNPs and Indels
+    """
     work_dir = job.fileStore.getLocalTempDir()
-    ref_fasta, ref_faix, ref_dict, bam, bai = return_input_paths(job, work_dir, ids, 'ref.fa', 'ref.fa.fai',
-                                                                 'ref.dict', 'toil.bam', 'toil.bam.bai')
-    haplotype_output = os.path.join(work_dir, 'unified.raw.BOTH.gatk.vcf')
+    inputs = ['ref.fa', 'ref.fa.fai', 'ref.dict', 'toil.bam', 'toil.bam.bai']
+    move_to_work_dir(job, work_dir, ids, *inputs)
+    output = 'unified.raw.BOTH.gatk.vcf'
     #Call GATK -- HaplotypeCaller
     command = ['-nct', input_args['cpu_count'],
                '-R', 'ref.fa',
@@ -250,23 +271,22 @@ def haplotype_caller(job, ids, input_args):
                '-o', 'unified.raw.BOTH.gatk.vcf',
                '-stand_emit_conf', '10.0',
                '-stand_call_conf', '30.0']
-    docker_call(work_dir, command, 'quay.io/ucsc_cgl/gatk', [ref_fasta, bam, bai], [haplotype_output])
+    docker_call(work_dir, command, 'quay.io/ucsc_cgl/gatk', inputs, [output])
     #Update fileStore and spawn child job
-    ids['unified.raw.BOTH.gatk.vcf'] = job.fileStore.writeGlobalFile(haplotype_output)
+    ids['unified.raw.BOTH.gatk.vcf'] = job.fileStore.writeGlobalFile(os.path.join(work_dir, output))
     job.addChildJobFn(vqsr_snp, ids, input_args)
     job.addChildJobFn(vqsr_indel, ids, input_args)
 
-
+# TODO A lot of files are needed for this step. Maybe there is a more elegant way to reach them.
 def vqsr_snp(job, ids, input_args):
+    '''
+
+    '''
     work_dir = job.fileStore.getLocalTempDir()
-    ref_fasta, ref_fai, ref_dict = return_input_paths(job, work_dir, ids, 'ref.fa', 'ref.fa.fai', 'ref.dict')
-    raw_vcf, hapmap  = return_input_paths(job, work_dir, ids, 'unified.raw.BOTH.gatk.vcf', 'hapmap.vcf')
-    omni, dbsnp, phase = return_input_paths(job, work_dir, ids, 'omni.vcf', 'dbsnp.vcf', 'phase.vcf')
-    inputs = [ref_fasta, raw_vcf, hapmap, omni, dbsnp, phase]
-    recalFile = os.path.join(work_dir, 'HAPSNP.recalFile')
-    tranches = os.path.join(work_dir, 'HAPSNP.tranches')
-    rscriptFile = os.path.join(work_dir, 'HAPSNP.plots')
-    outputs = [recalFile, tranches, rscriptFile]
+    inputs = ['ref.fa','ref.fa.fai', 'ref.dict', 'unified.raw.BOTH.gatk.vcf',
+              'hapmap.vcf', 'omni.vcf', 'dbsnp.vcf', 'phase.vcf']
+    read_from_filestore(job, work_dir, ids, *inputs)
+    outputs = ['HAPSNP.recalFile', 'HAPSNP.tranches', 'HAPSNP.plots']
     command = ['-T', 'VariantRecalibrator',
                '-R', 'ref.fa',
                '-input', 'unified.raw.BOTH.gatk.vcf',
@@ -281,9 +301,7 @@ def vqsr_snp(job, ids, input_args):
                '-tranchesFile', 'HAPSNP.tranches',
                '-rscriptFile', 'HAPSNP.plots']
     docker_call(work_dir, command, 'quay.io/ucsc_cgl/gatk', inputs, outputs)
-    ids['HAPSNP.recal'] = job.fileStore.writeGlobalFile(recalFile)
-    ids['HAPSNP.tranches'] = job.fileStore.writeGlobalFile(tranches)
-    ids['HAPSNP.plots'] = job.fileStore.writeGlobalFile(rscriptFile)
+    ids = write_to_filestore(job, work_dir, ids, *outputs)
     job.addChildJobFn(apply_vqsr_snp, ids, input_args)
 
 
@@ -296,10 +314,9 @@ def apply_vqsr_snp(job, ids, input_args):
     uuid = input_args['uuid']
     output_name = '{}.HAPSNP.vqsr.SNP.vcf'.format(uuid)
     output_path = os.path.join(work_dir, output_name)
-    ref_fasta, ref_index, ref_dict = return_input_paths(job, work_dir, ids, 'ref.fa', 'ref.fa.fai', 'ref.dict')
-    raw_vcf, tranches, recal = return_input_paths(job, work_dir, ids, 'unified.raw.BOTH.gatk.vcf',
-                                                                       'HAPSNP.tranches', 'HAPSNP.recal')
-    inputs = [ref_fasta, raw_vcf, tranches, recal]
+    inputs = ['ref.fa', 'ref.fa.fai', 'ref.dict',
+              'unified.raw.BOTH.gatk.vcf', 'HAPSNP.tranches', 'HAPSNP.recal']
+    read_from_filestore(job, work_dir, ids, *inputs)
     command = ['-T', 'ApplyRecalibration',
                '-input', 'unified.raw.BOTH.gatk.vcf',
                '-o', output_name,
@@ -316,13 +333,9 @@ def apply_vqsr_snp(job, ids, input_args):
 #Indel Recalibration
 def vqsr_indel(job, ids, input_args):
     work_dir = job.fileStore.getLocalTempDir()
-    ref_fasta, ref_faidx, ref_dict = return_input_paths(job, work_dir, ids, 'ref.fa', 'ref.fa.fai', 'ref.dict')
-    raw_vcf, mills = return_input_paths(job, work_dir, ids, 'unified.raw.BOTH.gatk.vcf', 'mills.vcf')
-    inputs = [ref_fasta, raw_vcf, mills]
-    recalFile = os.path.join(work_dir, 'HAPINDEL.recalFile')
-    tranches = os.path.join(work_dir, 'HAPINDEL.tranches')
-    rscriptFile = os.path.join(work_dir, 'HAPINDEL.plots')
-    outputs = [recalFile, tranches, rscriptFile]
+    inputs = ['ref.fa', 'ref.fa.fai', 'ref.dict', 'unified.raw.BOTH.gatk.vcf', 'mills.vcf']
+    read_from_filestore(job, work_dir, ids, *inputs)
+    outputs = ['HAPINDEL.recalFile', 'HAPINDEL.tranches', 'HAPINDEL.plots']
     command = ['-T', 'VariantRecalibrator',
                '-R', 'ref.fa',
                '-input', 'unified.raw.BOTH.gatk.vcf',
@@ -336,9 +349,7 @@ def vqsr_indel(job, ids, input_args):
                '-tranchesFile', 'HAPINDEL.tranches',
                '-rscriptFile', 'HAPINDEL.plots']
     docker_call(work_dir, command, 'quay.io/ucsc_cgl/gatk', inputs, outputs)
-    ids['HAPINDEL.recal'] = job.fileStore.writeGlobalFile(recalFile)
-    ids['HAPINDEL.tranches'] = job.fileStore.writeGlobalFile(tranches)
-    ids['HAPINDEL.plots'] = job.fileStore.writeGlobalFile(rscriptFile)
+    ids = write_to_filestore(job, work_dir, ids, *outputs)
     job.addChildJobFn(apply_vqsr_indel, ids, input_args)
 
 #Apply Indel Recalibration
