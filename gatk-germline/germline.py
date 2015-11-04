@@ -278,7 +278,7 @@ def index(job, ids, input_args):
     job.addChildJobFn(haplotype_caller, ids, input_args)
 
 
-# TODO File can't see ref.fa.faix. Check to see if return input paths can rind it
+# TODO Works with calling SNPs, Indels is another story
 def haplotype_caller(job, ids, input_args):
     """ snps & indels together """
     debug_log = open('dlog_haplotye', 'w')
@@ -306,7 +306,7 @@ def haplotype_caller(job, ids, input_args):
     #Update fileStore and spawn child job
     ids['unified.raw.BOTH.gatk.vcf'] = job.fileStore.writeGlobalFile(haplotype_output)
     debug_log.close()
-    job.addChildJobFn(vqsr_snp, ids, input_args)
+#    job.addChildJobFn(vqsr_snp, ids, input_args)
     job.addChildJobFn(vqsr_indel, ids, input_args)
 
 
@@ -357,15 +357,15 @@ def apply_vqsr_snp(job, ids, input_args):
                '-input', 'unified.raw.BOTH.gatk.vcf',
                '-o', output_name,
                '-R', 'ref.fa',
-               '-nt', input_args['cpu_count'],
-               '-ts_filter_level 99.0',
+               '-nt', '1',
+               '-ts_filter_level', '99.0',
                '-tranchesFile', 'HAPSNP.tranches',
                '-recalFile', 'HAPSNP.recal',
                '-mode', 'SNP']
     docker_call(work_dir, command, 'quay.io/ucsc_cgl/gatk', inputs, [output_path])
     move_to_output_dir(work_dir, output_dir, uuid=None, filenames=[output_name])
 
-
+# TODO Figure out if it is okay to use maxGaussian flag
 #Indel Recalibration
 def vqsr_indel(job, ids, input_args):
     work_dir = job.fileStore.getLocalTempDir()
@@ -384,6 +384,7 @@ def vqsr_indel(job, ids, input_args):
                '-an', 'DP', '-an', 'FS', '-an', 'ReadPosRankSum',
                '-mode', 'INDEL',
                '-minNumBad', '1000',
+               '--maxGaussians', '4',
                '-recalFile', 'HAPINDEL.recalFile',
                '-tranchesFile', 'HAPINDEL.tranches',
                '-rscriptFile', 'HAPINDEL.plots']
@@ -411,7 +412,7 @@ def apply_vqsr_indel(job, ids, input_args):
                '-input', 'unified.raw.BOTH.gatk.vcf',
                '-o', output_name,
                '-R', 'ref.fa',
-               '-nt', input_args['cpu_count'],
+               '-nt', '1',
                '-ts_filter_level', '99.0',
                '-tranchesFile', 'HAPINDEL.tranches',
                '-recalFile', 'HAPINDEL.recal',
