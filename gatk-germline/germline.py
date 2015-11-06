@@ -337,7 +337,6 @@ def vqsr_indel(job, ids, input_args):
                '-an', 'DP', '-an', 'FS', '-an', 'ReadPosRankSum',
                '-mode', 'INDEL',
                '-minNumBad', '1000',
-#               '--maxGaussians', '4',
                '-recalFile', 'HAPINDEL.recal',
                '-tranchesFile', 'HAPINDEL.tranches',
                '-rscriptFile', 'HAPINDEL.plots']
