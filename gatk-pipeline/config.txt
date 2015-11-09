@@ -1,1 +1,0 @@
-test_pair9,https://s3-us-west-2.amazonaws.com/bd2k-test-data/pair9.normal.bam,https://s3-us-west-2.amazonaws.com/bd2k-test-data/pair9.tumor.bam
