@@ -209,7 +209,7 @@ def docker_call(work_dir, tool_parameters, tool, java_opts=None, outfile=None, s
     if sudo:
         base_docker_call = ['sudo'] + base_docker_call
     if java_opts:
-        base_docker_call = base_docker_call + ['JAVA_OPTS={}'.format(java_opts)]
+        base_docker_call = base_docker_call + ['-e', 'JAVA_OPTS={}'.format(java_opts)]
     try:
         if outfile:
             subprocess.check_call(base_docker_call + [tool] + tool_parameters, stdout=outfile)
