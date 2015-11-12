@@ -1,0 +1,1 @@
+DTB_005_BL_T,https://s3-us-west-2.amazonaws.com/cgl-driver-projects-encrypted/wcdt/exome_bams/DTB-005-N.bam,https://s3-us-west-2.amazonaws.com/cgl-driver-projects-encrypted/wcdt/exome_bams/DTB-005-BL-T.bam
