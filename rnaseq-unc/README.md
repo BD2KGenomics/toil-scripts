@@ -72,11 +72,11 @@ ${HOME}/toil_mnt/jstore \
 --retryCount 2 \
 --input /path/to/sample.tar \
 --output_dir ${HOME}/rnaseq_output \
---workdir ${HOME}/toil_mnt \
+--workDir ${HOME}/toil_mnt \
 --sudo 
 ```
 
-The first argument (location of the jobStore) and the directory set in `--workdir`, need *plenty* of space to store 
+The first argument (location of the jobStore) and the directory set in `--workDir`, need *plenty* of space to store 
 intermediate files during pipeline execution.  Change those parameters to point to the appropriate scratch space or
 wherever there exists sufficient storage. The servers I have tested on have 700GB of disk space, which is plenty,
 but ultimately this is contingent upon sample size.
