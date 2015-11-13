@@ -49,7 +49,7 @@ will likely want to modify a couple lines as it assumes everything will be stage
 
 | Parameter                 | Function                                                                                                                              |
 |---------------------------|---------------------------------------------------------------------------------------------------------------------------------------|
-| 1st argument (unlabelled) | This now points to an AWS jobStore                                                                                                    |
+| 1st argument (unlabelled) | Path to where the jobStore will exist. The jobStore hosts intermediate files during runtime.                                          |
 | `--config` OR `--input`   | Path to the config csv file OR the sample.tar.  UUID for the sample is based off the filename before the .tar extension               |
 | `--retryCount`            | OPTIONAL: Number of times a failed job will retried. Useful for non-systemic failures (HTTP requests, etc)                            |
 | `--ssec`                  | OPTIONAL: Path to a master key if input files are encrypted in S3                                                                     |
