@@ -1,18 +1,20 @@
 #!/usr/bin/env python2.7
 
 """ 
-GATK Haplotype VARIANT Callling
+GATK HaplotypeCaller Genotyping Mode
 
-    Tree Structure of GATK Pipeline (per sample)
-            0 --> 1 --> 2 --> 3 --> 4 --> 5
-                                         / \
-                                        6   7
-                                       /     \
-                                      8       9
-0 = Start node
-1 = Download references
+            Tree Structure of GATK Pipeline
+            0 --> 1 --> 2 --> 3 --> 4
+                                    |
+                                    5
+                                   / \
+                                  6   7
+                                 /     \
+                                8       9
+0 = Start Node
+1 = Download Reference
 2 = Index Reference
-3 = Make Index Dictionary
+3 = Reference Dictionary
 4 = Index Samples
 5 = HaplotypeCaller SNP & Indel
 6 = VariantRecalibrator SNPs
@@ -56,19 +58,30 @@ def build_parser():
 # Convenience functions used in the pipeline
 def mkdir_p(path):
     """
-    Makes an ouput directory if it does not already exist.
+    Makes an output directory if it does not already exist.
+
+    :param path: path to output directory
     """
     try:
         os.makedirs(path)
     except OSError as exc:  # Python >2.5
         if exc.errno == errno.EEXIST and os.path.isdir(path):
             pass
-        else: raise
+        else:
+            raise
 
 
 def docker_call(work_dir, tool_parameters, tool, input_files=None, output_files=None):
     """
     Runs docker call and checks that input and output files exist.
+
+    :param work_dir: working directory
+    :param tool_parameters: parameters for docker container tool, list
+    :param tool: docker container tool, str
+    :param input_files: list of input files
+    :param output_files: list of output files
+
+    :returns: None
     """
     for input_file in input_files:
         try:
@@ -91,12 +104,18 @@ def docker_call(work_dir, tool_parameters, tool, input_files=None, output_files=
             assert os.path.exists(output_file)
 
 
-def download_from_url(job, url, fname):
+def download_from_url(job, url, filename):
     """
     Downloads a file from a URL and places it in the jobStore
+
+    :param job: Job instance
+    :param url: data url, str
+    :param filename: name given to downloaded data, str
+
+    :return: fileStore promise
     """
     work_dir = job.fileStore.getLocalTempDir()
-    file_path = os.path.join(work_dir, fname)
+    file_path = os.path.join(work_dir, filename)
     if not os.path.exists(file_path):
         try:
             subprocess.check_call(['curl', '-fs', '--retry', '5', '--create-dir', url, '-o', file_path])
@@ -111,15 +130,22 @@ def download_from_url(job, url, fname):
 
 def return_input_paths(job, work_dir, ids, *args):
     """
-    Given one or more strings representing file_names, return the paths to those files.
+    Given one or more filenames, reads the file from the fileStore and
+    copies it (or makes a hard link) into the working directory.
+
+    :param job: Job instance
+    :param work_dir: working directory, str
+    :param ids: dictionary of shared file ids
+    :param args: remaining arguments are read from filestore
+
     """
     paths = OrderedDict()
-    for name in args:
-        if not os.path.exists(os.path.join(work_dir, name)):
-            file_path = job.fileStore.readGlobalFile(ids[name], os.path.join(work_dir, name))
+    for filename in args:
+        if not os.path.exists(os.path.join(work_dir, filename)):
+            file_path = job.fileStore.readGlobalFile(ids[filename], os.path.join(work_dir, filename))
         else:
-            file_path = os.path.join(work_dir, name)
-        paths[name] = file_path
+            file_path = os.path.join(work_dir, filename)
+        paths[filename] = file_path
         if len(args) == 1:
             return file_path
     return paths.values()
@@ -128,7 +154,7 @@ def return_input_paths(job, work_dir, ids, *args):
 def write_to_filestore(job, work_dir, ids, *args):
     """
     Given one or more file names in working directory, write
-    files to filestore and store the id in a dictionary
+    files to filestore and stores the filestore promise in a dictionary
     """
     for name in args:
         ids[name] = job.fileStore.writeGlobalFile(os.path.join(work_dir, name))
@@ -236,9 +262,9 @@ def start(job, shared_ids, input_args, sample):
     job.addFollowOnJobFn(index, ids, input_args)
 
 def index(job, ids, input_args):
-    '''
-    Index input bam files using samtools container.
-    '''
+    """
+    Index sample bam files using samtools.
+    """
     work_dir = job.fileStore.getLocalTempDir()
     #Retrieve file path
     bam_path = return_input_paths(job, work_dir, ids, 'toil.bam')
@@ -277,8 +303,11 @@ def haplotype_caller(job, ids, input_args):
 
 
 def vqsr_snp(job, ids, input_args):
+    """
+    Variant quality score recalibration for SNP variants
+    """
     work_dir = job.fileStore.getLocalTempDir()
-    inputs = ['ref.fa','ref.fa.fai', 'ref.dict', 'unified.raw.BOTH.gatk.vcf',
+    inputs = ['ref.fa', 'ref.fa.fai', 'ref.dict', 'unified.raw.BOTH.gatk.vcf',
               'hapmap.vcf', 'omni.vcf', 'dbsnp.vcf', 'phase.vcf']
     read_from_filestore(job, work_dir, ids, *inputs)
     outputs = ['HAPSNP.recal', 'HAPSNP.tranches', 'HAPSNP.plots']
@@ -339,7 +368,8 @@ def vqsr_indel(job, ids, input_args):
                '-minNumBad', '1000',
                '-recalFile', 'HAPINDEL.recal',
                '-tranchesFile', 'HAPINDEL.tranches',
-               '-rscriptFile', 'HAPINDEL.plots']
+               '-rscriptFile', 'HAPINDEL.plots',
+               '--maxGaussians', '4']
     docker_call(work_dir, command, 'quay.io/ucsc_cgl/gatk', inputs, outputs)
     ids = write_to_filestore(job, work_dir, ids, *outputs)
     job.addChildJobFn(apply_vqsr_indel, ids, input_args)
@@ -351,7 +381,7 @@ def apply_vqsr_indel(job, ids, input_args):
     mkdir_p(output_dir)
     uuid = input_args['uuid']
     inputs = ['ref.fa', 'ref.fa.fai', 'ref.dict', 'unified.raw.BOTH.gatk.vcf',
-              'HAPINDEL.tranches', 'HAPINDEL.recal' ]
+              'HAPINDEL.recal', 'HAPINDEL.tranches', 'HAPINDEL.plots']
     read_from_filestore(job, work_dir, ids, *inputs)
     output = '{}.HAPSNP.vqsr.INDEL.vcf'.format(uuid)
     command = ['-T', 'ApplyRecalibration',
@@ -367,9 +397,9 @@ def apply_vqsr_indel(job, ids, input_args):
     move_to_output_dir(work_dir, output_dir, uuid=None, filenames=[output])
 
 if __name__ == '__main__':
-    parser = build_parser()
-    Job.Runner.addToilOptions(parser)
-    args = parser.parse_args()
+    args_parser = build_parser()
+    Job.Runner.addToilOptions(args_parser)
+    args = args_parser.parse_args()
 
     input_args = {'ref.fa': args.reference,
                   'config': args.config,
