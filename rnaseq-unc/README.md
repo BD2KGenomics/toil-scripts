@@ -46,17 +46,18 @@ From the BD2KGenomics toil-scripts Github repository, download the following fil
     
 The bash script `launch_unc.sh` contains all of the parameters required to run this pipeline, although you 
 will likely want to modify a couple lines as it assumes everything will be staged from your home directory.
-| Parameter                 | Function                                                                                                                               |
-|---------------------------|----------------------------------------------------------------------------------------------------------------------------------------|
-| 1st argument (unlabelled) | Determines the location of the jobStore. A directory that hosts intermediate files that allows for resumability.                       |
-| `--config` OR `--input`       | Path to the config csv file OR the sample.tar.  UUID for the sample is based off the filename before the .tar extension.               |
-| `--retryCount`              | OPTIONAL: Number of times a failed job will retried. Useful for non-systemic failures (HTTP requests, etc).                            |
-| `--ssec`                    | OPTIONAL: Path to a master key if input files are encrypted in S3                                                                      |
-| `--output_dir`              | OPTIONAL: Directory where final output of pipeline will be placed                                                                      |
-| `--s3_dir`                  | OPTIONAL: S3 "Directory" (bucket + directories)                                                                                        |
-| `--workDir`                 | OPTIONAL: Location where tmp files will be placed during pipeline run.  If not used, defaults to TMPDIR environment variable.          |
-| `--sudo`                    | OPTIONAL: Prepends "sudo" to all docker commands. Necessary if user is not a member of a docker group or does not have root privilege. |
-| `--restart`                | OPTIONAL: Restarts pipeline after failure, requires presence of an existing jobStore.                                                  |                                               |
+
+| Parameter                 | Function                                                                                                                              |
+|---------------------------|---------------------------------------------------------------------------------------------------------------------------------------|
+| 1st argument (unlabelled) | This now points to an AWS jobStore                                                                                                    |
+| `--config` OR `--input`   | Path to the config csv file OR the sample.tar.  UUID for the sample is based off the filename before the .tar extension               |
+| `--retryCount`            | OPTIONAL: Number of times a failed job will retried. Useful for non-systemic failures (HTTP requests, etc)                            |
+| `--ssec`                  | OPTIONAL: Path to a master key if input files are encrypted in S3                                                                     |
+| `--output_dir`            | OPTIONAL: Directory where final output of pipeline will be placed                                                                     |
+| `--s3_dir`                | OPTIONAL: S3 "Directory" (bucket + directories)                                                                                       |
+| `--workDir`               | OPTIONAL: Location where tmp files will be placed during pipeline run.,If not used, defaults to TMPDIR environment variable.          |
+| `--sudo`                  | OPTIONAL: Prepends "sudo" to all docker commands. Necessary if user is not a member of a docker group or does not have root privilege |
+| `--restart`               | OPTIONAL: Restarts pipeline after failure, requires presence of an existing jobStore.                                                 |
 
 For users *outside* of the BD2K group at UC Santa Cruz, here is an example of a modified launch script that assumes the 
 RNA-seq sample is local, the user has sudo privilege, and wants the output of the rna-seq pipeline locally.
