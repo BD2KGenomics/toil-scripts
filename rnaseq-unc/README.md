@@ -33,13 +33,13 @@ privileges you will need to build these tools from source, or bug a sysadmin (th
     5. Unzip        apt-get install unzip
 
 #### Python Dependencies
-    1. Toil         - pip install toil==3.1.0b1.dev56
-    2. Boto         - pip install boto (optional, only needed if uploading results to S3)
+    1. Toil         pip install toil==3.1.0b1.dev56
+    2. Boto         pip install boto (optional, only needed if uploading results to S3)
 
 
 ## Getting Started
 #### Running a single sample locally
-From the BD2KGenomics toil-scripts Github repository, download the following files
+From the BD2KGenomics toil-scripts Github repository, download the following files to the same directory.
 
     1. toil-scripts/rnaseq-unc/rnaseq_unc_pipeline.py
     2. toil-scripts/rnaseq-unc/launch_unc.sh
@@ -92,7 +92,7 @@ currently exist for running batches of local samples, as we are making an effort
 process to cloud storage.
 
 ## Advanced: Running the Pipeline on a Distributed Cloud Cluster (using Mesos)
-From the BD2KGenomics toil-scripts Github repository, download the following files
+From the BD2KGenomics toil-scripts Github repository, download the following files which will run on the head node.
 
     1. toil-scripts/rnaseq-unc/rnaseq_unc_pipeline.py
     2. toil-scripts/rnaseq-unc/launch_unc_mesos.sh
