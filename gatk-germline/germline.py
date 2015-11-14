@@ -56,9 +56,9 @@ def build_parser():
 
 
 # Convenience functions used in the pipeline
-def mkdir_p(path):
+def make_directory(path):
     """
-    Makes an output directory if it does not already exist.
+    Makes a directory if it does not already exist.
 
     :param path: path to output directory
     """
@@ -80,8 +80,6 @@ def docker_call(work_dir, tool_parameters, tool, input_files=None, output_files=
     :param tool: docker container tool, str
     :param input_files: list of input files
     :param output_files: list of output files
-
-    :returns: None
     """
     for input_file in input_files:
         try:
@@ -154,12 +152,12 @@ def return_input_paths(job, work_dir, ids, *filenames):
 
 def write_to_filestore(job, work_dir, ids, *filenames):
     """
-    Given one or more file names in working directory, write
+    Given one or more file names in working directory, writes
     files to filestore and stores the filestore promise in a dictionary
 
     :param job: Job instance
     :param work_dir: working directory
-    :param ids: shared files promises, dict
+    :param ids: shared file promises, dict
     :param filenames: remaining arguments are keys for ids
 
     :returns: shared ids dictionary
@@ -171,7 +169,7 @@ def write_to_filestore(job, work_dir, ids, *filenames):
 
 def read_from_filestore(job, work_dir, ids, *filenames):
     """
-    Given one or more file_names, move file in working directory.
+    Reads file from fileStore and writes it to working directory.
 
     :param job: Job instance
     :param work_dir: working directory
@@ -185,7 +183,7 @@ def read_from_filestore(job, work_dir, ids, *filenames):
 
 def move_to_output_dir(work_dir, output_dir, *filenames):
     """`
-    A list of files to move from the working directory to the output directory.
+    Moves files from the working directory to the output directory.
 
     :param work_dir: the working directory
     :param output_dir: the output directory
@@ -239,7 +237,8 @@ def create_reference_index(job, shared_ids, input_args):
 
 def create_reference_dict(job, shared_ids, input_args):
     """
-    Uses Picardtools to create sequence dictionary for reference genome
+    Uses Picardtools to create sequence dictionary for reference genome.
+    Calls next step in pipeline - spawn batch jobs
 
     :param job: Job instance
     :param shared_ids: dictionary of shared file promises
@@ -279,7 +278,8 @@ def spawn_batch_jobs(job, shared_ids, input_args):
 
 def start(job, shared_ids, input_args, sample):
     """
-    Configures parameters for sample and starts GATK pipeline.
+    Configures parameters for sample and calls next step in
+    pipeline - index sample bam
 
     :param job: Job instance
     :param shared_ids: dictionary of shared file promises
@@ -322,7 +322,8 @@ def index(job, shared_ids, input_args):
 
 def haplotype_caller(job, shared_ids, input_args):
     """
-    Uses GATK HaplotypeCaller to identify SNPs and Indels
+    Uses GATK HaplotypeCaller to identify SNPs and Indels.
+    Calls variant quality score recalibration functions.
 
     :param job: Job instance
     :param shared_ids: dictionary of shared file promises
@@ -351,7 +352,8 @@ def haplotype_caller(job, shared_ids, input_args):
 
 def vqsr_snp(job, shared_ids, input_args):
     """
-    Variant quality score recalibration for SNP variants, calls SNP recalibration
+    Variant quality score recalibration for SNP variants.
+    Calls next step in pipeline - apply SNP recalibration
 
     :param job: Job instance
     :param shared_ids: dictionary of shared file promises
@@ -391,11 +393,11 @@ def apply_vqsr_snp(job, shared_ids, input_args):
     """
     work_dir = job.fileStore.getLocalTempDir()
     output_dir = input_args['output_dir']
-    mkdir_p(output_dir)
+    make_directory(output_dir)
     uuid = input_args['uuid']
-    inputs = ['ref.fa', 'ref.fa.fai', 'ref.dict', 'unified.raw.BOTH.gatk.vcf',
-              'HAPSNP.tranches', 'HAPSNP.recal']
-    read_from_filestore(job, work_dir, shared_ids, *inputs)
+    input_files = ['ref.fa', 'ref.fa.fai', 'ref.dict', 'unified.raw.BOTH.gatk.vcf',
+                   'HAPSNP.tranches', 'HAPSNP.recal']
+    read_from_filestore(job, work_dir, shared_ids, *input_files)
     output = '{}.HAPSNP.vqsr.SNP.vcf'.format(uuid)
     command = ['-T', 'ApplyRecalibration',
                '-input', 'unified.raw.BOTH.gatk.vcf',
@@ -410,11 +412,11 @@ def apply_vqsr_snp(job, shared_ids, input_args):
     move_to_output_dir(work_dir, output_dir, output)
 
 
-# TODO Figure out if it is okay to use maxGaussian flag
-#Indel Recalibration
+# Indel Recalibration
 def vqsr_indel(job, shared_ids, input_args):
     """
-    Variant quality score recalibration for Indel variants, calls Indel recalibration
+    Variant quality score recalibration for Indel variants.
+    Calls next step in pipeline - apply indel recalibration
 
     :param job: Job instance
     :param shared_ids: dictionary of shared file promises
@@ -443,7 +445,7 @@ def vqsr_indel(job, shared_ids, input_args):
 
 def apply_vqsr_indel(job, shared_ids, input_args):
     """
-    Apply variant quality score recalibration for Indel variants.
+    Apply variant quality score recalibration for indel variants.
     Writes vcf file to output directory
 
     :param job: Job instance
@@ -452,11 +454,11 @@ def apply_vqsr_indel(job, shared_ids, input_args):
     """
     work_dir = job.fileStore.getLocalTempDir()
     output_dir = input_args['output_dir']
-    mkdir_p(output_dir)
+    make_directory(output_dir)
     uuid = input_args['uuid']
-    inputs = ['ref.fa', 'ref.fa.fai', 'ref.dict', 'unified.raw.BOTH.gatk.vcf',
-              'HAPINDEL.recal', 'HAPINDEL.tranches', 'HAPINDEL.plots']
-    read_from_filestore(job, work_dir, shared_ids, *inputs)
+    input_files = ['ref.fa', 'ref.fa.fai', 'ref.dict', 'unified.raw.BOTH.gatk.vcf',
+                   'HAPINDEL.recal', 'HAPINDEL.tranches', 'HAPINDEL.plots']
+    read_from_filestore(job, work_dir, shared_ids, *input_files)
     output = '{}.HAPSNP.vqsr.INDEL.vcf'.format(uuid)
     command = ['-T', 'ApplyRecalibration',
                '-input', 'unified.raw.BOTH.gatk.vcf',
@@ -485,6 +487,6 @@ if __name__ == '__main__':
               'output_dir': args.output_dir,
               'uuid': None,
               'cpu_count': str(multiprocessing.cpu_count()),
-              'ssec':None}
+              'ssec': None}
     
     Job.Runner.startToil(Job.wrapJobFn(batch_start, inputs), args)
