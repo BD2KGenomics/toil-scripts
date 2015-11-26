@@ -1,3 +1,4 @@
+#!/usr/bin/env python2.7
 """
 UNC Best Practice RNA-Seq Pipeline
 Author: John Vivian
@@ -94,9 +95,10 @@ def build_parser():
     parser.add_argument('-o', '--output_dir', default=None, help='full path where final results will be output')
     parser.add_argument('-3', '--s3_dir', default=None, help='S3 Directory, starting with bucket name. e.g.: '
                                                              'cgl-driver-projects/ckcc/rna-seq-samples/')
-    parser.add_argument('-d', '--sudo', dest='sudo', action='store_true', help='Docker usually needs sudo to execute '
-                                                                               'locally, but not''when running Mesos '
-                                                                               'or when a member of a Docker group.')
+    parser.add_argument('-d', '--sudo', dest='sudo', action='store_true',
+                        help='Docker usually needs sudo to execute locally, but not when running Mesos or when '
+                             'the user is a member of a Docker group.')
+    parser.set_defaults(sudo=False)
     return parser
 
 
@@ -300,7 +302,7 @@ def download_shared_files(job, input_args):
         sample_path = input_args['input']
         uuid = os.path.splitext(os.path.basename(sample_path))[0]
         sample = (uuid, sample_path)
-        job.addFollowOnJobFn(start_node, shared_ids, input_args, sample)
+        job.addFollowOnJobFn(download_sample, shared_ids, input_args, sample)
 
 
 def parse_config_file(job, shared_ids, input_args):
@@ -319,10 +321,10 @@ def parse_config_file(job, shared_ids, input_args):
                 assert len(sample) == 2, 'Error: Config file is inappropriately formatted. Read documentation.'
                 samples.append(sample)
     for sample in samples:
-        job.addChildJobFn(start_node, shared_ids, input_args, sample)
+        job.addChildJobFn(download_sample, shared_ids, input_args, sample)
 
 
-def start_node(job, ids, input_args, sample):
+def download_sample(job, ids, input_args, sample):
     """
     Defines variables unique to a sample that are used in the rest of the pipelines
 
@@ -356,14 +358,14 @@ def static_dag_launchpoint(job, job_vars):
 
     job_vars: tuple     Tuple of dictionaries: input_args and ids
     """
-    a = job.wrapJobFn(unzip, job_vars, disk='70 G').encapsulate()
+    a = job.wrapJobFn(merge_fastqs, job_vars, disk='70 G').encapsulate()
     b = job.wrapJobFn(consolidate_output, job_vars, a.rv())
-    # Take advantage of "encapsulate" to simplify wire pipeline
+    # Take advantage of "encapsulate" to simplify pipeline wiring
     job.addChild(a)
     a.addChild(b)
 
 
-def unzip(job, job_vars):
+def merge_fastqs(job, job_vars):
     """
     Unzips input sample and concats the Read1 and Read2 groups together.
 
@@ -394,7 +396,7 @@ def unzip(job, job_vars):
     ids['R2.fastq'] = job.fileStore.writeGlobalFile(os.path.join(work_dir, 'R2.fastq'))
     job.fileStore.deleteGlobalFile(ids['sample.tar'])
     # Spawn child job
-    return job.addChildJobFn(mapsplice, job_vars, cores=cores, memory='30 G', disk='130 G').rv()
+    return job.addChildJobFn(mapsplice, job_vars, cores=cores, disk='130 G').rv()
 
 
 def mapsplice(job, job_vars):
@@ -813,7 +815,7 @@ def main():
     parser = build_parser()
     Job.Runner.addToilOptions(parser)
     args = parser.parse_args()
-    # Store input_URLs for downloading
+    # Store inputs from argparse
     inputs = {'config': args.config,
               'input': args.input,
               'unc.bed': args.unc,
