@@ -24,13 +24,13 @@ The bash script `launch_germ.sh` contains all of the default parameters required
 | Parameter                 | Function                                                                                                                              |
 |---------------------------|---------------------------------------------------------------------------------------------------------------------------------------|
 | 1st argument (unlabelled) | Path to where the jobStore will exist. The jobStore hosts intermediate files during runtime.                                          |
-| `--config` OR `--input`   | Path to the config csv file OR the sample.tar.  UUID for the sample is based off the filename before the .tar extension               |
-| `--reference'  	    | Reference genome in FASTA format.                                                                                                     |
-| `--phase'		    | 1000G_phase1.indels.b37.vcf                                                                                                           |
-| `--mills`		    | Mills_and_1000G_gold_standard.indels.b37.sites.vcf										    |
-| `--dbsnp`		    | dbsnp_138.b37.vcf															    |
-| `--hapmap`	            | hapmap_3.3.b37.vcf														    |	
-| `--omni`		    | 1000G_omni2.5.b37.vcf														    |					
+| `--config`		    | Path to the config csv file. Each line of config file has UUID, URL for sample bam						    |
+| `--reference'  	    | Reference genome in FASTA format                                                                                                     |
+| `--phase'		    | URL 1000G_phase1.indels.b37.vcf                                                                                                           |
+| `--mills`		    | URL Mills_and_1000G_gold_standard.indels.b37.sites.vcf										    |
+| `--dbsnp`		    | URL dbsnp_138.b37.vcf															    |
+| `--hapmap`	            | URL hapmap_3.3.b37.vcf														    |	
+| `--omni`		    | URL 1000G_omni2.5.b37.vcf														    |					
 | `--retryCount`            | OPTIONAL: Number of times a failed job will retried. Useful for non-systemic failures (HTTP requests, etc)                            |
 | `--output_dir`            | OPTIONAL: Directory where final output of pipeline will be placed                                                                     |
 | `--workDir`               | OPTIONAL: Location where tmp files will be placed during pipeline run. If not used, defaults to TMPDIR environment variable.          |
