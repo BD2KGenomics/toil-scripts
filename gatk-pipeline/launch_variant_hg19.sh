@@ -18,7 +18,7 @@ python gatk_pipeline.py \
 ${HOME}/toil_mnt/jstore \
 --retryCount 3 \
 --config "exome_variant_config.csv" \
---reference "https://s3-us-west-2.amazonaws.com/cgl-variant-inputs/hg19.fa" \
+--reference "https://s3-us-west-2.amazonaws.com/cgl-alignment-inputs/genome.fa" \
 --phase "https://s3-us-west-2.amazonaws.com/cgl-variant-inputs/1000G_phase1.indels.hg19.sites.vcf" \
 --mills "https://s3-us-west-2.amazonaws.com/cgl-variant-inputs/Mills_and_1000G_gold_standard.indels.hg19.sites.vcf" \
 --dbsnp "https://s3-us-west-2.amazonaws.com/cgl-variant-inputs/dbsnp_138.hg19.vcf" \
