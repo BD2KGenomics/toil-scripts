@@ -23,10 +23,10 @@ The bash script `launch_germ.sh` contains all of the default parameters required
 
 | Parameter                 | Function                                                                                                                              |
 |---------------------------|---------------------------------------------------------------------------------------------------------------------------------------|
-| 1st argument (unlabelled) | Path to where the jobStore will exist. The jobStore hosts intermediate files during runtime.                                          |
-| `--config`		    | Path to the config csv file. Each line of config file has UUID, URL for sample bam						    |
-| `--reference'  	    | Reference genome in FASTA format                                                                                                     |
-| `--phase'		    | URL 1000G_phase1.indels.b37.vcf                                                                                                           |
+| Positional parameter  | Path to where the jobStore will exist. The jobStore hosts intermediate files during runtime.                                          |
+| `--config`		    | Path to the config csv file. Each line of config file has an identifier, URL for each sample						    |
+| `--reference`  	    | Reference genome in FASTA format                                                                                                     |
+| `--phase`		    | URL 1000G_phase1.indels.b37.vcf                                                                                                           |
 | `--mills`		    | URL Mills_and_1000G_gold_standard.indels.b37.sites.vcf										    |
 | `--dbsnp`		    | URL dbsnp_138.b37.vcf															    |
 | `--hapmap`	            | URL hapmap_3.3.b37.vcf														    |	
