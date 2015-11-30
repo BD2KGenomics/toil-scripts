@@ -72,30 +72,30 @@ from toil.job import Job
 def build_parser():
     parser = argparse.ArgumentParser(description=main.__doc__, add_help=True)
     group = parser.add_mutually_exclusive_group(required=True)
-    group.add_argument('-c', '--config', default=None, help='Path to config. One sample per line, with the format: '
+    group.add_argument('--config', default=None, help='Path to config. One sample per line, with the format: '
                                                             'uuid,url_to_sample.tar')
-    group.add_argument('-i', '--input', default=None, help='Accepts a local sample: /path/to/sample.tar. Take note! The'
+    group.add_argument('--input', default=None, help='Accepts a local sample: /path/to/sample.tar. Take note! The'
                                                            'UUID for this sample is derived from the name. So samples'
                                                            'should be in the form of uuid.tar.')
-    parser.add_argument('-u', '--unc', help='URL to unc_hg19.bed',
+    parser.add_argument('--unc', help='URL to unc_hg19.bed',
                         default="https://s3-us-west-2.amazonaws.com/cgl-rna-seq-inputs/unc_hg19.bed")
-    parser.add_argument('-f', '--fasta', help='URL to hg19_M_rCRS_ref.transcripts.fa',
+    parser.add_argument('--fasta', help='URL to hg19_M_rCRS_ref.transcripts.fa',
                         default="https://s3-us-west-2.amazonaws.com/cgl-rna-seq-inputs/hg19_M_rCRS_ref.transcripts.fa")
-    parser.add_argument('-x', '--composite_exons', help='URL to composite_exons.bed',
+    parser.add_argument('--composite_exons', help='URL to composite_exons.bed',
                         default="https://s3-us-west-2.amazonaws.com/cgl-rna-seq-inputs/composite_exons.bed")
-    parser.add_argument('-n', '--normalize', help='URL to normalizeBedToolsExonQuant.pl',
+    parser.add_argument('--normalize', help='URL to normalizeBedToolsExonQuant.pl',
                         default="https://s3-us-west-2.amazonaws.com/cgl-rna-seq-inputs/normalizeBedToolsExonQuant.pl")
-    parser.add_argument('-r', '--rsem_ref', help='RSEM_REF URL',
+    parser.add_argument('--rsem_ref', help='RSEM_REF URL',
                         default="https://s3-us-west-2.amazonaws.com/cgl-rna-seq-inputs/rsem_ref.zip")
-    parser.add_argument('-chr', '--chromosomes', help='Chromosomes Directory',
+    parser.add_argument('--chromosomes', help='Chromosomes Directory',
                         default="https://s3-us-west-2.amazonaws.com/cgl-rna-seq-inputs/chromosomes.zip")
-    parser.add_argument('-e', '--ebwt', help='EBWT Directory',
+    parser.add_argument('--ebwt', help='EBWT Directory',
                         default="https://s3-us-west-2.amazonaws.com/cgl-rna-seq-inputs/ebwt.zip")
-    parser.add_argument('-s', '--ssec', help='Path to Key File for SSE-C Encryption')
-    parser.add_argument('-o', '--output_dir', default=None, help='full path where final results will be output')
-    parser.add_argument('-3', '--s3_dir', default=None, help='S3 Directory, starting with bucket name. e.g.: '
+    parser.add_argument('--ssec', help='Path to Key File for SSE-C Encryption')
+    parser.add_argument('--output_dir', default=None, help='full path where final results will be output')
+    parser.add_argument('--s3_dir', default=None, help='S3 Directory, starting with bucket name. e.g.: '
                                                              'cgl-driver-projects/ckcc/rna-seq-samples/')
-    parser.add_argument('-d', '--sudo', dest='sudo', action='store_true',
+    parser.add_argument('--sudo', dest='sudo', action='store_true',
                         help='Docker usually needs sudo to execute locally, but not when running Mesos or when '
                              'the user is a member of a Docker group.')
     parser.set_defaults(sudo=False)
