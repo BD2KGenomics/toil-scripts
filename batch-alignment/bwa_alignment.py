@@ -434,9 +434,9 @@ def upload_to_s3(job, job_vars):
     bucket_name = s3_dir.lstrip('/').split('/')[0]
     bucket_dir = '/'.join(s3_dir.lstrip('/').split('/')[1:])
     base_url = 'https://s3-us-west-2.amazonaws.com/'
-    url = os.path.join(base_url, bucket_name, bucket_dir, uuid + '.sorted.bam')
+    url = os.path.join(base_url, bucket_name, bucket_dir, uuid + '.bam')
     # Retrieve file to be uploaded
-    job.fileStore.readGlobalFile(ids['out_bam'], os.path.join(work_dir, uuid + '.sorted.bam'))
+    job.fileStore.readGlobalFile(ids['out_bam'], os.path.join(work_dir, uuid + '.bam'))
     # Generate keyfile for upload
     with open(os.path.join(work_dir, uuid + '.key'), 'wb') as f_out:
         f_out.write(generate_unique_key(key_path, url))
@@ -444,9 +444,9 @@ def upload_to_s3(job, job_vars):
     s3am_command = ['s3am',
                     'upload',
                     '--sse-key-file', os.path.join(work_dir, uuid + '.key'),
-                    'file://{}'.format(os.path.join(work_dir, uuid + '.sorted.bam')),
+                    'file://{}'.format(os.path.join(work_dir, uuid + '.bam')),
                     bucket_name,
-                    os.path.join(bucket_dir, uuid + '.sorted.bam')]
+                    os.path.join(bucket_dir, uuid + '.bam')]
     subprocess.check_call(s3am_command)
 
 
