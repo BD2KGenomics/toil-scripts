@@ -286,7 +286,7 @@ def static_dag_declaration(job, job_vars):
     bwa = job.wrapJobFn(run_bwa, job_vars, cores=cores)
     conversion = job.wrapJobFn(bam_conversion, job_vars, bwa.rv())
     header = job.wrapJobFn(fix_bam_header, job_vars, conversion.rv())
-    rg = job.wrapJobFn(add_readgroups, job_vars, header.rv())
+    rg = job.wrapJobFn(add_readgroups, job_vars, header.rv(), memory='15G')
     # Link
     job.addChild(bwa)
     bwa.addChild(conversion)
