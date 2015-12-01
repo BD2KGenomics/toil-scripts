@@ -458,7 +458,7 @@ def main():
     that is in a format compatible with GATK.
 
     Config: "bwa_config.csv" is a required file that stores sample information to be run.
-    Script: "launch_bwa.sh" provides all of the inputs needed to run this script locally.
+    Script: "launch_bwa_hg19.sh" provides all of the inputs needed to run this script locally.
     Script: "bwa_launch_mesos.sh" provides all of the inputs needed to run this script on a mesos cluster in AWS
     """
     # Define Parser object and add to Toil

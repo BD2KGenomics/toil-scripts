@@ -1,20 +1,11 @@
 #!/usr/bin/env bash
 # John Vivian
 #
-# Align short-read data from fastq.gz files to the hg19 human reference genome
+# Please read the associated README.md before attempting to use.
 #
-# This script provides all configuration necessary to run the Toil pipeline locally.
-# It assumes there is a local file: bwa_config.csv.  One sample per line: uuid,url_R1,url_R2.
-#
-#   --ssec          the program assumes input files are encrypted in S3 when retrieving them.
-#   --output_dir    the final BAM will be placed in the directory specified
-#   --s3_dir        the final BAM will be uploaded to S3 using S3AM (pip install --pre s3am, need ~/.boto)
-#   --sudo          'sudo' will be prepended to the Docker subprocess call
-#
-# Modify TMPDIR parameter to change location of tmp files.
-# Modify first argument to change location of the local fileStore
-# Uncomment the final line to resume your Toil job in the event of job failure.
+# Precautionary step: Create location where jobStore and tmp files will exist
 mkdir -p ${HOME}/toil_mnt
+# Execution of pipeline
 python bwa_alignment.py \
 ${HOME}/toil_mnt/jobStore \
 --retryCount 3 \

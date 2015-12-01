@@ -1,17 +1,8 @@
 #!/usr/bin/env bash
 # John Vivian
 #
-# This script provides all configuration necessary to run the Toil pipeline on a Mesos cluster.
-# It assumes there is a local file: bwa_config.csv.  One sample per line: uuid,url_R1,url_R2.
+# Please read the associated README.md before attempting to use.
 #
-#   --ssec          the program assumes input files are encrypted in S3 when retrieving them.
-#   --output_dir    the final BAM will be placed in the directory specified
-#   --s3_dir        the final BAM will be uploaded to S3 using S3AM (pip install --pre s3am, need ~/.boto)
-#   --sudo          'sudo' will be prepended to the Docker subprocess call
-#
-# Modify TMPDIR parameter to change location of tmp files.
-# Modify first argument to change location of the local fileStore
-# Uncomment the final line to resume your Toil job in the event of job failure.
 python bwa_alignment.py \
 /home/mesosbox/shared/toil_mnt/jobStore \
 --retryCount 3 \
@@ -30,6 +21,6 @@ python bwa_alignment.py \
 --sudo \
 --sseKey=/home/mesosbox/shared/master.key \
 --batchSystem="mesos" \
---masterIP=mesos-master:5050 \
+--mesosMaster mesos-master:5050 \
 --workDir=/var/lib/toil \
 #--restart
