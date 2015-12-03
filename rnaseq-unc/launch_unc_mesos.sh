@@ -13,6 +13,6 @@ aws:us-west-2:unc_pipeline-run-1 \
 --sudo \
 --sseKey=/home/mesosbox/shared/master.key \
 --batchSystem="mesos" \
---masterIP=mesos-master:5050 \
+--mesosMaster mesos-master:5050 \
 --workDir=/var/lib/toil \
 #--restart

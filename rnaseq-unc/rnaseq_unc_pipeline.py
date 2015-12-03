@@ -644,7 +644,7 @@ def transcriptome(job, job_vars):
     # Write to FileStore
     ids['transcriptome.bam'] = job.fileStore.writeGlobalFile(output)
     # Run child job
-    return job.addChildJobFn(filter_bam, job_vars, disk='30 G').rv()
+    return job.addChildJobFn(filter_bam, job_vars, memory='30G', disk='30G').rv()
 
 
 def filter_bam(job, job_vars):
