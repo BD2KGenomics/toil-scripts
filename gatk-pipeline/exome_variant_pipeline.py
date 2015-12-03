@@ -30,8 +30,8 @@ Tree Structure of variant pipeline (per sample)
 ===================================================================
 :Dependencies:
 curl            - apt-get install curl
-docker          - apt-get install docker (or 'docker.io' for linux)
-Toil            - pip install --pre toil
+docker          - https://docs.docker.com/linux/step_one/
+Toil            - pip install toil
 
 Optional:
 S3AM            - pip install --pre s3am (requires ~/.boto)
@@ -45,6 +45,7 @@ import shutil
 import subprocess
 import multiprocessing
 import errno
+import tarfile
 from toil.job import Job
 
 
@@ -52,7 +53,7 @@ def build_parser():
     """
     Contains argparse arguments
     """
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(description=main.__doc__, add_help=True)
     parser.add_argument('-r', '--reference', required=True, help="Reference Genome URL")
     parser.add_argument('-f', '--config', required=True, help="Each line contains (CSV): UUID,Normal_URL,Tumor_URL")
     parser.add_argument('-p', '--phase', required=True, help='1000G_phase1.indels.hg19.sites.fixed.vcf URL')
@@ -173,7 +174,6 @@ def return_input_paths(job, work_dir, ids, *args):
     ids: dict           Dictionary of fileStore IDs
     *args: str(s)       for every file in *args, place file in work_dir via FileStore
     """
-    # TODO: Change this function to return a dict of inputs or something, it's clumsy and ugly
     paths = OrderedDict()
     for name in args:
         if not os.path.exists(os.path.join(work_dir, name)):
@@ -219,6 +219,23 @@ def docker_call(work_dir, tool_parameters, tool, java_opts=None, outfile=None, s
         raise RuntimeError('docker command returned a non-zero exit status. Check error logs.')
     except OSError:
         raise RuntimeError('docker not found on system. Install on all nodes.')
+
+
+def tarball_files(work_dir, tar_name, uuid=None, files=None):
+    """
+    Tars a group of files together into a tarball
+
+    work_dir: str       Current Working Directory
+    tar_name: str       Name of tarball
+    uuid: str           UUID to stamp files with
+    files: str(s)       List of filenames to place in the tarball from working directory
+    """
+    with tarfile.open(os.path.join(work_dir, tar_name), 'w:gz') as f_out:
+        for fname in files:
+            if uuid:
+                f_out.add(os.path.join(work_dir, fname), arcname=uuid + '.' + fname)
+            else:
+                f_out.add(os.path.join(work_dir, fname), arcname=fname)
 
 
 # Start of Job Functions
@@ -535,8 +552,8 @@ def mutect(job, job_vars, bam_ids):
     # Output VCF
     uuid = input_args['uuid']
     output_name = uuid + '.vcf'
-    mut_out = docker_path(os.path.join(work_dir, 'mutect.out'))
-    mut_cov = docker_path(os.path.join(work_dir, 'mutect.cov'))
+    mut_out = docker_path(os.path.join(work_dir, uuid + '.out'))
+    mut_cov = docker_path(os.path.join(work_dir, uuid + '.cov'))
     # Call: MuTect
     parameters = ['--analysis_type', 'MuTect',
                   '--reference_sequence', 'ref.fasta',
@@ -551,19 +568,21 @@ def mutect(job, job_vars, bam_ids):
                   '--vcf', docker_path(output_name)]
     docker_call(work_dir=work_dir, tool_parameters=parameters,
                 tool='quay.io/ucsc_cgl/mutect:1.1.7--e8bf09459cf0aecb9f55ee689c2b2d194754cbd3', sudo=sudo)
+    # Tarball files
+    tarball_files(work_dir, uuid + '.tar.gz', files=[uuid + '.vcf', uuid + '.cov', uuid + '.out'])
     # Write to fileStore
-    mutect_id = job.fileStore.writeGlobalFile(os.path.join(work_dir, output_name))
+    mutect_id = job.fileStore.writeGlobalFile(os.path.join(work_dir, uuid + '.tar.gz'))
     if input_args['output_dir']:
         output_dir = input_args['output_dir']
         mkdir_p(output_dir)
-        copy_to_output_dir(work_dir, output_dir, uuid=None, files=[output_name])
+        copy_to_output_dir(work_dir, output_dir, uuid=None, files=[uuid + 'tar.gz'])
     if input_args['s3_dir']:
-        job.addChildJobFn(upload_vcf_to_s3, mutect_id, input_args)
+        job.addChildJobFn(upload_output_to_s3, mutect_id, input_args)
 
 
-def upload_vcf_to_s3(job, mutect_id, input_args):
+def upload_output_to_s3(job, mutect_id, input_args):
     """
-    Uploads VCF file to S3 using S3AM
+    Uploads Mutect files to S3 using S3AM
 
     mutect_id: str      FileStore ID for the mutect.vcf
     input_args: dict    Dictionary of input arguments
@@ -575,17 +594,25 @@ def upload_vcf_to_s3(job, mutect_id, input_args):
     bucket_name = s3_dir.lstrip('/').split('/')[0]
     bucket_dir = '/'.join(s3_dir.lstrip('/').split('/')[1:])
     # Retrieve VCF file
-    job.fileStore.readGlobalFile(mutect_id, os.path.join(work_dir, uuid + '.vcf'))
+    job.fileStore.readGlobalFile(mutect_id, os.path.join(work_dir, uuid + '.tar.gz'))
     # Upload to S3 via S3AM
     s3am_command = ['s3am',
                     'upload',
-                    'file://{}'.format(os.path.join(work_dir, uuid + '.vcf')),
+                    'file://{}'.format(os.path.join(work_dir, uuid + '.tar.gz')),
                     bucket_name,
-                    os.path.join(bucket_dir, uuid + '.bam')]
+                    os.path.join(bucket_dir, uuid + '.tar.gz')]
     subprocess.check_call(s3am_command)
 
 
-if __name__ == '__main__':
+def main():
+    """
+    This is a Toil pipeline used to perform variant analysis (usually on exomes) from Tumor/Normal BAMs.
+    All samples are co-cleaned (GATK Indel Realignment (IR) and Base Quality Score Recalibration (BQSR))
+    before variant analysis is performed by MuTect.  The final output of this pipeline is a tarball
+    containing the output of MuTect (.vcf, .cov, .out).
+
+    Please see the associated README.md for an overview and quickstart walkthrough.
+    """
     # Define Parser object and add to jobTree
     argparser = build_parser()
     Job.Runner.addToilOptions(argparser)
@@ -608,3 +635,6 @@ if __name__ == '__main__':
 
     # Launch Pipeline
     Job.Runner.startToil(Job.wrapJobFn(download_shared_files, inputs), pargs)
+
+if __name__ == '__main__':
+    main()
