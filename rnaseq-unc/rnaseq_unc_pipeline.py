@@ -78,19 +78,19 @@ def build_parser():
                                                            'UUID for this sample is derived from the name. So samples'
                                                            'should be in the form of uuid.tar.')
     parser.add_argument('--unc', help='URL to unc_hg19.bed',
-                        default="https://s3-us-west-2.amazonaws.com/cgl-rna-seq-inputs/unc_hg19.bed")
+                        default='https://s3-us-west-2.amazonaws.com/cgl-pipeline-inputs/rna-seq/unc_hg19.bed')
     parser.add_argument('--fasta', help='URL to hg19_M_rCRS_ref.transcripts.fa',
-                        default="https://s3-us-west-2.amazonaws.com/cgl-rna-seq-inputs/hg19_M_rCRS_ref.transcripts.fa")
+                        default='https://s3-us-west-2.amazonaws.com/cgl-pipeline-inputs/rna-seq/hg19_M_rCRS_ref.transcripts.fa')
     parser.add_argument('--composite_exons', help='URL to composite_exons.bed',
-                        default="https://s3-us-west-2.amazonaws.com/cgl-rna-seq-inputs/composite_exons.bed")
+                        default='https://s3-us-west-2.amazonaws.com/cgl-pipeline-inputs/rna-seq/composite_exons.bed')
     parser.add_argument('--normalize', help='URL to normalizeBedToolsExonQuant.pl',
-                        default="https://s3-us-west-2.amazonaws.com/cgl-rna-seq-inputs/normalizeBedToolsExonQuant.pl")
+                        default='https://s3-us-west-2.amazonaws.com/cgl-pipeline-inputs/rna-seq/normalizeBedToolsExonQuant.pl')
     parser.add_argument('--rsem_ref', help='RSEM_REF URL',
-                        default="https://s3-us-west-2.amazonaws.com/cgl-rna-seq-inputs/rsem_ref.zip")
+                        default='https://s3-us-west-2.amazonaws.com/cgl-pipeline-inputs/rna-seq/rsem_ref.zip')
     parser.add_argument('--chromosomes', help='Chromosomes Directory',
-                        default="https://s3-us-west-2.amazonaws.com/cgl-rna-seq-inputs/chromosomes.zip")
+                        default='https://s3-us-west-2.amazonaws.com/cgl-pipeline-inputs/rna-seq/chromosomes.zip')
     parser.add_argument('--ebwt', help='EBWT Directory',
-                        default="https://s3-us-west-2.amazonaws.com/cgl-rna-seq-inputs/ebwt.zip")
+                        default='https://s3-us-west-2.amazonaws.com/cgl-pipeline-inputs/rna-seq/ebwt.zip')
     parser.add_argument('--ssec', help='Path to Key File for SSE-C Encryption')
     parser.add_argument('--output_dir', default=None, help='full path where final results will be output')
     parser.add_argument('--s3_dir', default=None, help='S3 Directory, starting with bucket name. e.g.: '
