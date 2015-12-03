@@ -23,9 +23,9 @@ aws:us-west-2:variant-pipeline-run-1 \
 --cosmic "https://s3-us-west-2.amazonaws.com/cgl-variant-inputs/b37_cosmic_v54_120711.vcf" \
 --output_dir '/home/mesosbox/shared' \
 --ssec '/home/mesosbox/shared/master.key' \
---s3_dir 'cgl-driver-projects/wcdt/variants/' \
+--s3_dir 'cgl-driver-projects/test/variants' \
 --sseKey=/home/mesosbox/shared/master.key \
 --batchSystem="mesos" \
---masterIP=mesos-master:5050 \
+--mesosMaster mesos-master:5050 \
 --workDir=/var/lib/toil \
 #--restart
