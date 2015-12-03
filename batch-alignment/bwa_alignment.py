@@ -268,9 +268,9 @@ def download_inputs(job, job_vars, sample):
     for i in xrange(2):
         if input_args['ssec']:
             key_path = input_args['ssec']
-            ids['r{}.fq.gz'.format(i+1)] = job.addChildJobFn(download_encrypted_file, urls[i], key_path).rv()
+            ids['r{}.fq.gz'.format(i+1)] = job.addChildJobFn(download_encrypted_file, urls[i], key_path, disk='100G').rv()
         else:
-            ids['r{}.fq.gz'.format(i+1)] = job.addChildJobFn(download_from_url, urls[i]).rv()
+            ids['r{}.fq.gz'.format(i+1)] = job.addChildJobFn(download_from_url, urls[i], disk='100G').rv()
     job.addFollowOnJobFn(static_dag_declaration, job_vars)
 
 
@@ -283,10 +283,10 @@ def static_dag_declaration(job, job_vars):
     # Define
     input_args, ids = job_vars
     cores = input_args['cpu_count']
-    bwa = job.wrapJobFn(run_bwa, job_vars, cores=cores)
-    conversion = job.wrapJobFn(bam_conversion, job_vars, bwa.rv())
-    header = job.wrapJobFn(fix_bam_header, job_vars, conversion.rv())
-    rg = job.wrapJobFn(add_readgroups, job_vars, header.rv(), memory='15G')
+    bwa = job.wrapJobFn(run_bwa, job_vars, cores=cores, disk='150G')
+    conversion = job.wrapJobFn(bam_conversion, job_vars, bwa.rv(), disk='150G')
+    header = job.wrapJobFn(fix_bam_header, job_vars, conversion.rv(), disk='100G')
+    rg = job.wrapJobFn(add_readgroups, job_vars, header.rv(), memory='15G', disk='100G')
     # Link
     job.addChild(bwa)
     bwa.addChild(conversion)
@@ -394,7 +394,7 @@ def add_readgroups(job, job_vars, bam_id):
     input_args, ids = job_vars
     sudo = input_args['sudo']
     uuid = input_args['uuid']
-    output_file = '{}.sorted.bam'.format(uuid)
+    output_file = '{}.bam'.format(uuid)
     # Retrieve input file
     job.fileStore.readGlobalFile(bam_id, os.path.join(work_dir, 'aligned_fixpg.bam'))
     # Call: Samtools
