@@ -19,8 +19,11 @@ Thanks bro!
 ===================================================================
 :Dependencies:
 curl            - apt-get install curl
-docker          - apt-get install docker (or 'docker.io' for linux)
 Toil            - pip install --pre toil
+Docker          - http://docs.docker.com/engine/installation/
+
+Optional:
+S3AM            - pip install --s3am (requires ~/.boto config file)
 """
 from __future__ import print_function
 import argparse
