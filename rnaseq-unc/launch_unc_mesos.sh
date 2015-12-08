@@ -4,8 +4,8 @@
 # Please read the associated README.md before attempting to use.
 #
 python rnaseq_unc_pipeline.py \
-aws:us-west-2:unc_pipeline-run-1 \
---retryCount 3 \
+aws:us-west-2:unc-pipeline-run-1 \
+--retryCount 1 \
 --config toil_rnaseq_config.csv \
 --ssec "/home/mesosbox/shared/master.key" \
 --output_dir "/home/mesosbox/rnaseq_output" \

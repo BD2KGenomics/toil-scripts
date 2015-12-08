@@ -3,15 +3,13 @@
 #
 # Please read the associated README.md before attempting to use.
 #
-# Precautionary step: Create location where jobStore and tmp files will exist
-mkdir -p ${HOME}/toil_mnt
 # Execution of pipeline
 python rnaseq_cgl_pipeline.py \
-${HOME}/toil_mnt/jstore \
---config rnaseq_cgl_config.csv \
---retryCount 2 \
+aws:us-west-2:cgl-pipeline-run-1 \
+--config /home/mesosbox/shared/rnaseq_cgl_config.csv \
+--retryCount 1 \
 --ssec /home/mesosbox/shared/master.key \
---s3_dir cgl-driver-projects/test/rna_cgl-test/ \
+--s3_dir cgl-driver-projects/test/spot-test/ \
 --sseKey=/home/mesosbox/shared/master.key \
 --batchSystem="mesos" \
 --mesosMaster mesos-master:5050 \

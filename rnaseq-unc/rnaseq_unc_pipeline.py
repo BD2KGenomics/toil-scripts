@@ -53,7 +53,6 @@ Toil:       pip install git+https://github.com/BD2KGenomics/toil.git
 Optional
 Boto:       pip install boto
 """
-
 import argparse
 import base64
 from collections import OrderedDict
@@ -235,7 +234,7 @@ def docker_call(work_dir, tool_parameters, tool, java_opts=None, outfile=None, s
     outfile: file           Filehandle that stderr will be passed to
     sudo: bool              If the user wants the docker command executed as sudo
     """
-    base_docker_call = 'docker run --rm -v {}:/data'.format(work_dir).split()
+    base_docker_call = 'docker run --log-driver=none --rm -v {}:/data'.format(work_dir).split()
     if sudo:
         base_docker_call = ['sudo'] + base_docker_call
     if java_opts:
