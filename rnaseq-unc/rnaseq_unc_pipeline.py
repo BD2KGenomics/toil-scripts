@@ -72,10 +72,12 @@ def build_parser():
     parser = argparse.ArgumentParser(description=main.__doc__, add_help=True)
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument('--config', default=None, help='Path to config. One sample per line, with the format: '
-                                                            'uuid,url_to_sample.tar')
+                                                      'uuid,url_to_sample.tar')
     group.add_argument('--input', default=None, help='Accepts a local sample: /path/to/sample.tar. Take note! The'
-                                                           'UUID for this sample is derived from the name. So samples'
-                                                           'should be in the form of uuid.tar.')
+                                                     'UUID for this sample is derived from the name. So samples'
+                                                     'should be in the form of uuid.tar.')
+    parser.add_argument('--single_end_reads', default=False, action='store_true',
+                        help='Set this flag if input data is non-paired (single end reads).')
     parser.add_argument('--unc', help='URL to unc_hg19.bed',
                         default='https://s3-us-west-2.amazonaws.com/cgl-pipeline-inputs/rna-seq/unc_hg19.bed')
     parser.add_argument('--fasta', help='URL to hg19_M_rCRS_ref.transcripts.fa',
@@ -93,11 +95,10 @@ def build_parser():
     parser.add_argument('--ssec', help='Path to Key File for SSE-C Encryption')
     parser.add_argument('--output_dir', default=None, help='full path where final results will be output')
     parser.add_argument('--s3_dir', default=None, help='S3 Directory, starting with bucket name. e.g.: '
-                                                             'cgl-driver-projects/ckcc/rna-seq-samples/')
-    parser.add_argument('--sudo', dest='sudo', action='store_true',
+                                                       'cgl-driver-projects/ckcc/rna-seq-samples/')
+    parser.add_argument('--sudo', dest='sudo', action='store_true', default=False,
                         help='Docker usually needs sudo to execute locally, but not when running Mesos or when '
                              'the user is a member of a Docker group.')
-    parser.set_defaults(sudo=False)
     return parser
 
 
@@ -373,7 +374,7 @@ def merge_fastqs(job, job_vars):
     input_args, ids = job_vars
     work_dir = job.fileStore.getLocalTempDir()
     cores = input_args['cpu_count']
-
+    single_end_reads = input_args['single_end_reads']
     # I/O
     sample = return_input_paths(job, work_dir, ids, 'sample.tar')
     # Untar File
@@ -382,17 +383,24 @@ def merge_fastqs(job, job_vars):
     # Remove large files before creating concat versions.
     os.remove(os.path.join(work_dir, 'sample.tar'))
     # Zcat files in parallel
-    r1_files = sorted(glob.glob(os.path.join(work_dir, '*R1*')))
-    r2_files = sorted(glob.glob(os.path.join(work_dir, '*R2*')))
-    with open(os.path.join(work_dir, 'R1.fastq'), 'w') as f1:
-        p1 = subprocess.Popen(['zcat'] + r1_files, stdout=f1)
-    with open(os.path.join(work_dir, 'R2.fastq'), 'w') as f2:
-        p2 = subprocess.Popen(['zcat'] + r2_files, stdout=f2)
-    p1.wait()
-    p2.wait()
-    # FileStore
-    ids['R1.fastq'] = job.fileStore.writeGlobalFile(os.path.join(work_dir, 'R1.fastq'))
-    ids['R2.fastq'] = job.fileStore.writeGlobalFile(os.path.join(work_dir, 'R2.fastq'))
+    if single_end_reads:
+        files = sorted(glob.glob(os.path.join(work_dir, '*')))
+        with open(os.path.join(work_dir, 'R1.fastq'), 'w') as f1:
+            subprocess.check_call(['zcat'] + files, stdout=f1)
+        # FileStore
+        ids['R1.fastq'] = job.fileStore.writeGlobalFile(os.path.join(work_dir, 'R1.fastq'))
+    else:
+        r1_files = sorted(glob.glob(os.path.join(work_dir, '*R1*')))
+        r2_files = sorted(glob.glob(os.path.join(work_dir, '*R2*')))
+        with open(os.path.join(work_dir, 'R1.fastq'), 'w') as f1:
+            p1 = subprocess.Popen(['zcat'] + r1_files, stdout=f1)
+        with open(os.path.join(work_dir, 'R2.fastq'), 'w') as f2:
+            p2 = subprocess.Popen(['zcat'] + r2_files, stdout=f2)
+        p1.wait()
+        p2.wait()
+        # FileStore
+        ids['R1.fastq'] = job.fileStore.writeGlobalFile(os.path.join(work_dir, 'R1.fastq'))
+        ids['R2.fastq'] = job.fileStore.writeGlobalFile(os.path.join(work_dir, 'R2.fastq'))
     job.fileStore.deleteGlobalFile(ids['sample.tar'])
     # Spawn child job
     return job.addChildJobFn(mapsplice, job_vars, cores=cores, disk='130 G').rv()
@@ -409,8 +417,15 @@ def mapsplice(job, job_vars):
     work_dir = job.fileStore.getLocalTempDir()
     cores = input_args['cpu_count']
     sudo = input_args['sudo']
+    single_end_reads = input_args['single_end_reads']
+    files_to_delete = ['R1.fastq']
     # I/O
-    return_input_paths(job, work_dir, ids, 'R1.fastq', 'R2.fastq', 'ebwt.zip', 'chromosomes.zip')
+    return_input_paths(job, work_dir, ids, 'ebwt.zip', 'chromosomes.zip')
+    if single_end_reads:
+        return_input_paths(job, work_dir, ids, 'R1.fastq')
+    else:
+        return_input_paths(job, work_dir, ids, 'R1.fastq', 'R2.fastq')
+        files_to_delete.extend(['R1.fastq'])
     for fname in ['chromosomes.zip', 'ebwt.zip']:
         subprocess.check_call(['unzip', '-o', os.path.join(work_dir, fname), '-d', work_dir])
     # Command and call
@@ -421,14 +436,15 @@ def mapsplice(job, job_vars):
                   '-x', '/data/ebwt',
                   '-c', '/data/chromosomes',
                   '-1', '/data/R1.fastq',
-                  '-2', '/data/R2.fastq',
                   '-o', '/data']
+    if not single_end_reads:
+        parameters.extend(['-2', '/data/R2.fastq'])
     docker_call(tool='quay.io/ucsc_cgl/mapsplice:2.1.8--dd5ac549b95eb3e5d166a5e310417ef13651994e',
                 tool_parameters=parameters, work_dir=work_dir, sudo=sudo)
     # Write to FileStore
     for fname in ['alignments.bam', 'stats.txt']:
         ids[fname] = job.fileStore.writeGlobalFile(os.path.join(work_dir, fname))
-    for fname in ['R1.fastq', 'R2.fastq']:
+    for fname in files_to_delete:
         job.fileStore.deleteGlobalFile(ids[fname])
     # Run child job
     # map_id = job.addChildJobFn(mapping_stats, job_vars).rv()
@@ -684,6 +700,7 @@ def rsem(job, job_vars):
     work_dir = job.fileStore.getLocalTempDir()
     cpus = input_args['cpu_count']
     sudo = input_args['sudo']
+    single_end_reads = input_args['single_end_reads']
     # I/O
     filtered_bam, rsem_ref = return_input_paths(job, work_dir, ids, 'filtered.bam', 'rsem_ref.zip')
     subprocess.check_call(['unzip', '-o', os.path.join(work_dir, 'rsem_ref.zip'), '-d', work_dir])
@@ -696,12 +713,13 @@ def rsem(job, job_vars):
                   '--forward-prob', '0.5',
                   '--seed-length', '25',
                   '--fragment-length-mean', '-1.0',
-                  '--bam', docker_path(filtered_bam),
-                  '/data/rsem_ref/hg19_M_rCRS_ref',
-                  output_prefix]
+                  '--bam', docker_path(filtered_bam)]
+    if not single_end_reads:
+        parameters.extend(['--paired-end'])
+    parameters.extend(['/data/rsem_ref/hg19_M_rCRS_ref', output_prefix])
 
-    # TODO: CHANGE TOOL ONCE RSEM IS PUSHED TO CGL
-    docker_call(tool='jvivian/rsem', tool_parameters=parameters, work_dir=work_dir, sudo=sudo)
+    docker_call(tool='quay.io/ucsc_cgl/rsem:1.2.25--4e8d1b31d4028f464b3409c6558fb9dfcad73f88',
+                tool_parameters=parameters, work_dir=work_dir, sudo=sudo)
     os.rename(os.path.join(work_dir, output_prefix+'.genes.results'), os.path.join(work_dir, 'rsem_gene.tab'))
     os.rename(os.path.join(work_dir, output_prefix+'.isoforms.results'), os.path.join(work_dir, 'rsem_isoform.tab'))
     # Write to FileStore
@@ -828,6 +846,7 @@ def main():
               'ssec': args.ssec,
               's3_dir': args.s3_dir,
               'sudo': args.sudo,
+              'single_end_reads': args.single_end_reads,
               'uuid': None,
               'sample.tar': None,
               'cpu_count': None}
