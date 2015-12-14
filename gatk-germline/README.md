@@ -2,7 +2,7 @@
 ### Guide: Running GATK Best Practices Variant Pipeline using Toil
 
 ## Overview
-This pipeline takes an exhaustive list of bam files and uses GATK tools to identify germline variants.
+This pipeline takes a list of bam files and uses GATK tools to identify germline variants. Currently, the pipeline cannot accept encrypted data.
 
 #### General Dependencies
     1. Python 2.7
@@ -19,7 +19,7 @@ From the BD2KGenomics toil-scripts Github repository, download the following fil
     1. toil-scripts/gatk-germline/germline.py
     2. toil-scripts/gatk-germline/launch_germ.py
     
-The bash script `launch_germ.sh` contains parameters required to run the pipeline.
+The bash script `launch_germ.sh` contains parameters required to run the pipeline. The current set of parameters uses b37 conventions, so reference and alignment files must also comply with this format. 
 
 | Parameter                 | Function                                                                                                                              |
 |---------------------------|---------------------------------------------------------------------------------------------------------------------------------------|
