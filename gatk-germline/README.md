@@ -14,7 +14,7 @@ This pipeline takes an exhaustive list of bam files and uses GATK tools to ident
 
 ## Getting Started
 #### Running a single sample locally
-From the BD2KGenomics toil-scripts Github repository, download the following files to the same directory.
+From the BD2KGenomics toil-scripts Github repository, download the following files:
 
     1. toil-scripts/gatk-germline/germline.py
     2. toil-scripts/gatk-germline/launch_germ.py
