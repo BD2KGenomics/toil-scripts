@@ -24,7 +24,7 @@ The bash script `launch_germ.sh` contains parameters required to run the pipelin
 | Parameter                 | Function                                                                                                                              |
 |---------------------------|---------------------------------------------------------------------------------------------------------------------------------------|
 | Positional parameter  | Path to where the jobStore will exist. The jobStore hosts intermediate files during runtime.                                          |
-| `--config`		    | Path to the config csv file. Each line has a unique identifier and URL for each sample BAM file.						    |
+| `--config`		    | Path to the config csv file. Each line has a unique identifier and URL for each sample.						    |
 | `--reference`  	    | Reference genome in FASTA format                                                                                                     |
 | `--phase`		    | URL 1000G_phase1.indels.b37.vcf                                                                                                           |
 | `--mills`		    | URL Mills_and_1000G_gold_standard.indels.b37.sites.vcf										    |
