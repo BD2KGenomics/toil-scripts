@@ -297,7 +297,7 @@ def download_shared_files(job, input_args):
     shared_files = ['starIndex.tar.gz', 'rsem_ref_hg38.tar.gz', 'kallisto_hg38.idx']
     shared_ids = {}
     for f in shared_files:
-        shared_ids[f] = job.addChildJobFn(download_from_url, input_args[f]).rv()
+        shared_ids[f] = job.addChildJobFn(download_from_url, input_args[f], disk='25G').rv()
     job.addFollowOnJobFn(parse_input_samples, shared_ids, input_args)
 
 
@@ -358,7 +358,7 @@ def static_dag_launchpoint(job, job_vars):
     job_vars: tuple     Tuple of dictionaries: input_args and ids
     """
     a = job.wrapJobFn(merge_fastqs, job_vars, disk='70G').encapsulate()
-    b = job.wrapJobFn(consolidate_output, job_vars, a.rv())
+    b = job.wrapJobFn(consolidate_output, job_vars, a.rv(), disk='2G')
     # Take advantage of "encapsulate" to simplify pipeline wiring
     job.addChild(a)
     a.addChild(b)
@@ -379,6 +379,7 @@ def merge_fastqs(job, job_vars):
     # Untar File and concat
     subprocess.check_call(['tar', '-xvf', sample_tar, '-C', work_dir])
     os.remove(os.path.join(work_dir, 'sample.tar'))
+    # TODO: Change for TCGA data _1 and _2
     r1_files = sorted(glob.glob(os.path.join(work_dir, '*R1*')))
     r2_files = sorted(glob.glob(os.path.join(work_dir, '*R2*')))
     with open(os.path.join(work_dir, 'R1.fastq'), 'w') as f1:
@@ -470,7 +471,6 @@ def star(job, job_vars):
     # Retrieve files
     read_from_filestore(job, work_dir, ids, 'R1_cutadapt.fastq', 'R2_cutadapt.fastq', 'starIndex.tar.gz')
     subprocess.check_call(['tar', '-zxvf', os.path.join(work_dir, 'starIndex.tar.gz'), '-C', work_dir])
-    os.remove(os.path.join(work_dir, 'starIndex.tar.gz'))
     # Call: STAR Map
     parameters = ['--runThreadN', str(cores),
                   '--genomeDir', '/data/starIndex',
@@ -496,9 +496,9 @@ def star(job, job_vars):
     # Write to fileStore
     ids['transcriptome.bam'] = job.fileStore.writeGlobalFile(os.path.join(work_dir,
                                                                           'rnaAligned.toTranscriptome.out.bam'))
-    return job.addChildJobFn(rsem, job_vars, cores=cores, disk='30 G').rv()
     # RSEM doesn't use more than 16 cores, so be efficient
     cores = 16 if cores >= 16 else cores
+    return job.addChildJobFn(rsem, job_vars, cores=cores, disk='50G').rv()
 
 
 def rsem(job, job_vars):
