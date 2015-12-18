@@ -393,7 +393,7 @@ def merge_fastqs(job, job_vars):
     ids['R2.fastq'] = job.fileStore.writeGlobalFile(os.path.join(work_dir, 'R2.fastq'))
     job.fileStore.deleteGlobalFile(ids['sample.tar'])
     # Start cutadapt step
-    return job.addChildJobFn(cutadapt, job_vars, disk='70G').rv()
+    return job.addChildJobFn(cutadapt, job_vars, disk='150G').rv()
 
 
 def cutadapt(job, job_vars):
