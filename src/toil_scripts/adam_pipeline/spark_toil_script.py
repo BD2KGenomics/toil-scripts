@@ -29,10 +29,11 @@ docker          - apt-get install docker (or 'docker.io' for linux)
 toil            - pip install --pre toil
 """
 
-import sys
 import argparse
-from toil.job import Job
+import os
 from subprocess import * #call, check_output
+import sys
+from toil.job import Job
 
 SPARK_MASTER_PORT = "7077"
 HDFS_MASTER_PORT = "8020"
@@ -67,6 +68,20 @@ def start_workers(job, masterIP,  inputs):
     job.addFollowOnJobFn(download_data, masterIP, inputs)
 
 
+def call_conductor(masterIP, inputs, src, dst):
+    """
+    Invokes the conductor container.
+    """
+    return call(["docker",
+                 "run",
+                 "--net=host",
+                 "-e", "AWS_ACCESS_KEY="+inputs['accessKey'],
+                 "-e", "AWS_SECRET_KEY="+inputs['secretKey'],
+                 "computationalgenomicslab/conductor",
+                 "--master", "spark://"+masterIP+":"+SPARK_MASTER_PORT,
+                 "--", "-C", src, dst])
+
+
 def download_data(job, masterIP, inputs):
     """
     Downloads input data files from s3.
@@ -78,20 +93,14 @@ def download_data(job, masterIP, inputs):
     snpName = snpPath.split('/')[-1]
     hdfsSNPs = "hdfs://"+masterIP+":"+HDFS_MASTER_PORT+"/"+snpName
     
-    status = call(["docker", "run", "-e", "AWS_ACCESS_KEY="+inputs['accessKey'], \
-                   "-e", "AWS_SECRET_KEY="+inputs['secretKey'], \
-                   "computationalgenomicslab/conductor", "--", "-C", \
-                   inputs['knownSNPs'], hdfsSNPs])    
+    status = call_conductor(masterIP, inputs, inputs['knownSNPs'], hdfsSNPs)
     assert(status == 0)
     
     bamFileSystem, bamPath = inputs['bamName'].split('://')
     bamName = bamPath.split('/')[-1]
     hdfsBAM = "hdfs://"+masterIP+":"+HDFS_MASTER_PORT+"/"+bamName
 
-    status = call(["docker", "run", "-e", "AWS_ACCESS_KEY="+inputs['accessKey'], \
-                   "-e", "AWS_SECRET_KEY="+inputs['secretKey'], \
-                   "computationalgenomicslab/conductor", "--", "-C", \
-                   inputs['bamName'], hdfsBAM])
+    status = call_conductor(masterIP, inputs, inputs['bamName'], hdfsBAM)
     assert(status == 0)
     
     job.addFollowOnJobFn(adam_convert, masterIP, hdfsBAM, hdfsSNPs, inputs)
@@ -106,22 +115,22 @@ def adam_convert(job, masterIP, inFile, snpFile, inputs):
 
     adamFile = ".".join(inFile.split(".")[:-1])+".adam"
     
-    status = call(["docker", "run", "--net='host'", "-p", "9999:9999", \
-                   "computationalgenomicslab/adam", \
-                   "--master", "spark://"+masterIP+":"+SPARK_MASTER_PORT, \
-                   "--conf", "spark.driver.port=9999", \
-                   "--", "transform", \
+    status = call(["docker", "run", "--net=host",
+                   "computationalgenomicslab/adam", 
+                   "--master", "spark://"+masterIP+":"+SPARK_MASTER_PORT, 
+                   "--conf", "spark.hadoop.fs.default.name=hdfs://%s:%s" % (masterIP, HDFS_MASTER_PORT),
+                   "--", "transform", 
                    inFile, adamFile])
     assert(status == 0)
 
     adamSnpFile = ".".join(snpFile.split(".")[:-1])+".var.adam"
 
-    status = call(["docker", "run", "--net='host'", "-p", "9999:9999", \
-                   "computationalgenomicslab/adam", \
-                   "--master", "spark://"+masterIP+":"+SPARK_MASTER_PORT, \
-                   "--conf", "spark.driver.port=9999", \
-                   "--", "vcf2adam", \
-                   "-only_variants", \
+    status = call(["docker", "run", "--net=host",
+                   "computationalgenomicslab/adam", 
+                   "--master", "spark://"+masterIP+":"+SPARK_MASTER_PORT, 
+                   "--conf", "spark.hadoop.fs.default.name=hdfs://%s:%s" % (masterIP, HDFS_MASTER_PORT),
+                   "--", "vcf2adam", 
+                   "-only_variants", 
                    snpFile, adamSnpFile])
     assert(status == 0)
 
@@ -140,25 +149,56 @@ def adam_transform(job, masterIP, inFile, snpFile, inputs):
 
     outFile = ".".join(inFile.split(".")[:-1])+".processed.bam"
 
-
-    status = call(["docker", "run", "--net='host'", "-p", "9999:9999", \
-                   "computationalgenomicslab/adam", \
-                   "--master", "spark://"+masterIP+":"+SPARK_MASTER_PORT, \
-                   "--conf", "spark.driver.port=9999", \
-                   "--", "transform", \
-                   inFile, outFile, \
-                   "-mark_duplicate_reads", \
-                   "-realign_indels", \
-                   "-recalibrate_base_qualities", \
-                   "-known_snps", snpFile, \
-                   "-cache", \
-                   "-limit_projection"])
+    status = call(["docker", "run", "--net=host",
+                   "computationalgenomicslab/adam", 
+                   "--master", "spark://"+masterIP+":"+SPARK_MASTER_PORT, 
+                   "--conf", "spark.driver.memory=%s" % inputs["driverMemory"],
+                   "--conf", "spark.executor.memory=%s" % inputs["executorMemory"],
+                   "--conf", "spark.hadoop.fs.default.name=hdfs://%s:%s" % (masterIP, HDFS_MASTER_PORT),
+                   "--", "transform", 
+                   inFile, "mkdups.adam", 
+                   "-mark_duplicate_reads"])
     assert(status == 0)
 
-    job.addFollowOnJobFn(upload_data, outFile, inputs)
+    status = call(["docker", "run", "--net=host",
+                   "computationalgenomicslab/adam", 
+                   "--master", "spark://"+masterIP+":"+SPARK_MASTER_PORT, 
+                   "--conf", "spark.driver.memory=%s" % inputs["driverMemory"],
+                   "--conf", "spark.executor.memory=%s" % inputs["executorMemory"],
+                   "--conf", "spark.hadoop.fs.default.name=hdfs://%s:%s" % (masterIP, HDFS_MASTER_PORT),
+                   "--", "transform", 
+                   "mkdups.adam", "ri.adam",
+                   "-realign_indels"])
+    assert(status == 0)
 
 
-def upload_data(job, hdfsName, inputs):
+    status = call(["docker", "run", "--net=host",
+                   "computationalgenomicslab/adam", 
+                   "--master", "spark://"+masterIP+":"+SPARK_MASTER_PORT, 
+                   "--conf", "spark.driver.memory=%s" % inputs["driverMemory"],
+                   "--conf", "spark.executor.memory=%s" % inputs["executorMemory"],
+                   "--conf", "spark.hadoop.fs.default.name=hdfs://%s:%s" % (masterIP, HDFS_MASTER_PORT),
+                   "--", "transform", 
+                   "ri.adam", "bqsr.adam",
+                   "-recalibrate_base_qualities", 
+                   "-known_snps", snpFile])
+    assert(status == 0)
+
+    status = call(["docker", "run", "--net=host",
+                   "computationalgenomicslab/adam", 
+                   "--master", "spark://"+masterIP+":"+SPARK_MASTER_PORT, 
+                   "--conf", "spark.driver.memory=%s" % inputs["driverMemory"],
+                   "--conf", "spark.executor.memory=%s" % inputs["executorMemory"],
+                   "--conf", "spark.hadoop.fs.default.name=hdfs://%s:%s" % (masterIP, HDFS_MASTER_PORT),
+                   "--", "transform", 
+                   "bqsr.adam", outFile,
+                   "-sort_reads", "-single"])
+    assert(status == 0)
+
+    job.addFollowOnJobFn(upload_data, masterIP, outFile, inputs)
+
+
+def upload_data(job, masterIP, hdfsName, inputs):
     """
     Upload file hdfsName from hdfs to s3
     """
@@ -168,19 +208,21 @@ def upload_data(job, hdfsName, inputs):
     fileSystem, path = hdfsName.split('://')
     nameOnly = path.split('/')[-1]
 
-    status = call(["docker", "run", "-e", "AWS_ACCESS_KEY="+inputs['accessKey'], \
-                   "-e", "AWS_SECRET_KEY="+inputs['secretKey'], \
-                   "computationalgenomicslab/conductor", \
-                   "--", "-C", hdfsName, inputs['outDir']+"/"+nameOnly])
+    status = call_conductor(masterIP, inputs, hdfsName, inputs['outDir']+"/"+nameOnly)
     assert(status == 0)
     
 # SERVICE CLASSES
 
 class MasterService(Job.Service):
 
-    def __init__(self, masterIP):
+    def __init__(self):
         Job.Service.__init__(self)
-        self.IP = check_output(["hostname", "-f"])[:-1]
+        if (os.uname()[0] == "Darwin"):
+            machine = check_output(["docker-machine", "ls"]).split("\n")[1].split()[0]
+            self.IP = check_output(["docker-machine", "ip", machine]).strip().rstrip()
+        else:
+            self.IP = check_output(["hostname", "-f"])[:-1]
+            
 
     def start(self):
         """
@@ -189,10 +231,16 @@ class MasterService(Job.Service):
         log.write("start masters\n")
         log.flush()
 
-        self.sparkContainerID = check_output(["docker", "run", "--net='host'", "-P", "-d", "-e",\
-                                              "SPARK_MASTER_IP="+self.IP, \
+        self.sparkContainerID = check_output(["docker",
+                                              "run",
+                                              "--net=host",
+                                              "-d",
+                                              "-e", "SPARK_MASTER_IP="+self.IP, 
                                               "computationalgenomicslab/apache-spark-master:1.5.2"])[:-1]
-        self.hdfsContainerID = check_output(["docker", "run", "--net='host'", "-d", \
+        self.hdfsContainerID = check_output(["docker",
+                                             "run",
+                                             "--net=host",
+                                             "-d",
                                              "computationalgenomicslab/apache-hadoop-master:2.6.2", self.IP])[:-1]
         return self.IP
         
@@ -223,12 +271,18 @@ class WorkerService(Job.Service):
         """
         log.write("start workers\n")
         log.flush()
-        self.sparkContainerID = check_output(["docker", "run", "--net='host'", \
-                                              "-d", "-P",\
-                                              "-e", "\"SPARK_MASTER_IP="+self.masterIP+":"+SPARK_MASTER_PORT+"\"",\
-                                              "computationalgenomicslab/apache-spark-worker:1.5.2", \
+
+        self.sparkContainerID = check_output(["docker",
+                                              "run",
+                                              "--net=host", 
+                                              "-d",
+                                              "-e", "\"SPARK_MASTER_IP="+self.masterIP+":"+SPARK_MASTER_PORT+"\"",
+                                              "computationalgenomicslab/apache-spark-worker:1.5.2", 
                                               self.masterIP+":"+SPARK_MASTER_PORT])[:-1]
-        self.hdfsContainerID = check_output(["docker", "run", "--net='host'", "-d",\
+        self.hdfsContainerID = check_output(["docker",
+                                             "run",
+                                             "--net=host",
+                                             "-d",
                                              "computationalgenomicslab/apache-hadoop-worker:2.6.2", self.masterIP])[:-1]
         return
 
@@ -251,18 +305,22 @@ def build_parser():
 
     parser = argparse.ArgumentParser()
 
-    parser.add_argument('-i', '--input_file_name', required=True, \
-                        help="The full s3 url of the input SAM or BAM file")
-    parser.add_argument('-n', '--num_nodes', type=int, required=True, \
-                        help='Number of nodes to use')
-    parser.add_argument('-o', '--output_directory', required=True, \
-                        help='s3 directory url in which to place output files')
-    parser.add_argument('-k', '--known_SNPs', required=True \
-                        help='The full s3 url of a VCF file of known snps')
-    parser.add_argument('-a', '--aws_access_key', required=True, \
-                        help='Amazon web services access key')
-    parser.add_argument('-s', '--aws_secret_key', required=True, \
-                        help='Amazon web services secret key')
+    parser.add_argument('-i', '--input_file_name', required = True,
+                        help = "The full s3 url of the input SAM or BAM file")
+    parser.add_argument('-n', '--num_nodes', type = int, required = True,
+                        help = 'Number of nodes to use')
+    parser.add_argument('-o', '--output_directory', required = True,
+                        help = 's3 directory url in which to place output files')
+    parser.add_argument('-k', '--known_SNPs', required = True,
+                        help = 'The full s3 url of a VCF file of known snps')
+    parser.add_argument('-a', '--aws_access_key', required = True,
+                        help = 'Amazon web services access key')
+    parser.add_argument('-s', '--aws_secret_key', required = True,
+                        help = 'Amazon web services secret key')
+    parser.add_argument('-d', '--driver_memory', required = True,
+                        help = 'Amount of memory to allocate for Spark Driver.')
+    parser.add_argument('-q', '--executor_memory', required = True,
+                        help = 'Amount of memory to allocate per Spark Executor.')
     return parser
 
 
@@ -272,12 +330,14 @@ def main(args):
     Job.Runner.addToilOptions(parser)
     options = parser.parse_args()
 
-    inputs = {'numWorkers': options.num_nodes - 1, \
-              'outDir':     options.output_directory, \
-              'bamName':    options.input_file_name, \
-              'knownSNPs':  options.known_SNPs, \
-              'accessKey':  options.aws_access_key, \
-              'secretKey':  options.aws_secret_key}
+    inputs = {'numWorkers': options.num_nodes - 1,
+              'outDir':     options.output_directory,
+              'bamName':    options.input_file_name,
+              'knownSNPs':  options.known_SNPs,
+              'accessKey':  options.aws_access_key,
+              'secretKey':  options.aws_secret_key,
+              'driverMemory': options.driver_memory,
+              'executorMemory': options.executor_memory}
 
     Job.Runner.startToil(Job.wrapJobFn(start_master, inputs), options)
 
