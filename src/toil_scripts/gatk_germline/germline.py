@@ -37,7 +37,7 @@ import subprocess
 import multiprocessing
 from collections import OrderedDict
 from toil.job import Job
-
+from toil_scripts.batch_alignment.bwa_alignment import upload_to_s3
 
 def build_parser():
     """
@@ -52,6 +52,7 @@ def build_parser():
     parser.add_argument('-n', '--omni', required=True, help='1000G_omni.5.b37.vcf URL')
     parser.add_argument('-t', '--hapmap', required=True, help='hapmap_3.3.b37.vcf URL')
     parser.add_argument('-o', '--output_dir', default="./data", help='Full path to final output dir')
+    parser.add_argument('-se', '--file_size', default='100G', help='Approximate input file size. Should be given as %d[TGMK], e.g., for a 100 gigabyte file, use --file_size 100G')
     return parser
 
 
@@ -102,7 +103,7 @@ def docker_call(work_dir, tool_parameters, tool, input_files=None, output_files=
             assert os.path.exists(output_file)
 
 
-def download_from_url(job, url, filename):
+def download_url(job, url, filename):
     """
     Downloads a file from a URL and places it in the jobStore
 
@@ -209,7 +210,7 @@ def batch_start(job, input_args):
     shared_ids = {}
     for file_name in shared_files:
         url = input_args[file_name]
-        shared_ids[file_name] = job.addChildJobFn(download_from_url, url, file_name).rv()
+        shared_ids[file_name] = job.addChildJobFn(download_url, url, file_name).rv()
     job.addFollowOnJobFn(create_reference_index, shared_ids, input_args)
 
 
@@ -268,6 +269,14 @@ def spawn_batch_jobs(job, shared_ids, input_args):
     # Names for every input file used in the pipeline by each sample
     samples = []
     config = input_args['config']
+
+    # does the config file exist locally? if not, try to read from job store
+    if not os.path.exists(config):
+
+        config_path = os.path.join(work_dir, 'config.txt')
+        job.fileStore.readGlobalFile(config, config_path)
+        config = config_path
+
     with open(config, 'r') as f:
         for line in f.readlines():
             if not line.isspace():
@@ -292,9 +301,12 @@ def start(job, shared_ids, input_args, sample):
     input_args['uuid'] = uuid
     # Sample bam file holds a url?
     input_args['bam_url'] = url
-    input_args['output_dir'] = os.path.join(input_args['output_dir'], uuid)
+
+    if input_args['output_dir']:
+        input_args['output_dir'] = os.path.join(input_args['output_dir'], uuid)
+
     if input_args['ssec'] is None:
-        ids['toil.bam'] = job.addChildJobFn(download_from_url, url, 'toil.bam').rv()
+        ids['toil.bam'] = job.addChildJobFn(download_url, url, 'toil.bam').rv()
     else:
         pass
     job.addFollowOnJobFn(index, ids, input_args)
@@ -392,8 +404,7 @@ def apply_vqsr_snp(job, shared_ids, input_args):
     :param input_args: dictionary of input arguments
     """
     work_dir = job.fileStore.getLocalTempDir()
-    output_dir = input_args['output_dir']
-    make_directory(output_dir)
+
     uuid = input_args['uuid']
     input_files = ['ref.fa', 'ref.fa.fai', 'ref.dict', 'unified.raw.BOTH.gatk.vcf',
                    'HAPSNP.tranches', 'HAPSNP.recal']
@@ -409,8 +420,27 @@ def apply_vqsr_snp(job, shared_ids, input_args):
                '-recalFile', 'HAPSNP.recal',
                '-mode', 'SNP']
     docker_call(work_dir, command, 'quay.io/ucsc_cgl/gatk', inputs, [output])
-    move_to_output_dir(work_dir, output_dir, output)
 
+    upload_or_move(job, input_args, output)
+
+
+def upload_or_move(job, input_args, output):
+    
+    # are we moving this into a local dir, or up to s3?
+    if input_args['output_dir']:
+        # get output path and 
+        output_dir = input_args['output_dir']
+        work_dir = job.fileStore.getLocalTempDir()
+        make_directory(output_dir)
+        move_to_output_dir(work_dir, output_dir, output)
+
+    elif input_args['s3_dir']:
+        
+        job.addChildJobFn(upload_to_s3, job_vars, output, disk=input_args['file_size'])
+
+    else:
+
+        raise ValueError('No output_directory or s3_dir defined. Cannot determine where to store %s' % output)
 
 # Indel Recalibration
 def vqsr_indel(job, shared_ids, input_args):
@@ -453,8 +483,6 @@ def apply_vqsr_indel(job, shared_ids, input_args):
     :param input_args: dictionary of input arguments
     """
     work_dir = job.fileStore.getLocalTempDir()
-    output_dir = input_args['output_dir']
-    make_directory(output_dir)
     uuid = input_args['uuid']
     input_files = ['ref.fa', 'ref.fa.fai', 'ref.dict', 'unified.raw.BOTH.gatk.vcf',
                    'HAPINDEL.recal', 'HAPINDEL.tranches', 'HAPINDEL.plots']
@@ -470,7 +498,9 @@ def apply_vqsr_indel(job, shared_ids, input_args):
                '-recalFile', 'HAPINDEL.recal',
                '-mode', 'INDEL']
     docker_call(work_dir, command, 'quay.io/ucsc_cgl/gatk', inputs, [output])
-    move_to_output_dir(work_dir, output_dir, output)
+
+    upload_or_move(job, input_args, output)
+
 
 if __name__ == '__main__':
     args_parser = build_parser()
@@ -487,6 +517,9 @@ if __name__ == '__main__':
               'output_dir': args.output_dir,
               'uuid': None,
               'cpu_count': str(multiprocessing.cpu_count()),
-              'ssec': None}
+              'file_size': args.file_size,
+              'ssec': None,
+              'aws_access_key': None,
+              'aws_secret_key': None}
     
     Job.Runner.startToil(Job.wrapJobFn(batch_start, inputs), args)
