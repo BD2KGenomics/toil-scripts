@@ -6,9 +6,7 @@ Dependencies
 Curl:       apt-get install curl
 Docker:     wget -qO- https://get.docker.com/ | sh
 Toil:       pip install toil
-
-Optional (if uploading results to S3)
-Boto:       pip install boto
+S3AM:       pip install --pre s3am
 """
 import argparse
 import glob
@@ -28,7 +26,7 @@ def build_parser():
                              'be thrown if "-g" is set but not this argument.')
     parser.add_argument('--s3_dir', default=None, required=True, help='S3 Bucket. e.g. tcga-data')
     parser.add_argument('--ssec', default=None, required=True, help='Path to Key File for SSE-C Encryption')
-    parser.add_argument('--sudo', dest='sudo', action='store_true',
+    parser.add_argument('--sudo', dest='sudo', default=None, action='store_true',
                         help='Docker usually needs sudo to execute locally, but not when running Mesos or when '
                              'the user is a member of a Docker group.')
     return parser
@@ -83,24 +81,25 @@ def parse_genetorrent(path_to_config):
     Parses genetorrent config file.  Returns list of samples: [ [id1, id1 ], [id2, id2], ... ]
     Returns duplicate of ids to follow UUID/URL standard.
     """
-    samples = set()
+    samples = []
     with open(path_to_config, 'r') as f:
         for line in f.readlines():
             if not line.isspace():
-                samples.add(line.strip())
+                samples.append(line.strip())
     return samples
 
 
 # Job Functions
-def start_batch(job, input_args, samples):
+def start_batch(job, input_args):
     """
     This function will administer 5 jobs at a time then recursively call itself until subset is empty
     """
+    samples = parse_genetorrent(input_args['genetorrent'])
     for analysis_id in samples:
-            job.addChildJobFn(download_and_transer_sample, input_args, analysis_id, disk='15G')
+        job.addChildJobFn(download_and_transfer_sample, input_args, analysis_id, cores=1, disk='10G')
 
 
-def download_and_transer_sample(job, input_args, analysis_id):
+def download_and_transfer_sample(job, input_args, analysis_id):
     """
     Downloads a sample from CGHub via GeneTorrent, then uses S3AM to transfer it to S3
 
@@ -122,11 +121,17 @@ def download_and_transer_sample(job, input_args, analysis_id):
         raise
     # Upload sample to S3AM
     key_path = input_args['ssec']
+    if sample.endswith('gz'):
+        sample_name = analysis_id + '.tar.gz'
+        shutil.move(sample, os.path.join(work_dir, sample_name))
+    else:
+        sample_name = analysis_id + '.tar'
+        shutil.move(sample, os.path.join(work_dir, sample_name))
     # Parse s3_dir to get bucket and s3 path
     s3_dir = input_args['s3_dir']
     bucket_name = s3_dir.lstrip('/').split('/')[0]
     base_url = 'https://s3-us-west-2.amazonaws.com/'
-    url = os.path.join(base_url, bucket_name, os.path.basename(sample))
+    url = os.path.join(base_url, bucket_name, sample_name)
     # Generate keyfile for upload
     with open(os.path.join(work_dir, 'temp.key'), 'wb') as f_out:
         f_out.write(generate_unique_key(key_path, url))
@@ -134,7 +139,7 @@ def download_and_transer_sample(job, input_args, analysis_id):
     s3am_command = ['s3am',
                     'upload',
                     '--sse-key-file', os.path.join(work_dir, 'temp.key'),
-                    'file://{}'.format(sample),
+                    'file://{}'.format(os.path.join(work_dir, sample_name)),
                     bucket_name]
     subprocess.check_call(s3am_command)
 
@@ -163,8 +168,7 @@ def main():
     if args.genetorrent_key:
         assert os.path.isfile(args.genetorrent_key)
     # Start Pipeline
-    samples = parse_genetorrent(args.genetorrent)
-    Job.Runner.startToil(Job.wrapJobFn(start_batch, inputs, samples), args)
+    Job.Runner.startToil(Job.wrapJobFn(start_batch, inputs), args)
 
 
 if __name__ == '__main__':
