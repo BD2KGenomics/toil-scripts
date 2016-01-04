@@ -21,7 +21,7 @@ Structure of RNA-Seq Pipeline (per sample)
                5
 
 0 = Download sample
-1 = Merge fastqs
+1 = Unpack/Merge fastqs
 2 = CutAdapt
 3 = STAR Alignment
 4 = RSEM Quantification
@@ -32,11 +32,8 @@ Structure of RNA-Seq Pipeline (per sample)
 =======================================
 Dependencies
 Curl:       apt-get install curl
-Docker:     apt-get install docker.io # docker.io if using linux, o.w. just docker
-Toil:       pip install git+https://github.com/BD2KGenomics/toil.git
-
-Optional (if uploading results to S3)
-Boto:       pip install boto
+Docker:     wget -qO- https://get.docker.com/ | sh
+Toil:       pip install toil
 """
 import os
 import argparse
@@ -63,10 +60,15 @@ def build_parser():
     group.add_argument('-d', '--dir', default=None,
                        help='Path to directory of samples. Samples must be tarfiles that contain fastq files. '
                             'The UUID for the sample will be derived from the file basename.')
-    group.add_argument('-s', '--sample_urls', nargs='?', default=None, type=str,
+    group.add_argument('-s', '--sample_urls', nargs='+', default=None, type=str,
                        help='Sample URLs (any number). Samples must be tarfiles that contain fastq files. '
                             'URLs follow the format of: https://www.address.com/file.tar or file:///full/path/file.tar.'
                             'The UUID for the sample will be derived from the file basename.')
+    group.add_argument('-g', '--genetorrent', default=None,
+                       help='Path to a file with one analysis ID per line for data hosted on CGHub.')
+    parser.add_argument('-k', '--genetorrent_key', default=None,
+                        help='Path to a CGHub key that has access to the TCGA data being requested. An exception will'
+                             'be thrown if "-g" is set but not this argument.')
     parser.add_argument('--starIndex', help='URL to download STAR Index built from HG38/gencodev23 annotation.',
                         default='https://s3-us-west-2.amazonaws.com/'
                                 'cgl-pipeline-inputs/rnaseq_cgl/starIndex_hg38_no_alt.tar.gz')
@@ -160,14 +162,14 @@ def download_encrypted_file(job, input_args, name):
     key_path = input_args['ssec']
     file_path = os.path.join(work_dir, name)
     url = input_args[name]
-
+    # Grab master key
     with open(key_path, 'r') as f:
         key = f.read()
     if len(key) != 32:
         raise RuntimeError('Invalid Key! Must be 32 bytes: {}'.format(key))
 
     key = generate_unique_key(key_path, url)
-
+    # Create necessary headers for SSE-C encryption and download
     encoded_key = base64.b64encode(key)
     encoded_key_md5 = base64.b64encode(hashlib.md5(key).digest())
     h1 = 'x-amz-server-side-encryption-customer-algorithm:AES256'
@@ -189,11 +191,10 @@ def download_from_url(job, url):
     """
     work_dir = job.fileStore.getLocalTempDir()
     file_path = os.path.join(work_dir, os.path.basename(url))
-    if not os.path.exists(file_path):
-        try:
-            subprocess.check_call(['curl', '-fs', '--retry', '5', '--create-dir', url, '-o', file_path])
-        except OSError:
-            raise RuntimeError('Failed to find "curl". Install via "apt-get install curl"')
+    try:
+        subprocess.check_call(['curl', '-fs', '--retry', '5', '--create-dir', url, '-o', file_path])
+    except OSError:
+        raise RuntimeError('Failed to find "curl". Install via "apt-get install curl"')
     assert os.path.exists(file_path)
     return job.fileStore.writeGlobalFile(file_path)
 
@@ -234,7 +235,7 @@ def docker_call(work_dir, tool_parameters, tool, java_opts=None, sudo=False, out
         else:
             subprocess.check_call(base_docker_call + [tool] + tool_parameters)
     except subprocess.CalledProcessError:
-        raise RuntimeError('docker command returned a non-zero exit status. Check error logs.')
+        raise RuntimeError('docker command returned a non-zero exit status: {}'.format(tool_parameters))
     except OSError:
         raise RuntimeError('docker not found on system. Install on all nodes.')
 
@@ -274,7 +275,7 @@ def tarball_files(work_dir, tar_name, uuid=None, files=None):
 
 def parse_config(path_to_config):
     """
-    Parses config file. Returns list of samples: [ [uuid1, url1], [uuid2, url2] ... ]
+    Parses config file. Returns list of samples: [ [uuid1, url1], [uuid2, url2], ... ]
     """
     samples = []
     with open(path_to_config, 'r') as f:
@@ -282,9 +283,40 @@ def parse_config(path_to_config):
             if not line.isspace():
                 sample = line.strip().split(',')
                 assert len(sample) == 2, 'Error: Config file is inappropriately formatted. Read documentation.'
-                assert sample[1].endswith('.tar'), 'Error: Samples must be tarfiles: {}'.format(sample[1])
                 samples.append(sample)
     return samples
+
+
+def parse_genetorrent(path_to_config):
+    """
+    Parses genetorrent config file.  Returns list of samples: [ [id1, id1 ], [id2, id2], ... ]
+    Returns duplicate of ids to follow UUID/URL standard.
+    """
+    samples = []
+    with open(path_to_config, 'r') as f:
+        for line in f.readlines():
+            if not line.isspace():
+                samples.append([line.strip(), line.strip()])
+    return samples
+
+
+def download_from_genetorrent(job, input_args, analysis_id):
+    """
+    Downloads a sample from CGHub via GeneTorrent.
+
+    input_args: dict        Dictionary of input arguments
+    analysis_id: str        An analysis ID for a sample in CGHub
+    """
+    work_dir = job.fileStore.getLocalTempDir()
+    folder_path = os.path.join(work_dir, os.path.basename(analysis_id))
+    sudo = input_args['sudo']
+    shutil.copy(input_args['genetorrent_key'], os.path.join(work_dir, 'cghub.key'))
+    parameters = ['-vv', '-c', 'cghub.key', '-d', analysis_id]
+    docker_call(tool='quay.io/ucsc_cgl/genetorrent:3.8.7--9911761265b6f08bc3ef09f53af05f56848d805b',
+                work_dir=work_dir, tool_parameters=parameters, sudo=sudo)
+    sample = glob.glob(os.path.join(folder_path, '*tar*'))
+    assert len(sample) == 1, 'More than one sample tar in CGHub download: {}'.format(analysis_id)
+    return job.fileStore.writeGlobalFile(sample[0])
 
 
 # Job Functions
@@ -294,7 +326,7 @@ def download_shared_files(job, input_args):
 
     input_args: dict        Dictionary of input arguments (from main())
     """
-    shared_files = ['starIndex.tar.gz', 'rsem_ref_hg38.tar.gz', 'kallisto_hg38.idx']
+    shared_files = ['rsem_ref_hg38.tar.gz', 'kallisto_hg38.idx']
     shared_ids = {}
     for f in shared_files:
         shared_ids[f] = job.addChildJobFn(download_from_url, input_args[f], disk='25G').rv()
@@ -311,14 +343,18 @@ def parse_input_samples(job, shared_ids, input_args):
     config = input_args['config']
     sample_dir = input_args['dir']
     sample_urls = input_args['sample_urls']
+    genetorrent = input_args['genetorrent']
     samples = None
     if config:
         samples = parse_config(config)
-    if sample_dir:
+    elif sample_dir:
         files = os.listdir(sample_dir)
-        samples = [[os.path.splitext(os.path.basename(f))[0], 'file://' + os.path.abspath(f)] for f in files]
-    if sample_urls:
+        samples = [[os.path.splitext(os.path.basename(f))[0],
+                    'file://' + os.path.join(sample_dir, os.path.basename(f))] for f in files]
+    elif sample_urls:
         samples = [[os.path.splitext(os.path.basename(f))[0], f] for f in sample_urls]
+    elif genetorrent:
+        samples = parse_genetorrent(genetorrent)
     for sample in samples:
         job.addChildJobFn(download_sample, shared_ids, input_args, sample)
 
@@ -341,13 +377,15 @@ def download_sample(job, ids, input_args, sample):
     sample_input['cpu_count'] = multiprocessing.cpu_count()
     job_vars = (sample_input, ids)
     # Download or locate local file and place in the jobStore
-    if urlparse(url).scheme == 'file':
+    if sample_input['genetorrent']:
+        ids['sample.tar'] = job.addChildJobFn(download_from_genetorrent, input_args, url, disk='40G').rv()
+    elif urlparse(url).scheme == 'file':
         ids['sample.tar'] = job.fileStore.writeGlobalFile(urlparse(url).path)
     else:
         if sample_input['ssec']:
-            ids['sample.tar'] = job.addChildJobFn(download_encrypted_file, sample_input, 'sample.tar', disk='25G').rv()
+            ids['sample.tar'] = job.addChildJobFn(download_encrypted_file, sample_input, 'sample.tar', disk='40G').rv()
         else:
-            ids['sample.tar'] = job.addChildJobFn(download_from_url, sample_input['sample.tar'], disk='25G').rv()
+            ids['sample.tar'] = job.addChildJobFn(download_from_url, sample_input['sample.tar'], disk='40G').rv()
     job.addFollowOnJobFn(static_dag_launchpoint, job_vars)
 
 
@@ -357,43 +395,73 @@ def static_dag_launchpoint(job, job_vars):
 
     job_vars: tuple     Tuple of dictionaries: input_args and ids
     """
-    a = job.wrapJobFn(merge_fastqs, job_vars, disk='70G').encapsulate()
+    a = job.wrapJobFn(process_sample_tar, job_vars, disk='70G').encapsulate()
     b = job.wrapJobFn(consolidate_output, job_vars, a.rv(), disk='2G')
     # Take advantage of "encapsulate" to simplify pipeline wiring
     job.addChild(a)
     a.addChild(b)
 
 
-def merge_fastqs(job, job_vars):
+def process_sample_tar(job, job_vars):
     """
-    Untars input sample and concats the Read1 and Read2 groups together.
+    Converts sample.tar(.gz) into two fastq files
 
     job_vars: tuple     Tuple of dictionaries: input_args and ids
     """
     # Unpack variables
     input_args, ids = job_vars
     work_dir = job.fileStore.getLocalTempDir()
+    ids['R.fastq'] = None
     # I/O
     read_from_filestore(job, work_dir, ids, 'sample.tar')
     sample_tar = os.path.join(work_dir, 'sample.tar')
     # Untar File and concat
     subprocess.check_call(['tar', '-xvf', sample_tar, '-C', work_dir])
     os.remove(os.path.join(work_dir, 'sample.tar'))
-    # TODO: Change for TCGA data _1 and _2
-    r1_files = sorted(glob.glob(os.path.join(work_dir, '*R1*')))
-    r2_files = sorted(glob.glob(os.path.join(work_dir, '*R2*')))
-    with open(os.path.join(work_dir, 'R1.fastq'), 'w') as f1:
-        p1 = subprocess.Popen(['zcat'] + r1_files, stdout=f1)
-    with open(os.path.join(work_dir, 'R2.fastq'), 'w') as f2:
-        p2 = subprocess.Popen(['zcat'] + r2_files, stdout=f2)
-    p1.wait()
-    p2.wait()
-    # Write to fileStore
-    ids['R1.fastq'] = job.fileStore.writeGlobalFile(os.path.join(work_dir, 'R1.fastq'))
-    ids['R2.fastq'] = job.fileStore.writeGlobalFile(os.path.join(work_dir, 'R2.fastq'))
+    # Grab R1/R2 if TCGA data
+    r1 = sorted(glob.glob(os.path.join(work_dir, '*_1*')))
+    r2 = sorted(glob.glob(os.path.join(work_dir, '*_2*')))
+    r = sorted(glob.glob(os.path.join(work_dir, '*')))
+    if not r1 or not r2:
+        # Check if using a different standard
+        r1 = sorted(glob.glob(os.path.join(work_dir, '*R1*')))
+        r2 = sorted(glob.glob(os.path.join(work_dir, '*R2*')))
+    if not r1 or not r2:
+        # Sample is assumed to be single-ended
+        if r[0].endswith('.gz'):
+            with open(os.path.join(work_dir, 'R.fastq'), 'w') as f:
+                subprocess.check_call(['zcat'] + r, stdout=f)
+        elif len(r) > 1:
+            with open(os.path.join(work_dir, 'R.fastq'), 'w') as f:
+                subprocess.check_call(['cat'] + r, stdout=f)
+        else:
+            shutil.move(r[0], os.path.join(work_dir, 'R.fastq'))
+        ids['R.fastq'] = job.fileStore.writeGlobalFile(os.path.join(work_dir, 'R.fastq'))
+
+    else:
+        # Sample is assumed to be paired end
+        if r1[0].endswith('.gz') and r2[0].endswith('.gz'):
+            with open(os.path.join(work_dir, 'R1.fastq'), 'w') as f1:
+                p1 = subprocess.Popen(['zcat'] + r1, stdout=f1)
+            with open(os.path.join(work_dir, 'R2.fastq'), 'w') as f2:
+                p2 = subprocess.Popen(['zcat'] + r2, stdout=f2)
+            p1.wait()
+            p2.wait()
+        elif len(r1) > 1 and len(r2) > 1:
+            with open(os.path.join(work_dir, 'R1.fastq'), 'w') as f1:
+                p1 = subprocess.Popen(['cat'] + r1, stdout=f1)
+            with open(os.path.join(work_dir, 'R2.fastq'), 'w') as f2:
+                p2 = subprocess.Popen(['cat'] + r2, stdout=f2)
+            p1.wait()
+            p2.wait()
+        else:
+            shutil.move(r1[0], os.path.join(work_dir, 'R1.fastq'))
+            shutil.move(r2[0], os.path.join(work_dir, 'R2.fastq'))
+        ids['R1.fastq'] = job.fileStore.writeGlobalFile(os.path.join(work_dir, 'R1.fastq'))
+        ids['R2.fastq'] = job.fileStore.writeGlobalFile(os.path.join(work_dir, 'R2.fastq'))
     job.fileStore.deleteGlobalFile(ids['sample.tar'])
     # Start cutadapt step
-    return job.addChildJobFn(cutadapt, job_vars, disk='150G').rv()
+    return job.addChildJobFn(cutadapt, job_vars, disk='100G').rv()
 
 
 def cutadapt(job, job_vars):
@@ -408,19 +476,38 @@ def cutadapt(job, job_vars):
     cores = input_args['cpu_count']
     work_dir = job.fileStore.getLocalTempDir()
     # Retrieve files
-    read_from_filestore(job, work_dir, ids, 'R1.fastq', 'R2.fastq')
-    # Call: CutAdapt
     parameters = ['-a', input_args['fwd_3pr_adapter'],
-                  '-A', input_args['rev_3pr_adapter'],
-                  '-m', '35',
-                  '-o', '/data/R1_cutadapt.fastq',
-                  '-p', '/data/R2_cutadapt.fastq',
-                  '/data/R1.fastq', '/data/R2.fastq']
-    docker_call(tool='quay.io/ucsc_cgl/cutadapt:1.9--6bd44edd2b8f8f17e25c5a268fedaab65fa851d2',
-                work_dir=work_dir, tool_parameters=parameters, sudo=sudo)
+                  '-m', '35']
+    if ids['R.fastq']:
+        read_from_filestore(job, work_dir, ids, 'R.fastq')
+        parameters.extend(['-o', '/data/R_cutadapt.fastq', '/data/R.fastq'])
+    else:
+        read_from_filestore(job, work_dir, ids, 'R1.fastq', 'R2.fastq')
+        parameters.extend(['-A', input_args['rev_3pr_adapter'],
+                           '-o', '/data/R1_cutadapt.fastq',
+                           '-p', '/data/R2_cutadapt.fastq',
+                           '/data/R1.fastq', '/data/R2.fastq'])
+    # Call: CutAdapt
+    try:
+        docker_call(tool='quay.io/ucsc_cgl/cutadapt:1.9--6bd44edd2b8f8f17e25c5a268fedaab65fa851d2',
+                    work_dir=work_dir, tool_parameters=parameters, sudo=sudo)
+    except RuntimeError as e:
+        if 'improperly paired' in e.message:
+            input_args['improper_pair'] = True
+            if ids['R.fastq']:
+                shutil.move(os.path.join(work_dir, 'R.fastq'), os.path.join(work_dir, 'R_cutadapt.fastq'))
+            else:
+                shutil.move(os.path.join(work_dir, 'R1.fastq'), os.path.join(work_dir, 'R1_cutadapt.fastq'))
+                shutil.move(os.path.join(work_dir, 'R1.fastq'), os.path.join(work_dir, 'R2_cutadapt.fastq'))
+        else:
+            raise e
     # Write to fileStore
-    ids['R1_cutadapt.fastq'] = job.fileStore.writeGlobalFile(os.path.join(work_dir, 'R1_cutadapt.fastq'))
-    ids['R2_cutadapt.fastq'] = job.fileStore.writeGlobalFile(os.path.join(work_dir, 'R2_cutadapt.fastq'))
+    if ids['R.fastq']:
+        ids['R_cutadapt.fastq'] = job.fileStore.writeGlobalFile(os.path.join(work_dir, 'R_cutadapt.fastq'))
+    else:
+        ids['R_cutadapt.fastq'] = None
+        ids['R1_cutadapt.fastq'] = job.fileStore.writeGlobalFile(os.path.join(work_dir, 'R1_cutadapt.fastq'))
+        ids['R2_cutadapt.fastq'] = job.fileStore.writeGlobalFile(os.path.join(work_dir, 'R2_cutadapt.fastq'))
     # start STAR and Kallisto steps
     rsem_output = job.addChildJobFn(star, job_vars, cores=cores, disk='150G', memory='40G').rv()
     kallisto_output = job.addChildJobFn(kallisto, job_vars, cores=cores, disk='100G').rv()
@@ -440,15 +527,19 @@ def kallisto(job, job_vars):
     uuid = input_args['uuid']
     work_dir = job.fileStore.getLocalTempDir()
     # Retrieve files
-    read_from_filestore(job, work_dir, ids, 'R1_cutadapt.fastq', 'R2_cutadapt.fastq', 'kallisto_hg38.idx')
-    # Call: Kallisto
     parameters = ['quant',
                   '-i', '/data/kallisto_hg38.idx',
                   '-t', str(cores),
                   '-o', '/data/',
-                  '-b', '100',
-                  '/data/R1_cutadapt.fastq',
-                  '/data/R2_cutadapt.fastq']
+                  '-b', '100']
+    if ids['R_cutadapt.fastq']:
+        # TODO: Look into fragment length and SD calculations
+        read_from_filestore(job, work_dir, ids, 'R_cutadapt.fastq', 'kallisto_hg38.idx')
+        parameters.extend(['--single', '-l', '200', '-s', '15', '/data/R_cutadapt.fastq'])
+    else:
+        read_from_filestore(job, work_dir, ids, 'R1_cutadapt.fastq', 'R2_cutadapt.fastq', 'kallisto_hg38.idx')
+        parameters.extend(['/data/R1_cutadapt.fastq', '/data/R2_cutadapt.fastq'])
+    # Call: Kallisto
     docker_call(tool='quay.io/ucsc_cgl/kallisto:0.42.4--35ac87df5b21a8e8e8d159f26864ac1e1db8cf86',
                 work_dir=work_dir, tool_parameters=parameters, sudo=sudo)
     # Tar output files together and store in fileStore
@@ -468,13 +559,9 @@ def star(job, job_vars):
     sudo = input_args['sudo']
     cores = input_args['cpu_count']
     work_dir = job.fileStore.getLocalTempDir()
-    # Retrieve files
-    read_from_filestore(job, work_dir, ids, 'R1_cutadapt.fastq', 'R2_cutadapt.fastq', 'starIndex.tar.gz')
-    subprocess.check_call(['tar', '-zxvf', os.path.join(work_dir, 'starIndex.tar.gz'), '-C', work_dir])
-    # Call: STAR Map
+    # Parameters and input retrieval
     parameters = ['--runThreadN', str(cores),
                   '--genomeDir', '/data/starIndex',
-                  '--readFilesIn', '/data/R1_cutadapt.fastq', '/data/R2_cutadapt.fastq',
                   '--outFileNamePrefix', 'rna',
                   '--outSAMtype', 'BAM', 'SortedByCoordinate',
                   '--outSAMunmapped', 'Within',
@@ -491,12 +578,22 @@ def star(job, job_vars):
                   '--alignSJDBoverhangMin', '1',
                   '--sjdbScore', '1',
                   '--outBAMcompression', '-1']
+    subprocess.check_call(['curl', '-fs', '--retry', '5', '--create-dir', input_args['starIndex.tar.gz'], '-o',
+                           os.path.join(work_dir, 'starIndex.tar.gz')])
+    if ids['R_cutadapt.fastq']:
+        read_from_filestore(job, work_dir, ids, 'R_cutadapt.fastq')
+        parameters.extend(['--readFilesIn', '/data/R_cutadapt.fastq'])
+    else:
+        read_from_filestore(job, work_dir, ids, 'R1_cutadapt.fastq', 'R2_cutadapt.fastq')
+        parameters.extend(['--readFilesIn', '/data/R1_cutadapt.fastq', '/data/R2_cutadapt.fastq'])
+    subprocess.check_call(['tar', '-xvf', os.path.join(work_dir, 'starIndex.tar.gz'), '-C', work_dir])
+    # Call: STAR Map
     docker_call(tool='quay.io/ucsc_cgl/star:2.4.2a--bcbd5122b69ff6ac4ef61958e47bde94001cfe80',
                 work_dir=work_dir, tool_parameters=parameters, sudo=sudo)
     # Write to fileStore
     ids['transcriptome.bam'] = job.fileStore.writeGlobalFile(os.path.join(work_dir,
                                                                           'rnaAligned.toTranscriptome.out.bam'))
-    # RSEM doesn't use more than 16 cores, so be efficient
+    # RSEM doesn't tend to use more than 16 cores
     cores = 16 if cores >= 16 else cores
     return job.addChildJobFn(rsem, job_vars, cores=cores, disk='50G').rv()
 
@@ -519,7 +616,6 @@ def rsem(job, job_vars):
     # Call: RSEM
     parameters = ['--quiet',
                   '--no-qualities',
-                  '--paired-end',
                   '-p', str(cores),
                   '--forward-prob', '0.5',
                   '--seed-length', '25',
@@ -527,7 +623,8 @@ def rsem(job, job_vars):
                   '--bam', '/data/transcriptome.bam',
                   '/data/rsem_ref_hg38/hg38',
                   output_prefix]
-
+    if not ids['R_cutadapt.fastq']:
+        parameters = ['--paired-end'] + parameters
     docker_call(tool='quay.io/ucsc_cgl/rsem:1.2.25--d4275175cc8df36967db460b06337a14f40d2f21',
                 tool_parameters=parameters, work_dir=work_dir, sudo=sudo)
     os.rename(os.path.join(work_dir, output_prefix+'.genes.results'), os.path.join(work_dir, 'rsem_gene.tab'))
@@ -578,6 +675,8 @@ def consolidate_output(job, job_vars, output_ids):
     rsem_tar = job.fileStore.readGlobalFile(rsem_id, os.path.join(work_dir, 'rsem.tar.gz'))
     kallisto_tar = job.fileStore.readGlobalFile(kallisto_id, os.path.join(work_dir, 'kallisto.tar.gz'))
     # I/O
+    if input_args['improper_pair']:
+        uuid = 'IMPROPERLY_PAIRED-' + uuid
     out_tar = os.path.join(work_dir, uuid + '.tar.gz')
     # Consolidate separate tarballs into one as streams (avoids unnecessary untaring)
     with tarfile.open(os.path.join(work_dir, out_tar), 'w:gz') as f_out:
@@ -590,6 +689,10 @@ def consolidate_output(job, job_vars, output_ids):
                         else:
                             tarinfo.name = os.path.join(uuid, 'Kallisto', os.path.basename(tarinfo.name))
                         f_out.addfile(tarinfo, fileobj=f_in_file)
+        if input_args['improper_pair']:
+            with open(os.path.join(work_dir, 'WARNING.txt'), 'w') as f:
+                f.write('cutadapt: error: Reads are improperly paired. Uneven number of reads in fastq pair.')
+            f_out.add(os.path.join(work_dir, 'WARNING.txt'))
     # Move to output directory of selected
     if input_args['output_dir']:
         output_dir = input_args['output_dir']
@@ -645,6 +748,8 @@ def main():
     inputs = {'config': args.config,
               'dir': args.dir,
               'sample_urls': args.sample_urls,
+              'genetorrent': args.genetorrent,
+              'genetorrent_key': args.genetorrent_key,
               'starIndex.tar.gz': args.starIndex,
               'rsem_ref_hg38.tar.gz': args.rsemRef,
               'kallisto_hg38.idx': args.kallistoIndex,
@@ -656,8 +761,8 @@ def main():
               'sudo': args.sudo,
               'uuid': None,
               'sample.tar': None,
-              'cpu_count': None}
-
+              'cpu_count': None,
+              'improper_pair': None}
     # Sanity checks
     if args.ssec:
         assert os.path.isfile(args.ssec)
@@ -668,6 +773,13 @@ def main():
         assert os.listdir(args.dir) != []
     if args.sample_urls:
         assert args.sample_urls != []
+    if args.genetorrent:
+        assert os.path.isfile(args.genetorrent)
+    if args.genetorrent_key:
+        assert os.path.isfile(args.genetorrent_key)
+    # Genetorrent key must be provided along with genetorrent option
+    if args.genetorrent and not args.genetorrent_key:
+        raise RuntimeError("Cannot supply -genetorrent without -genetorrent_key")
 
     # Start Pipeline
     Job.Runner.startToil(Job.wrapJobFn(download_shared_files, inputs), args)
