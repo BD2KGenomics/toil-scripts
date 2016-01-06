@@ -94,6 +94,8 @@ def build_parser():
                         default='https://s3-us-west-2.amazonaws.com/cgl-pipeline-inputs/rna-seq/ebwt.zip')
     parser.add_argument('--ssec', help='Path to Key File for SSE-C Encryption')
     parser.add_argument('--output_dir', default=None, help='full path where final results will be output')
+    parser.add_argument('--upload_bam_to_s3', default=False, action='store_true',
+                        help='uploads alignment bam to S3 directory specified.')
     parser.add_argument('--s3_dir', default=None, help='S3 Directory, starting with bucket name. e.g.: '
                                                        'cgl-driver-projects/ckcc/rna-seq-samples/')
     parser.add_argument('--sudo', dest='sudo', action='store_true', default=False,
@@ -448,6 +450,8 @@ def mapsplice(job, job_vars):
         job.fileStore.deleteGlobalFile(ids[fname])
     # Run child job
     # map_id = job.addChildJobFn(mapping_stats, job_vars).rv()
+    if input_args['upload_bam_to_s3'] and input_args['s3_dir']:
+        job.addChildJobFn(upload_bam_to_s3, job_vars)
     output_ids = job.addChildJobFn(add_read_groups, job_vars, disk='30 G').rv()
     return output_ids
 
@@ -529,7 +533,7 @@ def bamsort_and_index(job, job_vars):
     # Run child job
     output_ids = job.addChildJobFn(sort_bam_by_reference, job_vars, disk='50 G').rv()
     rseq_id = job.addChildJobFn(rseq_qc, job_vars, disk='20 G').rv()
-    return (rseq_id, output_ids)
+    return rseq_id, output_ids
 
 
 def rseq_qc(job, job_vars):
@@ -588,7 +592,7 @@ def sort_bam_by_reference(job, job_vars):
     ids['sort_by_ref.bam'] = job.fileStore.writeGlobalFile(output)
     rsem_id = job.addChildJobFn(transcriptome, job_vars, disk='30 G', memory='30 G').rv()
     exon_id = job.addChildJobFn(exon_count, job_vars, disk='30 G').rv()
-    return (exon_id, rsem_id)
+    return exon_id, rsem_id
 
 
 def exon_count(job, job_vars):
@@ -708,7 +712,6 @@ def rsem(job, job_vars):
     # Make tool call to Docker
     parameters = ['--quiet',
                   '--no-qualities',
-                  '--paired-end',
                   '-p', str(cpus),
                   '--forward-prob', '0.5',
                   '--seed-length', '25',
@@ -791,10 +794,10 @@ def consolidate_output(job, job_vars, output_ids):
     ids['uuid.tar.gz'] = job.fileStore.writeGlobalFile(out_tar)
     # If S3 bucket argument specified, upload to S3
     if input_args['s3_dir']:
-        job.addChildJobFn(upload_to_s3, job_vars)
+        job.addChildJobFn(upload_output_to_s3, job_vars)
 
 
-def upload_to_s3(job, job_vars):
+def upload_output_to_s3(job, job_vars):
     """
     If s3_dir is specified in arguments, file will be uploaded to S3 using boto.
     WARNING: ~/.boto credentials are necessary for this to succeed!
@@ -819,6 +822,29 @@ def upload_to_s3(job, job_vars):
     k = Key(bucket)
     k.key = os.path.join(bucket_dir, uuid + '.tar.gz')
     k.set_contents_from_filename(uuid_tar)
+
+
+def upload_bam_to_s3(job, job_vars):
+    """
+    Upload bam to S3. Requires S3AM and a ~/.boto config file.
+    """
+    input_args, ids = job_vars
+    work_dir = job.fileStore.getLocalTempDir()
+    uuid = input_args['uuid']
+    # I/O
+    uuid_bam = return_input_paths(work_dir, ids, 'alignments.bam')
+    sample_name = uuid + '.bam'
+    # Parse s3_dir to get bucket and s3 path
+    s3_dir = input_args['s3_dir']
+    bucket_name = s3_dir.split('/')[0]
+    bucket_dir = '/'.join(s3_dir.split('/')[1:])
+    # Upload to S3 via S3AM
+    s3am_command = ['s3am',
+                    'upload',
+                    'file://{}'.format(os.path.join(work_dir, uuid_bam)),
+                    bucket_name,
+                    os.path.join(bucket_dir, sample_name)]
+    subprocess.check_call(s3am_command)
 
 
 def main():
@@ -847,6 +873,7 @@ def main():
               's3_dir': args.s3_dir,
               'sudo': args.sudo,
               'single_end_reads': args.single_end_reads,
+              'upload_bam_to_s3': args.upload_bam_to_s3,
               'uuid': None,
               'sample.tar': None,
               'cpu_count': None}
