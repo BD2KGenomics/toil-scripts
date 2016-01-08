@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 export TMPDIR=/var/lib/toil/ # unnecessary
 mkdir -p /var/lib/toil/final_output
-python batch_align.py \
+export PYTHONPATH=$(python -c 'from os.path import abspath as a, dirname as d;import sys;print d(d(d(d(a(sys.argv[1])))))' $0)
+python -m toil_scripts.batch_alignment.old_alignment_script.batch_align \
 aws:us-west-2:wcdt-toil-alignment-run-1 \
 --retryCount 1 \
 -c /home/mesosbox/shared/config.txt \

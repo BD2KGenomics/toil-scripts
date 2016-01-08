@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 export TMPDIR=/mnt
 mkdir -p "/mnt/final_output"
-python batch_align.py \
+export PYTHONPATH=$(python -c 'from os.path import abspath as a, dirname as d;import sys;print d(d(d(d(a(sys.argv[1])))))' $0)
+python -m toil_scripts.batch_alignment.old_alignment_script.batch_align \
 /mnt/jstore \
 --retryCount 3 \
 -c config.txt \

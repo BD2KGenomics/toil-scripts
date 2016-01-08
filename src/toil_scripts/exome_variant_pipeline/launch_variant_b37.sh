@@ -6,7 +6,8 @@
 # Precautionary step: Create location where jobStore and tmp files will exist
 mkdir -p ${HOME}/toil_mnt
 # Execution of pipeline
-python exome_variant_pipeline.py \
+export PYTHONPATH=$(python -c 'from os.path import abspath as a, dirname as d;import sys;print d(d(d(a(sys.argv[1]))))' $0)
+python -m toil_scripts.exome_variant_pipeline.exome_variant_pipeline \
 ${HOME}/toil_mnt/jobStore \
 --retryCount 1 \
 --config 'exome_variant_config.csv' \
