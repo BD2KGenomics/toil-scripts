@@ -3,7 +3,8 @@
 #
 # Please read the associated README.md before attempting to use.
 #
-python rnaseq_unc_pipeline.py \
+export PYTHONPATH=$(python -c 'from os.path import abspath as a, dirname as d;import sys;print d(d(d(a(sys.argv[1]))))' $0)
+python -m toil_scripts.rnaseq_unc.rnaseq_unc_pipeline \
 aws:us-west-2:unc-pipeline-run-1 \
 --retryCount 1 \
 --config toil_rnaseq_config.csv \

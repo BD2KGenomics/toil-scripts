@@ -6,7 +6,8 @@
 # Precautionary step: Create location where jobStore and tmp files will exist
 mkdir -p ${HOME}/toil_mnt
 # Execution of pipeline
-python rnaseq_unc_pipeline.py \
+export PYTHONPATH=$(python -c 'from os.path import abspath as a, dirname as d;import sys;print d(d(d(a(sys.argv[1]))))' $0)
+python -m toil_scripts.rnaseq_unc.rnaseq_unc_pipeline \
 ${HOME}/toil_mnt/jstore \
 --config unc_config.csv \
 --retryCount 2 \
