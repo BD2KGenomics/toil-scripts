@@ -6,8 +6,10 @@
 Toil pipeline for exome variant analysis
 
 Tree Structure of variant pipeline (per sample)
-   0------------> 5 ----------> 14
-/ / \ \          / \
+
+                        /-------> 14 --\
+   0------------> 5 ------------> 15 ------> 17 ---> 18
+/ / \ \          / \    \-------> 16 --/
 1 2 3 4         6   7
                 |   |
                 8   9
@@ -27,6 +29,10 @@ Tree Structure of variant pipeline (per sample)
 10,11 = BaseRecalibration
 12,13 = PrintReads
 14 = MuTect
+15 = Pindel
+16 = MuSe
+17 = Consolidate Output
+18 = Upload to S3
 ===================================================================
 :Dependencies:
 curl            - apt-get install curl
@@ -39,6 +45,8 @@ S3AM            - pip install --pre s3am (requires ~/.boto)
 import argparse
 import base64
 from collections import OrderedDict
+from contextlib import closing
+import glob
 import hashlib
 import os
 import shutil
@@ -53,7 +61,7 @@ def build_parser():
     """
     Contains argparse arguments
     """
-    parser = argparse.ArgumentParser(description=main.__doc__, add_help=True)
+    parser = argparse.ArgumentParser(description=main.__doc__, formatter_class=argparse.RawTextHelpFormatter)
     parser.add_argument('-r', '--reference', required=True, help="Reference Genome URL")
     parser.add_argument('-f', '--config', required=True, help="Each line contains (CSV): UUID,Normal_URL,Tumor_URL")
     parser.add_argument('-p', '--phase', required=True, help='1000G_phase1.indels.hg19.sites.fixed.vcf URL')
@@ -82,6 +90,21 @@ def mkdir_p(path):
             pass
         else:
             raise
+
+
+def flatten(x):
+    """
+    Flattens a nested array into a single list
+
+    x: list/tuple       The nested list/tuple to be flattened.
+    """
+    result = []
+    for el in x:
+        if hasattr(el, "__iter__") and not isinstance(el, basestring):
+            result.extend(flatten(el))
+        else:
+            result.append(el)
+    return result
 
 
 def generate_unique_key(master_key_path, url):
@@ -215,8 +238,8 @@ def docker_call(work_dir, tool_parameters, tool, java_opts=None, outfile=None, s
             subprocess.check_call(base_docker_call + [tool] + tool_parameters, stdout=outfile)
         else:
             subprocess.check_call(base_docker_call + [tool] + tool_parameters)
-    except subprocess.CalledProcessError:
-        raise RuntimeError('docker command returned a non-zero exit status. Check error logs.')
+    except subprocess.CalledProcessError, e:
+        raise RuntimeError('docker command returned a non-zero exit status. {}'.format(e))
     except OSError:
         raise RuntimeError('docker not found on system. Install on all nodes.')
 
@@ -237,6 +260,25 @@ def tarball_files(work_dir, tar_name, uuid=None, files=None):
             else:
                 f_out.add(os.path.join(work_dir, fname), arcname=fname)
 
+
+def getMeanInsertSize(work_dir, bam_path):
+    cmd = "sudo docker run --log-driver=none --rm -v {}:/data quay.io/ucsc_cgl/samtools " \
+          "view -f66 {}".format(work_dir, bam_path)
+    process = subprocess.Popen(args=cmd, shell=True, stdout=subprocess.PIPE)
+    b_sum = 0L
+    b_count = 0L
+    while True:
+        line = process.stdout.readline()
+        if not line:
+            break
+        tmp = line.split("\t")
+        if abs(long(tmp[8])) < 10000:
+            b_sum += abs(long(tmp[8]))
+            b_count +=1
+    process.wait()
+    mean = b_sum / b_count
+    print "Using insert size: %d" % (mean)
+    return int(mean)
 
 # Start of Job Functions
 def download_shared_files(job, input_args):
@@ -353,11 +395,17 @@ def pipeline_launchpoint(job, job_vars):
 
     job_vars: tuple     Contains the input_args and ids dictionaries
     """
-    a = job.wrapJobFn(index_bams, job_vars).encapsulate()
-    b = job.wrapJobFn(mutect, job_vars, a.rv())
-    # Since A encapsulates all of the pre-processing, mutect can be added as a child of A
-    job.addChild(a)
-    a.addChild(b)
+    pre_processing = job.wrapJobFn(index_bams, job_vars).encapsulate()
+    run_mutect = job.wrapJobFn(mutect, job_vars, pre_processing.rv())
+    run_pindel = job.wrapJobFn(pindel, job_vars, pre_processing.rv())
+    run_muse = job.wrapJobFn(muse, job_vars, pre_processing.rv())
+    consolidate = job.wrapJobFn(consolidate_output, job_vars, run_mutect.rv(), run_pindel.rv(), run_muse.rv())
+    # Wire up DAG
+    job.addChild(pre_processing)
+    pre_processing.addChild(run_mutect)
+    pre_processing.addChild(run_pindel)
+    pre_processing.addChild(run_muse)
+    pre_processing.addFollowOn(consolidate)
 
 
 def index_bams(job, job_vars):
@@ -569,32 +617,146 @@ def mutect(job, job_vars, bam_ids):
     docker_call(work_dir=work_dir, tool_parameters=parameters,
                 tool='quay.io/ucsc_cgl/mutect:1.1.7--e8bf09459cf0aecb9f55ee689c2b2d194754cbd3', sudo=sudo)
     # Tarball files
-    tarball_files(work_dir, uuid + '.tar.gz', files=[uuid + '.vcf', uuid + '.cov', uuid + '.out'])
-    # Write to fileStore
-    mutect_id = job.fileStore.writeGlobalFile(os.path.join(work_dir, uuid + '.tar.gz'))
+    tarball_files(work_dir, 'mutect.tar.gz', files=[uuid + '.vcf', uuid + '.cov', uuid + '.out'])
+    # Return fileStore ID
+    return job.fileStore.writeGlobalFile(os.path.join(work_dir, 'mutect.tar.gz'))
+
+
+def pindel(job, job_vars, bam_ids):
+    """
+    Calls Pindel to compute indels / deletions in
+
+    job_vars: tuple     Contains the input_args and ids dictionaries
+    bam_ids: tuple      Contains a tuple of normal/tumor fileStore ids for bams and index files (bai)
+    """
+    # Unpack convenience variables for job
+    normal_ids, tumor_ids = bam_ids
+    normal_bam_id, normal_bai_id = normal_ids
+    tumor_bam_id, tumor_bai_id = tumor_ids
+    input_args, ids = job_vars
+    sudo = input_args['sudo']
+    uuid = input_args['uuid']
+    cores = input_args['cpu_count']
+    work_dir = job.fileStore.getLocalTempDir()
+    # Retrieve input files
+    job.fileStore.readGlobalFile(normal_bam_id, os.path.join(work_dir, 'normal.bam'))
+    job.fileStore.readGlobalFile(normal_bai_id, os.path.join(work_dir, 'normal.bai'))
+    job.fileStore.readGlobalFile(tumor_bam_id, os.path.join(work_dir, 'tumor.bam'))
+    job.fileStore.readGlobalFile(tumor_bai_id, os.path.join(work_dir, 'tumor.bai'))
+    return_input_paths(job, work_dir, ids, 'ref.fasta')
+    # Call: Pindel
+    parameters = ['-f', '/data/ref.fasta',
+                  '-i', '/data/config.txt',
+                  '--number_of_threads', cores,
+                  '--minimum_support_for_event', '3',
+                  '--report_long_insertions', 'true',
+                  '--report_breakpoints', 'true',
+                  '-o', uuid]
+    docker_call(tool='quay.io/ucsc_cgl/pindel:0.2.5b6--4e8d1b31d4028f464b3409c6558fb9dfcad73f88',
+                work_dir=work_dir, tool_parameters=parameters, sudo=sudo)
+    output_files = [f for f in glob.glob(os.path.join(work_dir, '*')) if '.bam' not in f and '.bai' not in f]
+    tarball_files(work_dir, 'pindel.tar.gz', files=[output_files])
+    # Return fileStore ID
+    return job.fileStore.writeGlobalFile(os.path.join(work_dir, 'pindel.tar.gz'))
+
+
+def muse(job, job_vars, bam_ids):
+    """
+    Calls MuSe to find variants
+
+    job_vars: tuple     Contains the input_args and ids dictionaries
+    bam_ids: tuple      Contains a tuple of normal/tumor fileStore ids for bams and index files (bai)
+    """
+    # Unpack convenience variables for job
+    normal_ids, tumor_ids = bam_ids
+    normal_bam_id, normal_bai_id = normal_ids
+    tumor_bam_id, tumor_bai_id = tumor_ids
+    input_args, ids = job_vars
+    sudo = input_args['sudo']
+    uuid = input_args['uuid']
+    cores = int(input_args['cpu_count'])
+    output_name = uuid + '.muse.vcf'
+    work_dir = job.fileStore.getLocalTempDir()
+    # Retrieve input files
+    job.fileStore.readGlobalFile(normal_bam_id, os.path.join(work_dir, 'normal.bam'))
+    job.fileStore.readGlobalFile(normal_bai_id, os.path.join(work_dir, 'normal.bai'))
+    job.fileStore.readGlobalFile(tumor_bam_id, os.path.join(work_dir, 'tumor.bam'))
+    job.fileStore.readGlobalFile(tumor_bai_id, os.path.join(work_dir, 'tumor.bai'))
+    return_input_paths(job, work_dir, ids, 'ref.fasta', 'dbsnp.vcf', 'ref.fasta.fai', 'ref.dict')
+    # Call: MuSE
+    parameters = ['--muse', 'MuSEv1.0rc',
+                  '--mode', 'wxs',
+                  '--dbsnp', 'dbsnp.vcf',
+                  '--fafile', 'ref.fasta',
+                  '--tumor-bam', 'tumor.bam',
+                  '--tumor-bam-index', 'tumor.bam.bai',
+                  '--normal-bam', 'normal.bam',
+                  '--normal-bam-index', 'normal.bam.bai',
+                  '--outfile', output_name,
+                  '--cpus', cores]
+    docker_call(tool='quay.io/ucsc_cgl/muse:1.0--6add9b0a1662d44fd13bbc1f32eac49326e48562',
+                work_dir=work_dir, tool_parameters=parameters, sudo=sudo)
+    tarball_files(work_dir, 'pindel.tar.gz', files=[output_name])
+    # Return fileStore ID
+    return job.fileStore.writeGlobalFile(os.path.join(work_dir, 'pindel.tar.gz'))
+
+
+def consolidate_output(job, job_vars, mutect_id, pindel_id, muse_id):
+    """
+    Combine the contents of separate zipped outputs into one via streaming
+
+    job_vars: tuple     Tuple of dictionaries: input_args and ids
+    output_ids: tuple   Nested tuple of all the output fileStore IDs
+    """
+    input_args, ids = job_vars
+    work_dir = job.fileStore.getLocalTempDir()
+    uuid = input_args['uuid']
+    # Retrieve output file paths to consolidate
+    mutect_tar = job.fileStore.readGlobalFile(mutect_id, os.path.join(work_dir, 'mutect.tar.gz'))
+    pindel_tar = job.fileStore.readGlobalFile(pindel_id, os.path.join(work_dir, 'pindel.tar.gz'))
+    muse_tar = job.fileStore.readGlobalFile(muse_id, os.path.join(work_dir, 'muse.tar.gz'))
+    # I/O
+    out_tar = os.path.join(work_dir, uuid + '.tar.gz')
+    # Consolidate separate tarballs into one as streams (avoids unnecessary untaring)
+    with tarfile.open(os.path.join(work_dir, out_tar), 'w:gz') as f_out:
+        for tar in [mutect_tar, pindel_tar, muse_tar]:
+            with tarfile.open(tar, 'r') as f_in:
+                for tarinfo in f_in:
+                    with closing(f_in.extractfile(tarinfo)) as f_in_file:
+                        if tar == mutect_tar:
+                            tarinfo.name = os.path.join(uuid, 'MuTect', os.path.basename(tarinfo.name))
+                        elif tar == pindel_tar:
+                            tarinfo.name = os.path.join(uuid, 'Kallisto', os.path.basename(tarinfo.name))
+                        else:
+                            tarinfo.name = os.path.join(uuid, 'MuSe', os.path.basename(tarinfo.name))
+                        f_out.addfile(tarinfo, fileobj=f_in_file)
+    # Move to output directory of selected
     if input_args['output_dir']:
         output_dir = input_args['output_dir']
         mkdir_p(output_dir)
-        copy_to_output_dir(work_dir, output_dir, uuid=None, files=[uuid + 'tar.gz'])
+        copy_to_output_dir(work_dir, output_dir, uuid=None, files=[uuid + '.tar.gz'])
+    # Write output file to fileStore
+    output_tar = job.fileStore.writeGlobalFile(out_tar)
+    # If S3 bucket argument specified, upload to S3
     if input_args['s3_dir']:
-        job.addChildJobFn(upload_output_to_s3, mutect_id, input_args)
+        job.addChildJobFn(upload_output_to_s3, job_vars, output_tar)
 
 
-def upload_output_to_s3(job, mutect_id, input_args):
+def upload_output_to_s3(job, input_args, output_tar):
     """
     Uploads Mutect files to S3 using S3AM
 
     mutect_id: str      FileStore ID for the mutect.vcf
     input_args: dict    Dictionary of input arguments
     """
-    uuid = input_args['uuid']
     work_dir = job.fileStore.getLocalTempDir()
+    uuid = input_args['uuid']
     # Parse s3_dir to get bucket and s3 path
     s3_dir = input_args['s3_dir']
     bucket_name = s3_dir.lstrip('/').split('/')[0]
     bucket_dir = '/'.join(s3_dir.lstrip('/').split('/')[1:])
     # Retrieve VCF file
-    job.fileStore.readGlobalFile(mutect_id, os.path.join(work_dir, uuid + '.tar.gz'))
+    job.fileStore.readGlobalFile(output_tar, os.path.join(work_dir, uuid + '.tar.gz'))
     # Upload to S3 via S3AM
     s3am_command = ['s3am',
                     'upload',
