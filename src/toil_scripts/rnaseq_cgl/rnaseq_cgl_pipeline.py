@@ -43,6 +43,7 @@ import glob
 import hashlib
 import errno
 import subprocess
+from subprocess import PIPE
 import shutil
 import tarfile
 import multiprocessing
@@ -319,6 +320,7 @@ def download_from_genetorrent(job, input_args, analysis_id):
     return job.fileStore.writeGlobalFile(sample[0])
 
 
+# TODO: Remove shared inputs entirely for optimization
 # Job Functions
 def download_shared_files(job, input_args):
     """
@@ -416,52 +418,65 @@ def process_sample_tar(job, job_vars):
     read_from_filestore(job, work_dir, ids, 'sample.tar')
     sample_tar = os.path.join(work_dir, 'sample.tar')
     # Untar File and concat
-    subprocess.check_call(['tar', '-xvf', sample_tar, '-C', work_dir])
-    os.remove(os.path.join(work_dir, 'sample.tar'))
-    # Grab R1/R2 if TCGA data
-    r1 = sorted(glob.glob(os.path.join(work_dir, '*_1*')))
-    r2 = sorted(glob.glob(os.path.join(work_dir, '*_2*')))
-    r = sorted(glob.glob(os.path.join(work_dir, '*')))
-    if not r1 or not r2:
-        # Check if using a different standard
-        r1 = sorted(glob.glob(os.path.join(work_dir, '*R1*')))
-        r2 = sorted(glob.glob(os.path.join(work_dir, '*R2*')))
-    if not r1 or not r2:
-        # Sample is assumed to be single-ended
-        if r[0].endswith('.gz'):
-            with open(os.path.join(work_dir, 'R.fastq'), 'w') as f:
-                subprocess.check_call(['zcat'] + r, stdout=f)
-        elif len(r) > 1:
-            with open(os.path.join(work_dir, 'R.fastq'), 'w') as f:
-                subprocess.check_call(['cat'] + r, stdout=f)
+    p = subprocess.Popen(['tar', '-xvf', sample_tar, '-C', work_dir], stderr=PIPE, stdout=PIPE)
+    stdout, stderr = p.communicate()
+    if p.returncode != 0:
+        # Handle error if tar archive is corrupt
+        if 'EOF' in stderr:
+            with open(os.path.join(work_dir, 'error.txt'), 'w') as f:
+                f.write(stderr)
+                f.write(stdout)
+            ids['error.txt'] = job.fileStore.writeGlobalFile(os.path.join(work_dir, 'error.txt'))
+            if input_args['s3_dir']:
+                job.addChildJobFn(upload_to_s3, job_vars)
         else:
-            shutil.move(r[0], os.path.join(work_dir, 'R.fastq'))
-        ids['R.fastq'] = job.fileStore.writeGlobalFile(os.path.join(work_dir, 'R.fastq'))
-
+            raise subprocess.CalledProcessError
     else:
-        # Sample is assumed to be paired end
-        if r1[0].endswith('.gz') and r2[0].endswith('.gz'):
-            with open(os.path.join(work_dir, 'R1.fastq'), 'w') as f1:
-                p1 = subprocess.Popen(['zcat'] + r1, stdout=f1)
-            with open(os.path.join(work_dir, 'R2.fastq'), 'w') as f2:
-                p2 = subprocess.Popen(['zcat'] + r2, stdout=f2)
-            p1.wait()
-            p2.wait()
-        elif len(r1) > 1 and len(r2) > 1:
-            with open(os.path.join(work_dir, 'R1.fastq'), 'w') as f1:
-                p1 = subprocess.Popen(['cat'] + r1, stdout=f1)
-            with open(os.path.join(work_dir, 'R2.fastq'), 'w') as f2:
-                p2 = subprocess.Popen(['cat'] + r2, stdout=f2)
-            p1.wait()
-            p2.wait()
+        os.remove(os.path.join(work_dir, 'sample.tar'))
+        # Grab R1/R2 if TCGA data
+        r1 = sorted(glob.glob(os.path.join(work_dir, '*_1*')))
+        r2 = sorted(glob.glob(os.path.join(work_dir, '*_2*')))
+        r = sorted(glob.glob(os.path.join(work_dir, '*')))
+        if not r1 or not r2:
+            # Check if using a different standard
+            r1 = sorted(glob.glob(os.path.join(work_dir, '*R1*')))
+            r2 = sorted(glob.glob(os.path.join(work_dir, '*R2*')))
+        if not r1 or not r2:
+            # Sample is assumed to be single-ended
+            if r[0].endswith('.gz'):
+                with open(os.path.join(work_dir, 'R.fastq'), 'w') as f:
+                    subprocess.check_call(['zcat'] + r, stdout=f)
+            elif len(r) > 1:
+                with open(os.path.join(work_dir, 'R.fastq'), 'w') as f:
+                    subprocess.check_call(['cat'] + r, stdout=f)
+            else:
+                shutil.move(r[0], os.path.join(work_dir, 'R.fastq'))
+            ids['R.fastq'] = job.fileStore.writeGlobalFile(os.path.join(work_dir, 'R.fastq'))
+
         else:
-            shutil.move(r1[0], os.path.join(work_dir, 'R1.fastq'))
-            shutil.move(r2[0], os.path.join(work_dir, 'R2.fastq'))
-        ids['R1.fastq'] = job.fileStore.writeGlobalFile(os.path.join(work_dir, 'R1.fastq'))
-        ids['R2.fastq'] = job.fileStore.writeGlobalFile(os.path.join(work_dir, 'R2.fastq'))
-    job.fileStore.deleteGlobalFile(ids['sample.tar'])
-    # Start cutadapt step
-    return job.addChildJobFn(cutadapt, job_vars, disk='100G').rv()
+            # Sample is assumed to be paired end
+            if r1[0].endswith('.gz') and r2[0].endswith('.gz'):
+                with open(os.path.join(work_dir, 'R1.fastq'), 'w') as f1:
+                    p1 = subprocess.Popen(['zcat'] + r1, stdout=f1)
+                with open(os.path.join(work_dir, 'R2.fastq'), 'w') as f2:
+                    p2 = subprocess.Popen(['zcat'] + r2, stdout=f2)
+                p1.wait()
+                p2.wait()
+            elif len(r1) > 1 and len(r2) > 1:
+                with open(os.path.join(work_dir, 'R1.fastq'), 'w') as f1:
+                    p1 = subprocess.Popen(['cat'] + r1, stdout=f1)
+                with open(os.path.join(work_dir, 'R2.fastq'), 'w') as f2:
+                    p2 = subprocess.Popen(['cat'] + r2, stdout=f2)
+                p1.wait()
+                p2.wait()
+            else:
+                shutil.move(r1[0], os.path.join(work_dir, 'R1.fastq'))
+                shutil.move(r2[0], os.path.join(work_dir, 'R2.fastq'))
+            ids['R1.fastq'] = job.fileStore.writeGlobalFile(os.path.join(work_dir, 'R1.fastq'))
+            ids['R2.fastq'] = job.fileStore.writeGlobalFile(os.path.join(work_dir, 'R2.fastq'))
+        job.fileStore.deleteGlobalFile(ids['sample.tar'])
+        # Start cutadapt step
+        return job.addChildJobFn(cutadapt, job_vars, disk='100G').rv()
 
 
 def cutadapt(job, job_vars):
@@ -479,6 +494,7 @@ def cutadapt(job, job_vars):
     parameters = ['-a', input_args['fwd_3pr_adapter'],
                   '-m', '35']
     if ids['R.fastq']:
+        input_args['single_end'] = True
         read_from_filestore(job, work_dir, ids, 'R.fastq')
         parameters.extend(['-o', '/data/R_cutadapt.fastq', '/data/R.fastq'])
     else:
@@ -488,19 +504,22 @@ def cutadapt(job, job_vars):
                            '-p', '/data/R2_cutadapt.fastq',
                            '/data/R1.fastq', '/data/R2.fastq'])
     # Call: CutAdapt
-    try:
-        docker_call(tool='quay.io/ucsc_cgl/cutadapt:1.9--6bd44edd2b8f8f17e25c5a268fedaab65fa851d2',
-                    work_dir=work_dir, tool_parameters=parameters, sudo=sudo)
-    except RuntimeError as e:
-        if 'improperly paired' in e.message:
+    base_docker_call = 'docker run --log-driver=none --rm -v {}:/data'.format(work_dir).split()
+    if sudo:
+        base_docker_call = ['sudo'] + base_docker_call
+    tool = 'quay.io/ucsc_cgl/cutadapt:1.9--6bd44edd2b8f8f17e25c5a268fedaab65fa851d2'
+    p = subprocess.Popen(base_docker_call + [tool] + parameters, stderr=PIPE, stdout=PIPE)
+    stdout, stderr = p.communicate()
+    if p.returncode != 0:
+        if 'improperly paired' in stderr:
             input_args['improper_pair'] = True
             if ids['R.fastq']:
                 shutil.move(os.path.join(work_dir, 'R.fastq'), os.path.join(work_dir, 'R_cutadapt.fastq'))
             else:
                 shutil.move(os.path.join(work_dir, 'R1.fastq'), os.path.join(work_dir, 'R1_cutadapt.fastq'))
-                shutil.move(os.path.join(work_dir, 'R1.fastq'), os.path.join(work_dir, 'R2_cutadapt.fastq'))
+                shutil.move(os.path.join(work_dir, 'R2.fastq'), os.path.join(work_dir, 'R2_cutadapt.fastq'))
         else:
-            raise e
+            raise subprocess.CalledProcessError
     # Write to fileStore
     if ids['R.fastq']:
         ids['R_cutadapt.fastq'] = job.fileStore.writeGlobalFile(os.path.join(work_dir, 'R_cutadapt.fastq'))
@@ -510,8 +529,9 @@ def cutadapt(job, job_vars):
         ids['R2_cutadapt.fastq'] = job.fileStore.writeGlobalFile(os.path.join(work_dir, 'R2_cutadapt.fastq'))
     # start STAR and Kallisto steps
     rsem_output = job.addChildJobFn(star, job_vars, cores=cores, disk='150G', memory='40G').rv()
+    cores = 16 if cores >= 16 else cores
     kallisto_output = job.addChildJobFn(kallisto, job_vars, cores=cores, disk='100G').rv()
-    return rsem_output, kallisto_output
+    return rsem_output, kallisto_output, input_args['improper_pair'], input_args['single_end']
 
 
 def kallisto(job, job_vars):
@@ -659,24 +679,25 @@ def rsem_postprocess(job, job_vars):
     return job.fileStore.writeGlobalFile(os.path.join(work_dir, 'rsem.tar.gz'))
 
 
-def consolidate_output(job, job_vars, output_ids):
+def consolidate_output(job, job_vars, output_ids_and_values):
     """
     Combine the contents of separate zipped outputs into one via streaming
 
-    job_vars: tuple     Tuple of dictionaries: input_args and ids
-    output_ids: tuple   Nested tuple of all the output fileStore IDs
+    output_ids_and_values: tuple   Nested tuple of all the output fileStore IDs and dictionaries
     """
     input_args, ids = job_vars
     work_dir = job.fileStore.getLocalTempDir()
-    uuid = input_args['uuid']
     # Retrieve IDs
-    rsem_id, kallisto_id = flatten(output_ids)
+    rsem_id, kallisto_id, improper_pair, single_end = flatten(output_ids_and_values)
+    uuid = input_args['uuid']
     # Retrieve output file paths to consolidate
     rsem_tar = job.fileStore.readGlobalFile(rsem_id, os.path.join(work_dir, 'rsem.tar.gz'))
     kallisto_tar = job.fileStore.readGlobalFile(kallisto_id, os.path.join(work_dir, 'kallisto.tar.gz'))
     # I/O
-    if input_args['improper_pair']:
-        uuid = 'IMPROPERLY_PAIRED-' + uuid
+    if improper_pair:
+        uuid = 'IMPROPERLY_PAIRED.' + uuid
+    if single_end:
+        uuid = 'SINGLE-END.' + uuid
     out_tar = os.path.join(work_dir, uuid + '.tar.gz')
     # Consolidate separate tarballs into one as streams (avoids unnecessary untaring)
     with tarfile.open(os.path.join(work_dir, out_tar), 'w:gz') as f_out:
@@ -702,7 +723,7 @@ def consolidate_output(job, job_vars, output_ids):
     ids['uuid.tar.gz'] = job.fileStore.writeGlobalFile(out_tar)
     # If S3 bucket argument specified, upload to S3
     if input_args['s3_dir']:
-        job.addChildJobFn(upload_to_s3, job_vars)
+        job.addChildJobFn(upload_to_s3, (input_args, ids))
 
 
 def upload_to_s3(job, job_vars):
@@ -722,15 +743,22 @@ def upload_to_s3(job, job_vars):
     s3_dir = input_args['s3_dir']
     bucket_name = s3_dir.split('/')[0]
     bucket_dir = '/'.join(s3_dir.split('/')[1:])
-    # I/O
-    read_from_filestore(job, work_dir, ids, 'uuid.tar.gz')
-    uuid_tar = os.path.join(work_dir, 'uuid.tar.gz')
     # Upload to S3 via boto
     conn = boto.connect_s3()
     bucket = conn.get_bucket(bucket_name)
     k = Key(bucket)
-    k.key = os.path.join(bucket_dir, uuid + '.tar.gz')
-    k.set_contents_from_filename(uuid_tar)
+    if 'error.txt' in ids:
+        read_from_filestore(job, work_dir, 'error.txt')
+        k.key = os.path.join(bucket_dir, uuid + '.ERROR')
+        k.set_contents_from_filename(os.path.join(work_dir, 'error.txt'))
+    else:
+        read_from_filestore(job, work_dir, ids, 'uuid.tar.gz')
+        uuid_tar = os.path.join(work_dir, 'uuid.tar.gz')
+        if 'R.fastq' in ids:
+            k.key = os.path.join(bucket_dir, uuid + 'single-end' + '.tar.gz')
+        else:
+            k.key = os.path.join(bucket_dir, uuid + '.tar.gz')
+        k.set_contents_from_filename(uuid_tar)
 
 
 def main():
@@ -762,7 +790,8 @@ def main():
               'uuid': None,
               'sample.tar': None,
               'cpu_count': None,
-              'improper_pair': None}
+              'improper_pair': None,
+              'single_end': None}
     # Sanity checks
     if args.ssec:
         assert os.path.isfile(args.ssec)
