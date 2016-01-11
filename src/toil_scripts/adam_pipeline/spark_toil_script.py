@@ -215,21 +215,18 @@ def upload_data(job, masterIP, hdfsName, inputs):
 
 class MasterService(Job.Service):
 
-    def __init__(self):
-        Job.Service.__init__(self)
-        if (os.uname()[0] == "Darwin"):
-            machine = check_output(["docker-machine", "ls"]).split("\n")[1].split()[0]
-            self.IP = check_output(["docker-machine", "ip", machine]).strip().rstrip()
-        else:
-            self.IP = check_output(["hostname", "-f"])[:-1]
-            
-
     def start(self):
         """
         Start spark and hdfs master containers
         """
         log.write("start masters\n")
         log.flush()
+        
+        if (os.uname()[0] == "Darwin"):
+            machine = check_output(["docker-machine", "ls"]).split("\n")[1].split()[0]
+            self.IP = check_output(["docker-machine", "ip", machine]).strip().rstrip()
+        else:
+            self.IP = check_output(["hostname", "-f",])[:-1]
 
         self.sparkContainerID = check_output(["docker",
                                               "run",
