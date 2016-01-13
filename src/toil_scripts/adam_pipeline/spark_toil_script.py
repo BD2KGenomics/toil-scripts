@@ -265,6 +265,7 @@ class WorkerService(Job.Service):
                                              "run",
                                              "--net=host",
                                              "-d",
+                                             "-v", "/mnt/ephemeral/:/ephemeral/:rw",
                                              "computationalgenomicslab/apache-hadoop-worker:2.6.2", self.masterIP])[:-1]
         return
 
