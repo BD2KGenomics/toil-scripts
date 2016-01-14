@@ -148,12 +148,12 @@ def download_and_transfer_sample(job, input_args, samples):
         shutil.rmtree(os.path.join(work_dir, 'sra'))
         sample_name = analysis_id + '.tar.gz'
         if input_args['single_end']:
-            r1 = sorted(glob.glob(os.path.join(work_dir, '*_1*')))[0]
-            r2 = sorted(glob.glob(os.path.join(work_dir, '*_2*')))[0]
-            tarball_files(work_dir, tar_name=sample_name, files=[r1, r2])
+            r = [os.path.basename(x) for x in glob.glob(os.path.join(work_dir, '*.f*'))]
+            tarball_files(work_dir, tar_name=sample_name, files=r)
         else:
-            r = sorted(glob.glob(os.path.join(work_dir, '*fastq*')))[0]
-            tarball_files(work_dir, tar_name=sample_name, files=[r])
+            r1 = [os.path.basename(x) for x in glob.glob(os.path.join(work_dir, '*_1*'))]
+            r2 = [os.path.basename(x) for x in glob.glob(os.path.join(work_dir, '*_2*'))]
+            tarball_files(work_dir, tar_name=sample_name, files=r1 + r2)
         # Parse s3_dir to get bucket and s3 path
         key_path = input_args['ssec']
         s3_dir = input_args['s3_dir']
@@ -168,7 +168,7 @@ def download_and_transfer_sample(job, input_args, samples):
                         'upload',
                         '--sse-key-file', os.path.join(work_dir, 'temp.key'),
                         'file://{}'.format(os.path.join(work_dir, sample_name)),
-                        bucket_name]
+                        's3://' + bucket_name + '/']
         subprocess.check_call(s3am_command)
 
 
