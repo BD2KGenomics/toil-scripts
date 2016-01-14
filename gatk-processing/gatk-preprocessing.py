@@ -18,6 +18,12 @@ import argparse
 import collections
 import multiprocessing
 import tarfile
+import os
+import errno
+import hashlib
+import base64
+import subprocess
+import shutil
 from toil.job import Job
 
 
@@ -186,6 +192,27 @@ def return_input_paths(job, work_dir, ids, *args):
     return paths
 
 
+def read_from_filestore(job, work_dir, ids, *filenames):
+    """
+    Reads file from fileStore and writes it to working directory.
+
+    :param job: Job instance
+    :param work_dir: working directory
+    :param ids: shared file promises, dict
+    :param filenames: remaining arguments are filenames
+    """
+    for filename in filenames:
+        if not os.path.exists(os.path.join(work_dir, filename)):
+            job.fileStore.readGlobalFile(ids[filename], os.path.join(work_dir, filename))
+
+
+def docker_path(file_path):
+    """
+    Returns the path internal to the docker container (for standard reasons, this is always /data)
+    """
+    return os.path.join('/data', os.path.basename(file_path))
+
+
 def docker_call(work_dir, tool_parameters, tool, java_opts=None, outfile=None, sudo=False):
     """
     Makes subprocess call of a command to a docker container.
@@ -267,19 +294,18 @@ def create_reference_dict(job, ref_id, sudo):
     return job.fileStore.writeGlobalFile(os.path.join(work_dir, 'ref.dict'))
 
 
-def index(job, job_vars, sample):
+def index(job, shared_ids, input_args, sample):
     """
     Runs samtools index to create (.bai) files
 
     job_vars: tuple     Contains the input_args and ids dictionaries
     """
     # Unpack convenience variables for job
-    input_args, ids = job_vars
     work_dir = job.fileStore.getLocalTempDir()
     sudo = input_args['sudo']
     cores = int(input_args['cpu_count'])
     # Retrieve file path
-    path = return_input_paths(job, work_dir, ids, sample)
+    path = return_input_paths(job, work_dir, shared_ids, sample)
     # Call: index the normal.bam
     parameters = ['index', '{}'.format(docker_path(path))]
     docker_call(work_dir=work_dir, tool_parameters=parameters,
@@ -295,13 +321,15 @@ def download_shared_files(job, input_args):
 
     input_args: dict        Dictionary of input arguments (from main())
     """
+    for f in os.listdir('data/'):
+        job.fileStore.writeGlobalFile(os.path.join('data', f))
     shared_ids = {}
     for fname in ['ref.fasta', 'phase.vcf', 'mills.vcf', 'dbsnp.vcf']:
         shared_ids[fname] = job.addChildJobFn(download_from_url, url=input_args[fname], name=fname).rv()
-    job.addFollowOnJobFn(reference_preprocessing, input_args, shared_ids)
+#    job.addFollowOnJobFn(reference_preprocessing, shared_ids, input_args)
 
 
-def reference_preprocessing(job, input_args, shared_ids):
+def reference_preprocessing(job, shared_ids, input_args):
     """
     Create index and dict file for reference
 
@@ -312,10 +340,10 @@ def reference_preprocessing(job, input_args, shared_ids):
     sudo = input_args['sudo']
     shared_ids['ref.fa.fai'] = job.addChildJobFn(create_reference_index, ref_id, sudo).rv()
     shared_ids['ref.dict'] = job.addChildJobFn(create_reference_dict, ref_id, sudo).rv()
-    job.addFollowOnJobFn(spawn_batch_jobs, input_args, shared_ids)
+    job.addFollowOnJobFn(spawn_batch_jobs, shared_ids, input_args)
 
 
-def spawn_batch_jobs(job, input_args, shared_ids):
+def spawn_batch_jobs(job, shared_ids, input_args):
     """
     Spawn a pipeline for each sample in the configuration file
 
@@ -327,12 +355,11 @@ def spawn_batch_jobs(job, input_args, shared_ids):
     with open(config, 'r') as f:
         for line in f.readlines():
             if not line.isspace():
-                samples.append(line.strip().split(','))
-    for sample in samples:
-        job.addChildJobFn(download_samples, shared_ids, input_args, sample)
+                sample = line.strip().split(',')
+                job.addChildJobFn(download_samples, shared_ids, input_args, sample)
 
 
-def download_samples(job, ids, input_args, sample):
+def download_samples(job, shared_ids, input_args, sample):
     """
     Defines sample variables then downloads the sample.
 
@@ -342,30 +369,31 @@ def download_samples(job, ids, input_args, sample):
     """
     uuid, url = sample
     # Create a unique
-    sample_input = dict(input_args)
-    sample_input['uuid'] = uuid
-    sample_input['sample.bam'] = url
-    sample_input['cpu_count'] = multiprocessing.cpu_count()
-    if sample_input['output_dir']:
-        sample_input['output_dir'] = os.path.join(input_args['output_dir'], uuid)
+    input_args['uuid'] = uuid
+    input_args['sample.bam'] = url
+    cores = multiprocessing.cpu_count()
+    if input_args['output_dir']:
+        input_args['output_dir'] = os.path.join(input_args['output_dir'], uuid)
     # Download sample bams and launch pipeline
     if input_args['ssec']:
-        ids['sample.bam'] = job.addChildJobFn(download_encrypted_file, sample_input, 'sample.bam').rv()
+        shared_ids['sample.bam'] = job.addChildJobFn(download_encrypted_file, input_args, 'sample.bam').rv()
     else:
-        ids['sample.bam'] = job.addChildJobFn(download_from_url, url=sample_input['sample.bam'], name='sample.bam').rv()
-    job_vars = (sample_input, ids)
+        shared_ids['sample.bam'] = job.addChildJobFn(download_from_url, url=input_args['sample.bam'], name='sample.bam').rv()
+    job_vars = (input_args, shared_ids)
     job.addChildJobFn(index_sample, job_vars, cores=cores, memory='10 G', disk='15 G')
 
-def index_samples(job, job_vars):
-    ids['sample.bam.bai'] = job.addFollowOnJobFn(index, job_vars, 'sample.bam').rv()
-    job.addChildJobFn(index_sample, job_vars, cores=cores, memory='10 G', disk='15 G')
+def index_sample(job, shared_ids, input_args):
+    cores = input_args['cores']
+    shared_ids['sample.bam.bai'] = job.addFollowOnJobFn(index, shared_ids, input_args, 'sample.bam').rv()
+    job.addChildJobFn(sort, shared_ids, input_args, cores=cores, memory='10 G', disk='15 G')
 
-def sort(job, job_vars):
+def sort(job, shared_ids, input_args):
     """
     """
+    sudo = input_args['sudo']
     work_dir = job.fileStore.getLocalTempDir()
     # Retrieve file path
-    job.fileStore.readGlobalFile(ref_id, os.path.join(work_dir, 'sample.bam'))
+    job.fileStore.readGlobalFile(os.path.join(work_dir, 'sample.bam'))
     # Call: picardtools
     command = ['SortSam',
                'INPUT=sample.bam',
@@ -373,15 +401,16 @@ def sort(job, job_vars):
                'SORT_ORDER=coordinate']
     docker_call(work_dir=work_dir, tool_parameters=command,
                 tool='quay.io/ucsc_cgl/picardtools:1.95--dd5ac549b95eb3e5d166a5e310417ef13651994e', sudo=sudo)
-    ids['sample.sorted.bam'] = job.fileStore.writeGlobalFile(os.path.join(work_dir, 'sample.sorted.bam'))
+    shared_ids['sample.sorted.bam'] = job.fileStore.writeGlobalFile(os.path.join(work_dir, 'sample.sorted.bam'))
 
 
-def mark_dups(job, job_vars):
+def mark_dups(job, shared_ids, input_args):
     """
     """
+    sudo = input_args['sudo']
     work_dir = job.fileStore.getLocalTempDir()
     # Retrieve file path
-    job.fileStore.readGlobalFile(ref_id, os.path.join(work_dir, 'sample.sorted.bam'))
+    read_from_filestore(job, work_dir, shared_ids, 'sample.sorted.bam')
     # Call: picardtools
     command = ['MarkDuplicates',
                'INPUT=sample.sorted.bam',
@@ -391,7 +420,7 @@ def mark_dups(job, job_vars):
                'ASSUME_SORTED=true']
     docker_call(work_dir=work_dir, tool_parameters=command,
                 tool='quay.io/ucsc_cgl/picardtools:1.95--dd5ac549b95eb3e5d166a5e310417ef13651994e', sudo=sudo)
-    ids['sample.mkdups.bam'] = job.fileStore.writeGlobalFile(os.path.join(work_dir, 'sample.mkdups.bam'))
+    shared_ids['sample.mkdups.bam'] = job.fileStore.writeGlobalFile(os.path.join(work_dir, 'sample.mkdups.bam'))
 
 
 def realigner_target_creator(job, job_vars):
@@ -549,8 +578,9 @@ def main():
               'sudo': pargs.sudo,
               'cpu_count': multiprocessing.cpu_count()}
 
+
     # Launch Pipeline
-#    Job.Runner.startToil(Job.wrapJobFn(download_shared_files, inputs), pargs)
+    Job.Runner.startToil(Job.wrapJobFn(download_shared_files, inputs), pargs)
 
 if __name__ == '__main__':
     main()
