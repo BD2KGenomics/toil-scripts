@@ -1,3 +1,4 @@
+
 #!/usr/bin/env python2.7
 """
 UCSC Computational Genomics Lab RNA-seq Pipeline
@@ -109,7 +110,7 @@ def adam_convert(job, masterIP, inFile, snpFile, inputs):
     adamFile = ".".join(os.path.splitext(inFile)[0])+".adam"
     
     check_call(["docker", "run", "--net=host",
-                "computationalgenomicslab/adam", 
+                "computationalgenomicslab/adam:cd6ef41", 
                 "--master", "spark://"+masterIP+":"+SPARK_MASTER_PORT, 
                 "--conf", "spark.hadoop.fs.default.name=hdfs://%s:%s" % (masterIP, HDFS_MASTER_PORT),
                 "--", "transform", 
@@ -118,7 +119,7 @@ def adam_convert(job, masterIP, inFile, snpFile, inputs):
     adamSnpFile = ".".join(os.path.splitext(snpFile)[0])+".var.adam"
 
     check_call(["docker", "run", "--net=host",
-                "computationalgenomicslab/adam", 
+                "computationalgenomicslab/adam:cd6ef41", 
                 "--master", "spark://"+masterIP+":"+SPARK_MASTER_PORT, 
                 "--conf", "spark.hadoop.fs.default.name=hdfs://%s:%s" % (masterIP, HDFS_MASTER_PORT),
                 "--", "vcf2adam", 
@@ -141,7 +142,7 @@ def adam_transform(job, masterIP, inFile, snpFile, inputs):
     outFile = ".".join(os.path.splitext(inFile)[0])+".processed.bam"
 
     check_call(["docker", "run", "--net=host",
-                "computationalgenomicslab/adam", 
+                "computationalgenomicslab/adam:cd6ef41", 
                 "--master", "spark://"+masterIP+":"+SPARK_MASTER_PORT, 
                 "--conf", "spark.driver.memory=%s" % inputs["driverMemory"],
                 "--conf", "spark.executor.memory=%s" % inputs["executorMemory"],
@@ -151,7 +152,7 @@ def adam_transform(job, masterIP, inFile, snpFile, inputs):
                 "-mark_duplicate_reads"])
 
     check_call(["docker", "run", "--net=host",
-                "computationalgenomicslab/adam", 
+                "computationalgenomicslab/adam:cd6ef41", 
                 "--master", "spark://"+masterIP+":"+SPARK_MASTER_PORT, 
                 "--conf", "spark.driver.memory=%s" % inputs["driverMemory"],
                 "--conf", "spark.executor.memory=%s" % inputs["executorMemory"],
@@ -161,7 +162,7 @@ def adam_transform(job, masterIP, inFile, snpFile, inputs):
                 "-realign_indels"])
 
     check_call(["docker", "run", "--net=host",
-                "computationalgenomicslab/adam", 
+                "computationalgenomicslab/adam:cd6ef41", 
                 "--master", "spark://"+masterIP+":"+SPARK_MASTER_PORT, 
                 "--conf", "spark.driver.memory=%s" % inputs["driverMemory"],
                 "--conf", "spark.executor.memory=%s" % inputs["executorMemory"],
@@ -172,7 +173,7 @@ def adam_transform(job, masterIP, inFile, snpFile, inputs):
                 "-known_snps", snpFile])
 
     check_call(["docker", "run", "--net=host",
-                "computationalgenomicslab/adam", 
+                "computationalgenomicslab/adam:cd6ef41", 
                 "--master", "spark://"+masterIP+":"+SPARK_MASTER_PORT, 
                 "--conf", "spark.driver.memory=%s" % inputs["driverMemory"],
                 "--conf", "spark.executor.memory=%s" % inputs["executorMemory"],
