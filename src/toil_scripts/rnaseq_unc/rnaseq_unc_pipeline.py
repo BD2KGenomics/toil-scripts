@@ -841,9 +841,8 @@ def upload_bam_to_s3(job, job_vars):
     # Upload to S3 via S3AM
     s3am_command = ['s3am',
                     'upload',
-                    'file://{}'.format(os.path.join(work_dir, uuid_bam)),
-                    bucket_name,
-                    os.path.join(bucket_dir, sample_name)]
+                    'file://{}'.format(uuid_bam),
+                    os.path.join('s3://', bucket_name, bucket_dir, sample_name)]
     subprocess.check_call(s3am_command)
 
 
