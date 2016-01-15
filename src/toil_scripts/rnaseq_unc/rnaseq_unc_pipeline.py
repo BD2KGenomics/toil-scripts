@@ -427,7 +427,7 @@ def mapsplice(job, job_vars):
         return_input_paths(job, work_dir, ids, 'R1.fastq')
     else:
         return_input_paths(job, work_dir, ids, 'R1.fastq', 'R2.fastq')
-        files_to_delete.extend(['R1.fastq'])
+        files_to_delete.extend(['R2.fastq'])
     for fname in ['chromosomes.zip', 'ebwt.zip']:
         subprocess.check_call(['unzip', '-o', os.path.join(work_dir, fname), '-d', work_dir])
     # Command and call
