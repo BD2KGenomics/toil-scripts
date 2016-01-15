@@ -26,8 +26,7 @@ import subprocess
 import shutil
 from toil.job import Job
 
-
-debug = True
+debug = False 
 
 def build_parser():
     """
@@ -329,7 +328,6 @@ def index(job, shared_ids, input_args, sample):
     # Unpack convenience variables for job
     work_dir = job.fileStore.getLocalTempDir()
     sudo = input_args['sudo']
-    read_from_filestore(job, work_dir, shared_ids, sample)
     outpath = os.path.join(work_dir, sample + '.bai')
     debug_log.write(outpath + '\n')
     debug_log.close()
@@ -355,7 +353,7 @@ def sort(job, shared_ids, input_args, sample):
     work_dir = job.fileStore.getLocalTempDir()
 
     #Retrieve file path
-    read_from_filestore(job, work_dir, sample)
+    read_from_filestore(job, work_dir, shared_ids, sample)
     #Call: picardtools
     command = ['SortSam',
                'INPUT={}'.format(sample),
@@ -413,8 +411,7 @@ def reference_preprocessing(job, shared_ids, input_args):
     ref_id = shared_ids['ref.fa']
     sudo = input_args['sudo']
     shared_ids['ref.fa.fai'] = job.addChildJobFn(create_reference_index, ref_id, sudo).rv()
-    shared_ids['ref.dict'] = job.addChildJobFn(create_reference_dict, ref_id,
-                                               sudo).rv()
+    shared_ids['ref.dict'] = job.addChildJobFn(create_reference_dict, ref_id, sudo).rv()
     job.addFollowOnJobFn(spawn_batch_jobs, shared_ids, input_args)
 
 
@@ -434,7 +431,7 @@ def spawn_batch_jobs(job, shared_ids, input_args):
     for sample in samples:
         job.addChildJobFn(download_sample, shared_ids, input_args, sample)
 
-
+# Downloading is fine, but maybe there is a bug afterwards
 def download_sample(job, shared_ids, input_args, sample):
     """
     Defines sample variables then downloads the sample.
@@ -446,7 +443,6 @@ def download_sample(job, shared_ids, input_args, sample):
     uuid, url = sample
     # Create a unique
     input_args['uuid'] = uuid
-    input_args['sample.bam'] = url
     cores = multiprocessing.cpu_count()
     if input_args['output_dir']:
         input_args['output_dir'] = os.path.join(input_args['output_dir'], uuid)
@@ -454,8 +450,8 @@ def download_sample(job, shared_ids, input_args, sample):
     if input_args['ssec']:
         shared_ids['sample.bam'] = job.addChildJobFn(download_encrypted_file, input_args, 'sample.bam').rv()
     else:
-        shared_ids['sample.bam'] = job.addChildJobFn(download_from_url, url=input_args['sample.bam'], name='sample.bam').rv()
-    job.addChildJobFn(index_sample, shared_ids, input_args)
+        shared_ids['sample.bam'] = job.addChildJobFn(download_from_url, url=url, name='sample.bam').rv()
+    job.addFollowOnJobFn(index_sample, shared_ids, input_args)
 
 
 def index_sample(job, shared_ids, input_args):
@@ -490,7 +486,7 @@ def sort_sample(job, shared_ids, input_args):
     work_dir = job.fileStore.getLocalTempDir()
 
     #Retrieve file path
-    read_from_filestore(job, work_dir, 'sample.bam')
+    read_from_filestore(job, work_dir, shared_ids, 'sample.bam', 'sample.bam.bai')
     outpath = os.path.join(work_dir, 'sample.sorted.bam')
     #Call: picardtools
     command = ['SortSam',
