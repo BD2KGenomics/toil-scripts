@@ -140,7 +140,7 @@ def download_and_transfer_sample(job, input_args, analysis_id):
                     'upload',
                     '--sse-key-file', os.path.join(work_dir, 'temp.key'),
                     'file://{}'.format(os.path.join(work_dir, sample_name)),
-                    bucket_name]
+                    's3://' + bucket_name + '/']
     subprocess.check_call(s3am_command)
 
 

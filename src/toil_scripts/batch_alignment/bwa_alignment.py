@@ -448,8 +448,7 @@ def upload_to_s3(job, job_vars):
                     'upload',
                     '--sse-key-file', os.path.join(work_dir, uuid + '.key'),
                     'file://{}'.format(os.path.join(work_dir, uuid + '.bam')),
-                    bucket_name,
-                    os.path.join(bucket_dir, uuid + '.bam')]
+                    os.path.join('s3://', bucket_name, bucket_dir, uuid + '.bam')]
     subprocess.check_call(s3am_command)
 
 

@@ -761,8 +761,7 @@ def upload_output_to_s3(job, input_args, output_tar):
     s3am_command = ['s3am',
                     'upload',
                     'file://{}'.format(os.path.join(work_dir, uuid + '.tar.gz')),
-                    bucket_name,
-                    os.path.join(bucket_dir, uuid + '.tar.gz')]
+                    os.path.join('s3://', bucket_name, bucket_dir, uuid + '.tar.gz')]
     subprocess.check_call(s3am_command)
 
 
