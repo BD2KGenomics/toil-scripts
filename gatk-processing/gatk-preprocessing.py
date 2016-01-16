@@ -245,6 +245,11 @@ def docker_call(work_dir, tool_parameters, tool, java_opts=None,
     if java_opts:
         base_docker_call = base_docker_call + ['-e', 'JAVA_OPTS={}'.format(java_opts)]
     if debug:
+	debug_log = open(tool.split('/')[0], 'w')
+	debug_log.write(repr(base_docker_call) + '\n')
+	debug_log.write(repr(tool_parameters))
+	
+	debug_log.close()
         for outfile in outfiles:
             outpath = os.path.join(work_dir, outfile)
             f = open(outpath, 'w')
@@ -515,7 +520,6 @@ def mark_dups_sample(job, shared_ids, input_args):
     command = ['MarkDuplicates',
                'INPUT=sample.sorted.bam',
                'OUTPUT=sample.mkdups.bam',
-               'SORT_ORDER=coordinate',
                'METRICS_FILE=metrics.txt',
                'ASSUME_SORTED=true']
     docker_call(work_dir=work_dir, tool_parameters=command,
@@ -551,6 +555,7 @@ def index_mkdups(job, shared_ids, input_args):
     job.addChildJobFn(realigner_target_creator, shared_ids, input_args)
 
 
+#TODO STOP HERE
 def realigner_target_creator(job, shared_ids, input_args):
     """
     Creates <type>.intervals file needed for indel realignment
@@ -561,31 +566,31 @@ def realigner_target_creator(job, shared_ids, input_args):
     work_dir = job.fileStore.getLocalTempDir()
     sudo = input_args['sudo']
     # Retrieve input file paths
-    return_input_paths(job, work_dir, shared_ids, 'ref.fa',
-                       'sample.mkdups.bam', 'ref.fa.fai', 'ref.dict',
-                       'sample.mkdups.bam.bai', 'phase.vcf', 'mills.vcf')
+    read_from_filestore(job, work_dir, shared_ids, 'ref.fa',
+                        'sample.mkdups.bam', 'ref.fa.fai', 'ref.dict',
+                        'sample.mkdups.bam.bai', 'phase.vcf', 'mills.vcf')
 
     # Output file path
     output = os.path.join(work_dir, 'sample.intervals')
     # Call: GATK -- RealignerTargetCreator
     parameters = ['-T', 'RealignerTargetCreator',
                   '-nt', input_args['cpu_count'],
-                  '-R', '/data/ref.fasta',
-                  '-I', '/data/sample.mkdups.bam',
-                  '-known', '/data/phase.vcf',
-                  '-known', '/data/mills.vcf',
+                  '-R', 'ref.fa',
+                  '-I', 'sample.mkdups.bam',
+                  '-known', 'phase.vcf',
+                  '-known', 'mills.vcf',
                   '--downsampling_type', 'NONE',
                   '-o', 'sample.intervals']
 
-    docker_call(tool='quay.io/ucsc_cgl/gatk:3.4--dd5ac549b95eb3e5d166a5e310417ef13651994e',
-                work_dir=work_dir, tool_parameters=parameters,
-                java_opts='-Xmx10g', sudo=sudo,
-                outfiles=['sample.intervals'])
-    # Write to fileStore
+    docker_call(work_dir=work_dir, tool_parameters=parameters,
+		tool='quay.io/ucsc_cgl/gatk:3.4--dd5ac549b95eb3e5d166a5e310417ef13651994e',
+                java_opts='-Xmx10g',
+                outfiles=['sample.intervals'],
+		sudo=sudo)
     shared_ids['sample.intervals'] = job.fileStore.writeGlobalFile(output)
     job.addChildJobFn(indel_realignment, shared_ids, input_args)
 
-
+# TODO Can't find .bai file...May need to run separte function call 
 def indel_realignment(job, shared_ids, input_args):
     """
     Creates realigned bams using <sample>.intervals file from previous step
@@ -605,7 +610,7 @@ def indel_realignment(job, shared_ids, input_args):
     output = os.path.join(work_dir, 'sample.indel.bam')
     # Call: GATK -- IndelRealigner
     parameters = ['-T', 'IndelRealigner',
-                  '-R', 'ref.fasta',
+                  '-R', 'ref.fa',
                   '-I', 'sample.mkdups.bam',
                   '-known', 'phase.vcf',
                   '-known', 'mills.vcf',
@@ -643,10 +648,10 @@ def base_recalibration(job, shared_ids, input_args):
     # Call: GATK -- IndelRealigner
     parameters = ['-T', 'BaseRecalibrator',
                   '-nct', input_args['cpu_count'],
-                  '-R', '/data/ref.fasta',
-                  '-I', '/data/sample.indel.bam',
-                  '-knownSites', '/data/dbsnp.vcf',
-                  '-o', docker_path(output)]
+                  '-R', 'ref.fa',
+                  '-I', 'sample.indel.bam',
+                  '-knownSites', 'dbsnp.vcf',
+                  '-o', 'sample.recal.table']
     docker_call(tool='quay.io/ucsc_cgl/gatk:3.4--dd5ac549b95eb3e5d166a5e310417ef13651994e',
                 work_dir=work_dir, tool_parameters=parameters,
                 java_opts='-Xmx15g', sudo=sudo,
@@ -669,18 +674,17 @@ def print_reads(job, shared_ids, input_args):
     sudo = input_args['sudo']
     # Retrieve input file paths
     return_input_paths(job, work_dir, shared_ids, 'ref.fa', 'sample.indel.bam',
-                       'ref.fa.fai',
-                       'ref.dict', 'sample.indel.bai', 'sample.recal.table')
+                       'ref.fa.fai', 'ref.dict', 'sample.indel.bai', 'sample.recal.table')
     # Output file
     outfile = '{}.bqsr.bam'.format(uuid)
     outpath = os.path.join(work_dir, outfile)
     # Call: GATK -- PrintReads
     parameters = ['-T', 'PrintReads',
                   '-nct', input_args['cpu_count'],
-                  '-R', '/data/ref.fa',
+                  '-R', 'ref.fa',
                   '--emit_original_quals',
-                  '-I', '/data/sample.indel.bam',
-                  '-BQSR', '/data/sample.recal.table',
+                  '-I', 'sample.indel.bam',
+                  '-BQSR', 'sample.recal.table',
                   '-o', outfile]
     docker_call(tool='quay.io/ucsc_cgl/gatk:3.4--dd5ac549b95eb3e5d166a5e310417ef13651994e',
                 work_dir=work_dir, tool_parameters=parameters,
@@ -712,7 +716,7 @@ def main():
               's3_dir': pargs.s3_dir,
               'sudo': pargs.sudo,
               'ssec': pargs.ssec,
-              'cpu_count': multiprocessing.cpu_count()}
+              'cpu_count': str(multiprocessing.cpu_count())}
 
 
     # Launch Pipeline
