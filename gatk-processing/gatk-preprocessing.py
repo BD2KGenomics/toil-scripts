@@ -290,9 +290,9 @@ def create_reference_index(job, ref_id, sudo):
     """
     work_dir = job.fileStore.getLocalTempDir()
     # Retrieve file path to reference
-    ref_path = docker_path(job.fileStore.readGlobalFile(ref_id, os.path.join(work_dir, 'ref.fa')))
+    job.fileStore.readGlobalFile(ref_id, os.path.join(work_dir, 'ref.fa'))  
     # Call: Samtools
-    command = ['faidx', ref_path]
+    command = ['faidx', 'ref.fa']
     docker_call(work_dir=work_dir, tool_parameters=command,
                 tool='quay.io/ucsc_cgl/samtools:0.1.19--dd5ac549b95eb3e5d166a5e310417ef13651994e',
                 outfiles=['ref.fa.fai'],
@@ -625,7 +625,31 @@ def indel_realignment(job, shared_ids, input_args):
                 outfiles=['sample.indel.bam', 'sample.indel.bam.bai'])
     # Write to fileStore
     shared_ids['sample.indel.bam'] = job.fileStore.writeGlobalFile(output)
-    shared_ids['sample.indel.bai'] = job.fileStore.writeGlobalFile(output + '.bai')
+    job.addFollowOnJobFn(index_indel, shared_ids, input_args)
+
+
+def index_indel(job, shared_ids, input_args):
+    """
+    Runs samtools index to create (.bai) files
+
+    job_vars: tuple     Contains the input_args and ids dictionaries
+    """
+    debug_log = open('index', 'w')
+    # Unpack convenience variables for job
+    work_dir = job.fileStore.getLocalTempDir()
+    sudo = input_args['sudo']
+    read_from_filestore(job, work_dir, shared_ids, 'sample.indel.bam')
+    outpath = os.path.join(work_dir, 'sample.indel.bam.bai')
+    debug_log.write(outpath + '\n')
+    debug_log.close()
+    # Retrieve file path
+    # Call: index the normal.bam
+    parameters = ['index', 'sample.indel.bam']
+    docker_call(work_dir=work_dir, tool_parameters=parameters,
+                tool='quay.io/ucsc_cgl/samtools:0.1.19--dd5ac549b95eb3e5d166a5e310417ef13651994e',
+                outfiles=['sample.indel.bam.bai'],
+                sudo=sudo)
+    shared_ids['sample.indel.bam.bai'] = job.fileStore.writeGlobalFile(outpath)
     job.addChildJobFn(base_recalibration, shared_ids, input_args)
 
 
@@ -642,7 +666,7 @@ def base_recalibration(job, shared_ids, input_args):
     # Retrieve input file paths
     return_input_paths(job, work_dir, shared_ids, 'ref.fa', 'sample.indel.bam',
                        'dbsnp.vcf', 'ref.fa.fai',
-                       'ref.dict', 'sample.indel.bai')
+                       'ref.dict', 'sample.indel.bam.bai')
     # Output file path
     output = os.path.join(work_dir, 'sample.recal.table')
     # Call: GATK -- IndelRealigner
@@ -674,7 +698,7 @@ def print_reads(job, shared_ids, input_args):
     sudo = input_args['sudo']
     # Retrieve input file paths
     return_input_paths(job, work_dir, shared_ids, 'ref.fa', 'sample.indel.bam',
-                       'ref.fa.fai', 'ref.dict', 'sample.indel.bai', 'sample.recal.table')
+                       'ref.fa.fai', 'ref.dict', 'sample.indel.bam.bai', 'sample.recal.table')
     # Output file
     outfile = '{}.bqsr.bam'.format(uuid)
     outpath = os.path.join(work_dir, outfile)
@@ -688,15 +712,9 @@ def print_reads(job, shared_ids, input_args):
                   '-o', outfile]
     docker_call(tool='quay.io/ucsc_cgl/gatk:3.4--dd5ac549b95eb3e5d166a5e310417ef13651994e',
                 work_dir=work_dir, tool_parameters=parameters,
-                java_opts='-Xmx15g', sudo=sudo, outfiles=[outfile,
-                                                          outfile+'.bai'])
+                java_opts='-Xmx15g', sudo=sudo, outfiles=[outfile])
 
-    # Write to fileStore
-    bam_id = job.fileStore.writeGlobalFile(outpath)
-    bai_id = job.fileStore.writeGlobalFile(outpath + '.bai')
-
-    move_to_output_dir(work_dir, input_args['output_dir'], outfile,
-                       outfile+'.bai')
+    move_to_output_dir(work_dir, input_args['output_dir'], outfile)
 
 def main():
     """
