@@ -11,7 +11,6 @@ aws:us-west-2:unc-pipeline-run-1 \
 --ssec "/home/mesosbox/shared/master.key" \
 --output_dir "/home/mesosbox/rnaseq_output" \
 --s3_dir "cgl-driver-projects/test/rna-test/" \
---sudo \
 --sseKey=/home/mesosbox/shared/master.key \
 --batchSystem="mesos" \
 --mesosMaster mesos-master:5050 \
