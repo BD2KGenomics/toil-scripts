@@ -95,53 +95,61 @@ def start_batch(job, input_args):
     This function will administer 5 jobs at a time then recursively call itself until subset is empty
     """
     samples = parse_genetorrent(input_args['genetorrent'])
-    for analysis_id in samples:
-        job.addChildJobFn(download_and_transfer_sample, input_args, analysis_id, cores=1, disk='10G')
+    # for analysis_id in samples:
+    job.addChildJobFn(download_and_transfer_sample, input_args, samples, cores=1, disk='30G')
 
 
-def download_and_transfer_sample(job, input_args, analysis_id):
+def download_and_transfer_sample(job, input_args, samples):
+
     """
     Downloads a sample from CGHub via GeneTorrent, then uses S3AM to transfer it to S3
 
     input_args: dict        Dictionary of input arguments
     analysis_id: str        An analysis ID for a sample in CGHub
     """
-    work_dir = job.fileStore.getLocalTempDir()
-    folder_path = os.path.join(work_dir, os.path.basename(analysis_id))
-    sudo = input_args['sudo']
-    # Acquire genetorrent key and download sample
-    shutil.copy(input_args['genetorrent_key'], os.path.join(work_dir, 'cghub.key'))
-    parameters = ['-vv', '-c', 'cghub.key', '-d', analysis_id]
-    docker_call(tool='quay.io/ucsc_cgl/genetorrent:3.8.7--9911761265b6f08bc3ef09f53af05f56848d805b',
-                work_dir=work_dir, tool_parameters=parameters, sudo=sudo)
-    try:
-        sample = glob.glob(os.path.join(folder_path, '*tar*'))[0]
-    except KeyError as e:
-        print 'No tarfile found inside of folder: '.format(e)
-        raise
-    # Upload sample to S3AM
-    key_path = input_args['ssec']
-    if sample.endswith('gz'):
-        sample_name = analysis_id + '.tar.gz'
-        shutil.move(sample, os.path.join(work_dir, sample_name))
+    if len(samples) > 1:
+        a = samples[len(samples)/2:]
+        b = samples[:len(samples)/2]
+        job.addChildJobFn(download_and_transfer_sample, input_args, a, disk='30G')
+        job.addChildJobFn(download_and_transfer_sample, input_args, b, disk='30G')
     else:
-        sample_name = analysis_id + '.tar'
-        shutil.move(sample, os.path.join(work_dir, sample_name))
-    # Parse s3_dir to get bucket and s3 path
-    s3_dir = input_args['s3_dir']
-    bucket_name = s3_dir.lstrip('/').split('/')[0]
-    base_url = 'https://s3-us-west-2.amazonaws.com/'
-    url = os.path.join(base_url, bucket_name, sample_name)
-    # Generate keyfile for upload
-    with open(os.path.join(work_dir, 'temp.key'), 'wb') as f_out:
-        f_out.write(generate_unique_key(key_path, url))
-    # Upload to S3 via S3AM
-    s3am_command = ['s3am',
-                    'upload',
-                    '--sse-key-file', os.path.join(work_dir, 'temp.key'),
-                    'file://{}'.format(os.path.join(work_dir, sample_name)),
-                    's3://' + bucket_name + '/']
-    subprocess.check_call(s3am_command)
+        analysis_id = samples[0]
+        work_dir = job.fileStore.getLocalTempDir()
+        folder_path = os.path.join(work_dir, os.path.basename(analysis_id))
+        sudo = input_args['sudo']
+        # Acquire genetorrent key and download sample
+        shutil.copy(input_args['genetorrent_key'], os.path.join(work_dir, 'cghub.key'))
+        parameters = ['-vv', '-c', 'cghub.key', '-d', analysis_id]
+        docker_call(tool='quay.io/ucsc_cgl/genetorrent:3.8.7--9911761265b6f08bc3ef09f53af05f56848d805b',
+                    work_dir=work_dir, tool_parameters=parameters, sudo=sudo)
+        try:
+            sample = glob.glob(os.path.join(folder_path, '*tar*'))[0]
+        except KeyError as e:
+            print 'No tarfile found inside of folder: '.format(e)
+            raise
+        # Upload sample to S3AM
+        key_path = input_args['ssec']
+        if sample.endswith('gz'):
+            sample_name = analysis_id + '.tar.gz'
+            shutil.move(sample, os.path.join(work_dir, sample_name))
+        else:
+            sample_name = analysis_id + '.tar'
+            shutil.move(sample, os.path.join(work_dir, sample_name))
+        # Parse s3_dir to get bucket and s3 path
+        s3_dir = input_args['s3_dir']
+        bucket_name = s3_dir.lstrip('/').split('/')[0]
+        base_url = 'https://s3-us-west-2.amazonaws.com/'
+        url = os.path.join(base_url, bucket_name, sample_name)
+        # Generate keyfile for upload
+        with open(os.path.join(work_dir, 'temp.key'), 'wb') as f_out:
+            f_out.write(generate_unique_key(key_path, url))
+        # Upload to S3 via S3AM
+        s3am_command = ['s3am',
+                        'upload',
+                        '--sse-key-file', os.path.join(work_dir, 'temp.key'),
+                        'file://{}'.format(os.path.join(work_dir, sample_name)),
+                        's3://' + bucket_name + '/']
+        subprocess.check_call(s3am_command)
 
 
 def main():
