@@ -3,15 +3,20 @@
 @author Jacob Pfeil
 @data 01/13/2016
 
+Toil pipeline for processing bam files for GATK halpotype calling
 
-
-        0
-
-
-
-0 = Start node
-1 = reference index
-2 = reference dict
+1 = download shared data
+2 = reference preprocessing
+3 = download sample 
+4 = index
+5 = sort
+6 = mark duplicates
+7 = index
+8 = realigner target 
+9 = indel realignment
+10 = index
+11 = base recalibration
+12 = ouput bqsr file
 """
 
 import argparse
@@ -323,76 +328,6 @@ def create_reference_dict(job, ref_id, sudo):
     return job.fileStore.writeGlobalFile(os.path.join(work_dir, 'ref.dict'))
 
 
-def index(job, shared_ids, input_args, sample):
-    """
-    Runs samtools index to create (.bai) files
-
-    job_vars: tuple     Contains the input_args and ids dictionaries
-    """
-    debug_log = open('index', 'w')
-    # Unpack convenience variables for job
-    work_dir = job.fileStore.getLocalTempDir()
-    sudo = input_args['sudo']
-    outpath = os.path.join(work_dir, sample + '.bai')
-    debug_log.write(outpath + '\n')
-    debug_log.close()
-    # Retrieve file path
-    read_from_filestore(job, work_dir, shared_ids, sample)
-    # Call: index the normal.bam
-    parameters = ['index', sample]
-    docker_call(work_dir=work_dir, tool_parameters=parameters,
-                tool='quay.io/ucsc_cgl/samtools:0.1.19--dd5ac549b95eb3e5d166a5e310417ef13651994e',
-                outfiles=[sample + '.bai'],
-                sudo=sudo)
-    # Write to fileStore
-    return job.fileStore.writeGlobalFile(outpath)
-
-
-def sort(job, shared_ids, input_args, sample):
-    """
-    Uses picardtools SortSam to sort a sample bam file
-    """
-    assert sample.endswith('.bam'), "ERROR: sort takes a bam file"
-    filename, ext = os.path.splitext(os.path.basename(sample))
-    output = '{}.sorted.bam'.format(filename)
-    work_dir = job.fileStore.getLocalTempDir()
-
-    #Retrieve file path
-    read_from_filestore(job, work_dir, shared_ids, sample)
-    #Call: picardtools
-    command = ['SortSam',
-               'INPUT={}'.format(sample),
-               'OUTPUT={}'.format(output),
-               'SORT_ORDER=coordinate']
-    sudo = input_args['sudo']
-    docker_call(work_dir=work_dir, tool_parameters=command,
-                tool='quay.io/ucsc_cgl/picardtools:1.95--dd5ac549b95eb3e5d166a5e310417ef13651994e', sudo=sudo)
-    return job.fileStore.writeGlobalFile(os.path.join(work_dir, output))
-
-
-def mark_dups(job, shared_ids, input_args, sample):
-    """
-    Uses picardtools MarkDuplicates
-    """
-    assert sample.endswith('.bam'), "ERROR: mark_dups takes a bam file"
-    filename, ext = os.path.splitext(os.path.basename(sample))
-    output = '{}.mkdups.bam'.format(filename)
-    sudo = input_args['sudo']
-    work_dir = job.fileStore.getLocalTempDir()
-    # Retrieve file path
-    read_from_filestore(job, work_dir, shared_ids, sample)
-    # Call: picardtools
-    command = ['MarkDuplicates',
-               'INPUT={}'.format(sample),
-               'OUTPUT={}'.format(output),
-               'SORT_ORDER=coordinate',
-               'METRICS_FILE=metrics.txt',
-               'ASSUME_SORTED=true']
-    docker_call(work_dir=work_dir, tool_parameters=command,
-                tool='quay.io/ucsc_cgl/picardtools:1.95--dd5ac549b95eb3e5d166a5e310417ef13651994e', sudo=sudo)
-    return job.fileStore.writeGlobalFile(os.path.join(work_dir, output))
-
-
 # TODO Start of Pipeline
 def download_shared_files(job, input_args):
     """
@@ -436,7 +371,7 @@ def spawn_batch_jobs(job, shared_ids, input_args):
     for sample in samples:
         job.addChildJobFn(download_sample, shared_ids, input_args, sample)
 
-# Downloading is fine, but maybe there is a bug afterwards
+
 def download_sample(job, shared_ids, input_args, sample):
     """
     Defines sample variables then downloads the sample.
@@ -555,7 +490,6 @@ def index_mkdups(job, shared_ids, input_args):
     job.addChildJobFn(realigner_target_creator, shared_ids, input_args)
 
 
-#TODO STOP HERE
 def realigner_target_creator(job, shared_ids, input_args):
     """
     Creates <type>.intervals file needed for indel realignment
@@ -590,7 +524,7 @@ def realigner_target_creator(job, shared_ids, input_args):
     shared_ids['sample.intervals'] = job.fileStore.writeGlobalFile(output)
     job.addChildJobFn(indel_realignment, shared_ids, input_args)
 
-# TODO Can't find .bai file...May need to run separte function call 
+
 def indel_realignment(job, shared_ids, input_args):
     """
     Creates realigned bams using <sample>.intervals file from previous step
