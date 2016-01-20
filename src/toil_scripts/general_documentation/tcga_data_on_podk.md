@@ -9,7 +9,7 @@ pull request.
 
 1. PODK Access and Docker permissions
     1. For docker permissions contact Erich Weiler (weiler@soe.ucsc.edu)
-2. Python (install from source into your home directory: /pod/home/USER)
+2. Python 2.7.3 (install from source into your home directory: /pod/home/USER)
 3. virtualenv ([install from source](http://stackoverflow.com/questions/9348869/how-to-install-virtualenv-without-using-sudo))
 4. Acquire a [CGHub permissions key](https://cghub.ucsc.edu/keyfile/keyfile.html) to access TCGA and place in your home directory
 
