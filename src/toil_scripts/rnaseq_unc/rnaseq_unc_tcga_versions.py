@@ -489,7 +489,7 @@ def mapsplice(job, job_vars):
                   '-o', '/data']
     if not single_end_reads:
         parameters.extend(['-2', '/data/R2.fastq'])
-    docker_call(tool='quay.io/ucsc_cgl/mapsplice:2.1.8--dd5ac549b95eb3e5d166a5e310417ef13651994e',
+    docker_call(tool='quay.io/ucsc_cgl/mapsplice:2.0.1.9--2296da365ead6b12ded9d9c7b7798fbc927cd66b',
                 tool_parameters=parameters, work_dir=work_dir, sudo=sudo)
     # Write to FileStore
     for fname in ['alignments.bam', 'stats.txt']:
@@ -706,7 +706,7 @@ def transcriptome(job, job_vars):
                   '--out', docker_path(output),
                   '--xgtag',
                   '--reverse']
-    docker_call(tool='quay.io/ucsc_cgl/ubu:1.2--02806964cdf74bf5c39411b236b4c4e36d026843',
+    docker_call(tool='quay.io/ucsc_cgl/ubu:1.0--ce6807e937a7a29138f56ea1b8fc077528ee8180',
                 tool_parameters=parameters, work_dir=work_dir, java_opts='-Xmx30g', sudo=sudo)
     # Write to FileStore
     ids['transcriptome.bam'] = job.fileStore.writeGlobalFile(output)
@@ -734,7 +734,7 @@ def filter_bam(job, job_vars):
                   '--mapq', '1',
                   '--in', docker_path(transcriptome_bam),
                   '--out', docker_path(output)]
-    docker_call(tool='quay.io/ucsc_cgl/ubu:1.2--02806964cdf74bf5c39411b236b4c4e36d026843',
+    docker_call(tool='quay.io/ucsc_cgl/ubu:1.0--ce6807e937a7a29138f56ea1b8fc077528ee8180',
                 tool_parameters=parameters, work_dir=os.path.dirname(output), java_opts='-Xmx30g', sudo=sudo)
     # Write to FileStore
     ids['filtered.bam'] = job.fileStore.writeGlobalFile(output)
@@ -769,7 +769,7 @@ def rsem(job, job_vars):
         parameters.extend(['--paired-end'])
     parameters.extend(['/data/rsem_ref/hg19_M_rCRS_ref', output_prefix])
 
-    docker_call(tool='quay.io/ucsc_cgl/rsem:1.2.25--4e8d1b31d4028f464b3409c6558fb9dfcad73f88',
+    docker_call(tool='quay.io/ucsc_cgl/rsem:1.1.13--be66304ff7fcd6fb0babcd1884ed289eabedc655',
                 tool_parameters=parameters, work_dir=work_dir, sudo=sudo)
     os.rename(os.path.join(work_dir, output_prefix + '.genes.results'), os.path.join(work_dir, 'rsem_gene.tab'))
     os.rename(os.path.join(work_dir, output_prefix + '.isoforms.results'), os.path.join(work_dir, 'rsem_isoform.tab'))
