@@ -65,6 +65,7 @@ import errno
 import multiprocessing
 import shutil
 import tarfile
+from urlparse import urlparse
 from toil.job import Job
 
 
@@ -76,6 +77,9 @@ def build_parser():
     group.add_argument('--input', default=None, help='Accepts a local sample: /path/to/sample.tar. Take note! The'
                                                      'UUID for this sample is derived from the name. So samples'
                                                      'should be in the form of uuid.tar.')
+    group.add_argument('-f', '--config_fastq', default=None,
+                       help='Path to CSV. One sample per line with the format: '
+                            'uuid,file:///path/to/R_1.fastq,file:///path/to/R_2.fastq')
     parser.add_argument('--single_end_reads', default=False, action='store_true',
                         help='Set this flag if input data is non-paired (single end reads).')
     parser.add_argument('--unc', help='URL to unc_hg19.bed',
@@ -308,7 +312,9 @@ def tarball_files(work_dir, tar_name, uuid=None, files=None):
 # Job Functions
 def program_checks(job, input_args):
     """
-    Checks that dependency programs are installed
+    Checks that dependency programs are installed.
+
+    input_args: dict        Dictionary of input arguments (from main())
     """
     # Program checks
     for program in ['curl', 'docker', 'unzip', 'samtools']:
@@ -327,7 +333,7 @@ def download_shared_files(job, input_args):
     shared_ids = {}
     for f in shared_files:
         shared_ids[f] = job.addChildJobFn(download_from_url, input_args[f]).rv()
-    if input_args['config']:
+    if input_args['config'] or input_args['config_fastq']:
         job.addFollowOnJobFn(parse_config_file, shared_ids, input_args)
     else:
         sample_path = input_args['input']
@@ -336,7 +342,7 @@ def download_shared_files(job, input_args):
         job.addFollowOnJobFn(download_sample, shared_ids, input_args, sample)
 
 
-def parse_config_file(job, shared_ids, input_args):
+def parse_config_file(job, ids, input_args):
     """
     Launches pipeline for each sample.
 
@@ -349,10 +355,9 @@ def parse_config_file(job, shared_ids, input_args):
         for line in f.readlines():
             if not line.isspace():
                 sample = line.strip().split(',')
-                assert len(sample) == 2, 'Error: Config file is inappropriately formatted. Read documentation.'
                 samples.append(sample)
     for sample in samples:
-        job.addChildJobFn(download_sample, shared_ids, input_args, sample)
+        job.addChildJobFn(download_sample, ids, input_args, sample)
 
 
 def download_sample(job, ids, input_args, sample):
@@ -363,7 +368,12 @@ def download_sample(job, ids, input_args, sample):
     input_args: dict    Dictionary of input arguments
     sample: tuple       Contains uuid and sample_url
     """
-    uuid, sample_location = sample
+    if len(sample) == 2:
+        uuid, sample_location = sample
+        url1, url2 = None
+    else:
+        uuid, url1, url2 = sample
+        sample_location = None
     # Update values unique to sample
     sample_input = dict(input_args)
     sample_input['uuid'] = uuid
@@ -375,6 +385,9 @@ def download_sample(job, ids, input_args, sample):
     # Download or locate local file and place in the jobStore
     if sample_input['input']:
         ids['sample.tar'] = job.fileStore.writeGlobalFile(os.path.abspath(sample_location))
+    elif sample_input['config_fastq']:
+        ids['R1.fastq'] = job.fileStore.writeGlobalFile(urlparse(url1).path)
+        ids['R2.fastq'] = job.fileStore.writeGlobalFile(urlparse(url2).path)
     else:
         if sample_input['ssec']:
             ids['sample.tar'] = job.addChildJobFn(download_encrypted_file, sample_input, 'sample.tar', disk='25G').rv()
@@ -389,7 +402,12 @@ def static_dag_launchpoint(job, job_vars):
 
     job_vars: tuple     Tuple of dictionaries: input_args and ids
     """
-    a = job.wrapJobFn(merge_fastqs, job_vars, disk='70 G').encapsulate()
+    input_args, ids = job_vars
+    if input_args['config_fastq']:
+        cores = input_args['cpu_count']
+        a = job.wrapJobFn(mapsplice, job_vars, cores=cores, disk='130G').encapsulate()
+    else:
+        a = job.wrapJobFn(merge_fastqs, job_vars, disk='70 G').encapsulate()
     b = job.wrapJobFn(consolidate_output, job_vars, a.rv())
     # Take advantage of "encapsulate" to simplify pipeline wiring
     job.addChild(a)
@@ -888,6 +906,7 @@ def main():
     args = parser.parse_args()
     # Store inputs from argparse
     inputs = {'config': args.config,
+              'config_fastq': args.config_fastq,
               'input': args.input,
               'unc.bed': args.unc,
               'hg19.transcripts.fa': args.fasta,
@@ -908,6 +927,7 @@ def main():
 
     # Launch jobs
     Job.Runner.startToil(Job.wrapJobFn(download_shared_files, inputs), args)
+
 
 if __name__ == "__main__":
     main()
