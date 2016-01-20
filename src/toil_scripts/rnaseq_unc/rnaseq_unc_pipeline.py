@@ -133,6 +133,25 @@ def flatten(x):
     return result
 
 
+def which(program):
+    import os
+    def is_exe(fpath):
+        return os.path.isfile(fpath) and os.access(fpath, os.X_OK)
+
+    fpath, fname = os.path.split(program)
+    if fpath:
+        if is_exe(program):
+            return program
+    else:
+        for path in os.environ["PATH"].split(os.pathsep):
+            path = path.strip('"')
+            exe_file = os.path.join(path, program)
+            if is_exe(exe_file):
+                return exe_file
+
+    return None
+
+
 def generate_unique_key(master_key_path, url):
     """
     master_key_path: str    Path to the BD2K Master Key (for S3 Encryption)
@@ -287,6 +306,16 @@ def tarball_files(work_dir, tar_name, uuid=None, files=None):
 
 
 # Job Functions
+def program_checks(job, input_args):
+    """
+    Checks that dependency programs are installed
+    """
+    # Program checks
+    for program in ['curl', 'docker', 'unzip', 'samtools']:
+        assert which(program), 'Program "{}" must be installed on every node.'.format(program)
+    job.addChildJobFn(download_shared_files, input_args)
+
+
 def download_shared_files(job, input_args):
     """
     Downloads and stores shared inputs files in the FileStore
