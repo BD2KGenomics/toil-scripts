@@ -371,7 +371,7 @@ def download_sample(job, ids, input_args, sample):
     """
     if len(sample) == 2:
         uuid, sample_location = sample
-        url1, url2 = None
+        url1, url2 = None, None
     else:
         uuid, url1, url2 = sample
         sample_location = None
