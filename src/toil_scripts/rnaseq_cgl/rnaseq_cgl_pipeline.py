@@ -34,6 +34,7 @@ Dependencies
 Curl:       apt-get install curl
 Docker:     wget -qO- https://get.docker.com/ | sh
 Toil:       pip install toil
+Boto:       pip install boto
 """
 import os
 import argparse
@@ -58,6 +59,10 @@ def build_parser():
                        help='Path to CSV. One sample per line with the format: uuid,url (see example config). '
                             'URLs follow the format of: https://www.address.com/file.tar or file:///full/path/file.tar.'
                             ' Samples must be tarfiles that contain fastq files.')
+    group.add_argument('-f', '--config_fastq', default=None,
+                       help='Path to CSV. One sample per line with the format: '
+                            'uuid,file:///path/to/R_1.fastq,file:///path/to/R_2.fastq'
+                            'Samples must be a pair of fastq files with _1 and _2 in the name.')
     group.add_argument('-d', '--dir', default=None,
                        help='Path to directory of samples. Samples must be tarfiles that contain fastq files. '
                             'The UUID for the sample will be derived from the file basename.')
@@ -79,6 +84,8 @@ def build_parser():
     parser.add_argument('--rsemRef', help='URL to download RSEM reference built from HG38/gencodev23.',
                         default='https://s3-us-west-2.amazonaws.com/'
                                 'cgl-pipeline-inputs/rnaseq_cgl/rsem_ref_hg38_no_alt.tar.gz')
+    parser.add_argument('--wiggle', default=None, action='store_true', help='Uploads a wiggle from STAR to S3.')
+    parser.add_argument('--save_bam', default=None, action='store_true', help='Uploads aligned BAM to S3.')
     parser.add_argument('--fwd_3pr_adapter', help="Sequence for the FWD 3' Read Adapter.", default='AGATCGGAAGAG')
     parser.add_argument('--rev_3pr_adapter', help="Sequence for the REV 3' Read Adapter.", default='AGATCGGAAGAG')
     parser.add_argument('--ssec', default=None, help='Path to Key File for SSE-C Encryption')
@@ -121,19 +128,23 @@ def flatten(x):
     return result
 
 
-def humansize(nbytes):
-    """
-    Returns human readable format
-    """
-    suffixes = ['B', 'K', 'M', 'G', 'T', 'P']
-    if nbytes == 0:
-        return '0 B'
-    i = 0
-    while nbytes >= 1024 and i < len(suffixes)-1:
-        nbytes /= 1024.
-        i += 1
-    f = ('%.2f' % nbytes).rstrip('0').rstrip('.')
-    return '%s %s' % (f, suffixes[i])
+def which(program):
+    import os
+    def is_exe(fpath):
+        return os.path.isfile(fpath) and os.access(fpath, os.X_OK)
+
+    fpath, fname = os.path.split(program)
+    if fpath:
+        if is_exe(program):
+            return program
+    else:
+        for path in os.environ["PATH"].split(os.pathsep):
+            path = path.strip('"')
+            exe_file = os.path.join(path, program)
+            if is_exe(exe_file):
+                return exe_file
+
+    return None
 
 
 def generate_unique_key(master_key_path, url):
@@ -288,6 +299,17 @@ def parse_config(path_to_config):
     return samples
 
 
+def parse_config_fastq(path_to_config):
+    samples = []
+    with open(path_to_config, 'r') as f:
+        for line in f.readlines():
+            if not line.isspace():
+                sample = line.strip().split(',')
+                assert len(sample) == 3, 'Error: Config file is inappropriately formatted. Read documentation.'
+                samples.append(sample)
+    return samples
+
+
 def parse_genetorrent(path_to_config):
     """
     Parses genetorrent config file.  Returns list of samples: [ [id1, id1 ], [id2, id2], ... ]
@@ -320,35 +342,24 @@ def download_from_genetorrent(job, input_args, analysis_id):
     return job.fileStore.writeGlobalFile(sample[0])
 
 
-# TODO: Remove shared inputs entirely for optimization
 # Job Functions
-def download_shared_files(job, input_args):
+def parse_input_samples(job, input_args):
     """
-    Downloads and stores shared input files in the FileStore
-
-    input_args: dict        Dictionary of input arguments (from main())
-    """
-    shared_files = ['rsem_ref_hg38.tar.gz', 'kallisto_hg38.idx']
-    shared_ids = {}
-    for f in shared_files:
-        shared_ids[f] = job.addChildJobFn(download_from_url, input_args[f], disk='25G').rv()
-    job.addFollowOnJobFn(parse_input_samples, shared_ids, input_args)
-
-
-def parse_input_samples(job, shared_ids, input_args):
-    """
-    Launches pipeline for each sample.
+    Parses the various input formats then launches the job batcher
 
     shared_ids: dict        Dictionary of fileStore IDs
-    input_args: dict        Dictionary of input arguments
+    input_args: dict        Dictionary of input arguments (from main())
     """
     config = input_args['config']
+    config_fastq = input_args['config_fastq']
     sample_dir = input_args['dir']
     sample_urls = input_args['sample_urls']
     genetorrent = input_args['genetorrent']
     samples = None
     if config:
         samples = parse_config(config)
+    elif config_fastq:
+        samples = parse_config_fastq(config_fastq)
     elif sample_dir:
         files = os.listdir(sample_dir)
         samples = [[os.path.splitext(os.path.basename(f))[0],
@@ -357,11 +368,27 @@ def parse_input_samples(job, shared_ids, input_args):
         samples = [[os.path.splitext(os.path.basename(f))[0], f] for f in sample_urls]
     elif genetorrent:
         samples = parse_genetorrent(genetorrent)
-    for sample in samples:
-        job.addChildJobFn(download_sample, shared_ids, input_args, sample)
+    # Pass to batcher to spawn tree of jobs
+    job.addChildJobFn(batcher, input_args, samples)
 
 
-def download_sample(job, ids, input_args, sample):
+def batcher(job, input_args, samples):
+    """
+    Spawns a tree of jobs to avoid overloading the number of jobs spawned by a single parent.
+
+    input_args: dict             Dictionary of input arguments
+    samples: list/iterable       target list/iterable that spawns one job per item
+    """
+    if len(samples) > 1:
+        a = samples[len(samples)/2:]
+        b = samples[:len(samples)/2]
+        job.addChildJobFn(batcher, input_args, a)
+        job.addChildJobFn(batcher, input_args, b)
+    else:
+        job.addChildJobFn(download_sample, input_args, samples[0])
+
+
+def download_sample(job, input_args, sample):
     """
     Defines variables unique to a sample that are used in the rest of the pipelines
 
@@ -369,7 +396,13 @@ def download_sample(job, ids, input_args, sample):
     input_args: dict    Dictionary of input arguments
     sample: tuple       Contains uuid and sample_url
     """
-    uuid, url = sample
+    uuid, url = None, None
+    if len(sample) == 2:
+        uuid, url = sample
+    if len(sample) == 3:
+        uuid = sample[0]
+        url = sample[1:]
+    assert uuid and url, 'Issue with sample configuration retrieval: {}'.format(sample)
     # Update values unique to sample
     sample_input = dict(input_args)
     sample_input['uuid'] = uuid
@@ -377,10 +410,14 @@ def download_sample(job, ids, input_args, sample):
     if sample_input['output_dir']:
         sample_input['output_dir'] = os.path.join(input_args['output_dir'], uuid)
     sample_input['cpu_count'] = multiprocessing.cpu_count()
+    ids = {}
     job_vars = (sample_input, ids)
     # Download or locate local file and place in the jobStore
     if sample_input['genetorrent']:
         ids['sample.tar'] = job.addChildJobFn(download_from_genetorrent, input_args, url, disk='40G').rv()
+    elif type(url) is list and len(url) == 2:
+        ids['R1.fastq'] = job.fileStore.writeGlobalFile(urlparse(url[0]).path)
+        ids['R2.fastq'] = job.fileStore.writeGlobalFile(urlparse(url[1]).path)
     elif urlparse(url).scheme == 'file':
         ids['sample.tar'] = job.fileStore.writeGlobalFile(urlparse(url).path)
     else:
@@ -397,7 +434,11 @@ def static_dag_launchpoint(job, job_vars):
 
     job_vars: tuple     Tuple of dictionaries: input_args and ids
     """
-    a = job.wrapJobFn(process_sample_tar, job_vars, disk='70G').encapsulate()
+    input_args, ids = job_vars
+    if 'sample.tar' in ids:
+        a = job.wrapJobFn(process_sample_tar, job_vars, disk='70G').encapsulate()
+    else:
+        a = job.wrapJobFn(cutadapt, job_vars, disk='100G').encapsulate()
     b = job.wrapJobFn(consolidate_output, job_vars, a.rv(), disk='2G')
     # Take advantage of "encapsulate" to simplify pipeline wiring
     job.addChild(a)
@@ -546,6 +587,8 @@ def kallisto(job, job_vars):
     cores = input_args['cpu_count']
     uuid = input_args['uuid']
     work_dir = job.fileStore.getLocalTempDir()
+    subprocess.check_call(['curl', '-fs', '--retry', '5', '--create-dir', input_args['kallisto_hg38.idx'], '-o',
+                           os.path.join(work_dir, 'kallisto_hg38.idx')])
     # Retrieve files
     parameters = ['quant',
                   '-i', '/data/kallisto_hg38.idx',
@@ -554,10 +597,10 @@ def kallisto(job, job_vars):
                   '-b', '100']
     if ids['R_cutadapt.fastq']:
         # TODO: Look into fragment length and SD calculations
-        read_from_filestore(job, work_dir, ids, 'R_cutadapt.fastq', 'kallisto_hg38.idx')
+        read_from_filestore(job, work_dir, ids, 'R_cutadapt.fastq')
         parameters.extend(['--single', '-l', '200', '-s', '15', '/data/R_cutadapt.fastq'])
     else:
-        read_from_filestore(job, work_dir, ids, 'R1_cutadapt.fastq', 'R2_cutadapt.fastq', 'kallisto_hg38.idx')
+        read_from_filestore(job, work_dir, ids, 'R1_cutadapt.fastq', 'R2_cutadapt.fastq')
         parameters.extend(['/data/R1_cutadapt.fastq', '/data/R2_cutadapt.fastq'])
     # Call: Kallisto
     docker_call(tool='quay.io/ucsc_cgl/kallisto:0.42.4--35ac87df5b21a8e8e8d159f26864ac1e1db8cf86',
@@ -578,6 +621,7 @@ def star(job, job_vars):
     input_args, ids = job_vars
     sudo = input_args['sudo']
     cores = input_args['cpu_count']
+    uuid = input_args['uuid']
     work_dir = job.fileStore.getLocalTempDir()
     # Parameters and input retrieval
     parameters = ['--runThreadN', str(cores),
@@ -596,10 +640,13 @@ def star(job, job_vars):
                   '--alignMatesGapMax', '1000000',
                   '--alignSJoverhangMin', '8',
                   '--alignSJDBoverhangMin', '1',
-                  '--sjdbScore', '1',
-                  '--outBAMcompression', '-1']
+                  '--sjdbScore', '1']
     subprocess.check_call(['curl', '-fs', '--retry', '5', '--create-dir', input_args['starIndex.tar.gz'], '-o',
                            os.path.join(work_dir, 'starIndex.tar.gz')])
+    if input_args['wiggle']:
+        parameters.extend(['--outWigType', 'bedGraph',
+                           '--outWigStrand', 'Unstranded',
+                           '--outWigReferencesPrefix', 'chr'])
     if ids['R_cutadapt.fastq']:
         read_from_filestore(job, work_dir, ids, 'R_cutadapt.fastq')
         parameters.extend(['--readFilesIn', '/data/R_cutadapt.fastq'])
@@ -613,6 +660,14 @@ def star(job, job_vars):
     # Write to fileStore
     ids['transcriptome.bam'] = job.fileStore.writeGlobalFile(os.path.join(work_dir,
                                                                           'rnaAligned.toTranscriptome.out.bam'))
+    # Save Wiggle File
+    if input_args['wiggle'] and input_args['s3_dir']:
+        wiggles = [os.path.basename(x) for x in glob.glob(os.path.join(work_dir, '*.bg'))]
+        tarball_files(work_dir, 'wiggle.tar.gz', uuid=uuid, files=wiggles)
+        ids['wiggle.tar.gz'] = job.fileStore.writeGlobalFile(os.path.join(work_dir, 'wiggle.tar.gz'))
+        job.addChildJobFn(upload_wiggle_to_s3, job_vars)
+    if input_args['save_bam'] and input_args['s3_dir']:
+        job.addChildJobFn(upload_bam_to_s3, job_vars)
     # RSEM doesn't tend to use more than 16 cores
     cores = 16 if cores >= 16 else cores
     return job.addChildJobFn(rsem, job_vars, cores=cores, disk='50G').rv()
@@ -630,8 +685,10 @@ def rsem(job, job_vars):
     cores = 16 if cores >= 16 else cores
     sudo = input_args['sudo']
     # I/O
-    read_from_filestore(job, work_dir, ids, 'transcriptome.bam', 'rsem_ref_hg38.tar.gz')
-    subprocess.check_call(['tar', '-zxvf', os.path.join(work_dir, 'rsem_ref_hg38.tar.gz'), '-C', work_dir])
+    read_from_filestore(job, work_dir, ids, 'transcriptome.bam')
+    subprocess.check_call(['curl', '-fs', '--retry', '5', '--create-dir', input_args['rsem_ref_hg38.tar.gz'], '-o',
+                           os.path.join(work_dir, 'rsem_ref_hg38.tar.gz')])
+    subprocess.check_call(['tar', '-xvf', os.path.join(work_dir, 'rsem_ref_hg38.tar.gz'), '-C', work_dir])
     output_prefix = 'rsem'
     # Call: RSEM
     parameters = ['--quiet',
@@ -647,11 +704,11 @@ def rsem(job, job_vars):
         parameters = ['--paired-end'] + parameters
     docker_call(tool='quay.io/ucsc_cgl/rsem:1.2.25--d4275175cc8df36967db460b06337a14f40d2f21',
                 tool_parameters=parameters, work_dir=work_dir, sudo=sudo)
-    os.rename(os.path.join(work_dir, output_prefix+'.genes.results'), os.path.join(work_dir, 'rsem_gene.tab'))
-    os.rename(os.path.join(work_dir, output_prefix+'.isoforms.results'), os.path.join(work_dir, 'rsem_isoform.tab'))
+    os.rename(os.path.join(work_dir, output_prefix+'.genes.results'), os.path.join(work_dir, 'rsem_genes.results'))
+    os.rename(os.path.join(work_dir, output_prefix+'.isoforms.results'), os.path.join(work_dir, 'rsem_isoforms.results'))
     # Write to FileStore
-    ids['rsem_gene.tab'] = job.fileStore.writeGlobalFile(os.path.join(work_dir, 'rsem_gene.tab'))
-    ids['rsem_isoform.tab'] = job.fileStore.writeGlobalFile(os.path.join(work_dir, 'rsem_isoform.tab'))
+    ids['rsem_genes.results'] = job.fileStore.writeGlobalFile(os.path.join(work_dir, 'rsem_genes.results'))
+    ids['rsem_isoforms.results'] = job.fileStore.writeGlobalFile(os.path.join(work_dir, 'rsem_isoforms.results'))
     # Run child jobs
     return job.addChildJobFn(rsem_postprocess, job_vars).rv()
 
@@ -667,14 +724,15 @@ def rsem_postprocess(job, job_vars):
     uuid = input_args['uuid']
     sudo = input_args['sudo']
     # I/O
-    read_from_filestore(job, work_dir, ids, 'rsem_gene.tab', 'rsem_isoform.tab')
+    read_from_filestore(job, work_dir, ids, 'rsem_genes.results', 'rsem_isoforms.results')
     # Command
     sample = input_args['uuid']
     docker_call(tool='jvivian/rsem_postprocess', tool_parameters=[sample], work_dir=work_dir, sudo=sudo)
     # Tar output files together and store in fileStore
     output_files = ['rsem.genes.norm_counts.tab', 'rsem.genes.raw_counts.tab', 'rsem.genes.norm_fpkm.tab',
                     'rsem.genes.norm_tpm.tab', 'rsem.isoform.norm_counts.tab', 'rsem.isoform.raw_counts.tab',
-                    'rsem.isoform.norm_fpkm.tab', 'rsem.isoform.norm_tpm.tab']
+                    'rsem.isoform.norm_fpkm.tab', 'rsem.isoform.norm_tpm.tab', 'rsem_genes.results',
+                    'rsem_isoforms.results']
     tarball_files(work_dir, tar_name='rsem.tar.gz', uuid=uuid, files=output_files)
     return job.fileStore.writeGlobalFile(os.path.join(work_dir, 'rsem.tar.gz'))
 
@@ -761,6 +819,46 @@ def upload_to_s3(job, job_vars):
         k.set_contents_from_filename(uuid_tar)
 
 
+def upload_wiggle_to_s3(job, job_vars):
+    input_args, ids = job_vars
+    work_dir = job.fileStore.getLocalTempDir()
+    uuid = input_args['uuid']
+    # I/O
+    read_from_filestore(job, work_dir, ids, 'wiggle.tar.gz')
+    wiggle_tar = os.path.join(work_dir, 'wiggle.tar.gz')
+    sample_name = uuid + '.wiggle.tar.gz'
+    # Parse s3_dir to get bucket and s3 path
+    s3_dir = input_args['s3_dir']
+    bucket_name = s3_dir.split('/')[0]
+    bucket_dir = os.path.join('/'.join(s3_dir.split('/')[1:]), 'wiggle_files')
+    # Upload to S3 via S3AM
+    s3am_command = ['s3am',
+                    'upload',
+                    'file://{}'.format(wiggle_tar),
+                    os.path.join('s3://', bucket_name, bucket_dir, sample_name)]
+    subprocess.check_call(s3am_command)
+
+
+def upload_bam_to_s3(job, job_vars):
+    input_args, ids = job_vars
+    work_dir = job.fileStore.getLocalTempDir()
+    uuid = input_args['uuid']
+    # I/O
+    read_from_filestore(job, work_dir, ids, 'transcriptome.bam')
+    bam_path = os.path.join(work_dir, 'transcriptome.bam')
+    sample_name = uuid + '.bam'
+    # Parse s3_dir to get bucket and s3 path
+    s3_dir = input_args['s3_dir']
+    bucket_name = s3_dir.split('/')[0]
+    bucket_dir = os.path.join('/'.join(s3_dir.split('/')[1:]), 'bam_files')
+    # Upload to S3 via S3AM
+    s3am_command = ['s3am',
+                    'upload',
+                    'file://{}'.format(bam_path),
+                    os.path.join('s3://', bucket_name, bucket_dir, sample_name)]
+    subprocess.check_call(s3am_command)
+
+
 def main():
     """
     This is a Toil pipeline for the UCSC CGL's RNA-seq pipeline.
@@ -774,6 +872,7 @@ def main():
     args = parser.parse_args()
     # Store inputs from argparse
     inputs = {'config': args.config,
+              'config_fastq': args.config_fastq,
               'dir': args.dir,
               'sample_urls': args.sample_urls,
               'genetorrent': args.genetorrent,
@@ -787,6 +886,8 @@ def main():
               'ssec': args.ssec,
               's3_dir': args.s3_dir,
               'sudo': args.sudo,
+              'wiggle': args.wiggle,
+              'save_bam': args.save_bam,
               'uuid': None,
               'sample.tar': None,
               'cpu_count': None,
@@ -809,9 +910,12 @@ def main():
     # Genetorrent key must be provided along with genetorrent option
     if args.genetorrent and not args.genetorrent_key:
         raise RuntimeError("Cannot supply -genetorrent without -genetorrent_key")
+    # Program checks
+    for program in ['curl', 'docker']:
+        assert which(program), 'Program "{}" must be installed on every node.'.format(program)
 
     # Start Pipeline
-    Job.Runner.startToil(Job.wrapJobFn(download_shared_files, inputs), args)
+    Job.Runner.startToil(Job.wrapJobFn(parse_input_samples, inputs), args)
 
 
 if __name__ == '__main__':
