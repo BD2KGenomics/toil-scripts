@@ -72,7 +72,7 @@ def call_conductor(masterIP, inputs, src, dst):
                 "--net=host",
                 "-e", "AWS_ACCESS_KEY="+inputs['accessKey'],
                 "-e", "AWS_SECRET_KEY="+inputs['secretKey'],
-                "computationalgenomicslab/conductor",
+                "quay.io/ucsc_cgl/conductor",
                 "--master", "spark://"+masterIP+":"+SPARK_MASTER_PORT,
                 "--", "-C", src, dst])
 
@@ -110,7 +110,7 @@ def adam_convert(job, masterIP, inFile, snpFile, inputs):
     adamFile = ".".join(os.path.splitext(inFile)[0])+".adam"
     
     check_call(["docker", "run", "--net=host",
-                "computationalgenomicslab/adam:cd6ef41", 
+                "quay.io/ucsc_cgl/adam:cd6ef41", 
                 "--master", "spark://"+masterIP+":"+SPARK_MASTER_PORT, 
                 "--conf", "spark.hadoop.fs.default.name=hdfs://%s:%s" % (masterIP, HDFS_MASTER_PORT),
                 "--", "transform", 
@@ -119,7 +119,7 @@ def adam_convert(job, masterIP, inFile, snpFile, inputs):
     adamSnpFile = ".".join(os.path.splitext(snpFile)[0])+".var.adam"
 
     check_call(["docker", "run", "--net=host",
-                "computationalgenomicslab/adam:cd6ef41", 
+                "quay.io/ucsc_cgl/adam:cd6ef41", 
                 "--master", "spark://"+masterIP+":"+SPARK_MASTER_PORT, 
                 "--conf", "spark.hadoop.fs.default.name=hdfs://%s:%s" % (masterIP, HDFS_MASTER_PORT),
                 "--", "vcf2adam", 
@@ -142,7 +142,7 @@ def adam_transform(job, masterIP, inFile, snpFile, inputs):
     outFile = ".".join(os.path.splitext(inFile)[0])+".processed.bam"
 
     check_call(["docker", "run", "--net=host",
-                "computationalgenomicslab/adam:cd6ef41", 
+                "quay.io/ucsc_cgl/adam:cd6ef41", 
                 "--master", "spark://"+masterIP+":"+SPARK_MASTER_PORT, 
                 "--conf", "spark.driver.memory=%s" % inputs["driverMemory"],
                 "--conf", "spark.executor.memory=%s" % inputs["executorMemory"],
@@ -152,7 +152,7 @@ def adam_transform(job, masterIP, inFile, snpFile, inputs):
                 "-mark_duplicate_reads"])
 
     check_call(["docker", "run", "--net=host",
-                "computationalgenomicslab/adam:cd6ef41", 
+                "quay.io/ucsc_cgl/adam:cd6ef41", 
                 "--master", "spark://"+masterIP+":"+SPARK_MASTER_PORT, 
                 "--conf", "spark.driver.memory=%s" % inputs["driverMemory"],
                 "--conf", "spark.executor.memory=%s" % inputs["executorMemory"],
@@ -162,7 +162,7 @@ def adam_transform(job, masterIP, inFile, snpFile, inputs):
                 "-realign_indels"])
 
     check_call(["docker", "run", "--net=host",
-                "computationalgenomicslab/adam:cd6ef41", 
+                "quay.io/ucsc_cgl/adam:cd6ef41", 
                 "--master", "spark://"+masterIP+":"+SPARK_MASTER_PORT, 
                 "--conf", "spark.driver.memory=%s" % inputs["driverMemory"],
                 "--conf", "spark.executor.memory=%s" % inputs["executorMemory"],
@@ -173,7 +173,7 @@ def adam_transform(job, masterIP, inFile, snpFile, inputs):
                 "-known_snps", snpFile])
 
     check_call(["docker", "run", "--net=host",
-                "computationalgenomicslab/adam:cd6ef41", 
+                "quay.io/ucsc_cgl/adam:cd6ef41", 
                 "--master", "spark://"+masterIP+":"+SPARK_MASTER_PORT, 
                 "--conf", "spark.driver.memory=%s" % inputs["driverMemory"],
                 "--conf", "spark.executor.memory=%s" % inputs["executorMemory"],
@@ -219,12 +219,12 @@ class MasterService(Job.Service):
                                               "--net=host",
                                               "-d",
                                               "-e", "SPARK_MASTER_IP="+self.IP, 
-                                              "computationalgenomicslab/apache-spark-master:1.5.2"])[:-1]
+                                              "quay.io/ucsc_cgl/apache-spark-master:1.5.2"])[:-1]
         self.hdfsContainerID = check_output(["docker",
                                              "run",
                                              "--net=host",
                                              "-d",
-                                             "computationalgenomicslab/apache-hadoop-master:2.6.2", self.IP])[:-1]
+                                             "quay.io/ucsc_cgl/apache-hadoop-master:2.6.2", self.IP])[:-1]
         return self.IP
         
     def stop(self):
@@ -260,14 +260,14 @@ class WorkerService(Job.Service):
                                               "--net=host", 
                                               "-d",
                                               "-e", "\"SPARK_MASTER_IP="+self.masterIP+":"+SPARK_MASTER_PORT+"\"",
-                                              "computationalgenomicslab/apache-spark-worker:1.5.2", 
+                                              "quay.io/ucsc_cgl/apache-spark-worker:1.5.2", 
                                               self.masterIP+":"+SPARK_MASTER_PORT])[:-1]
         self.hdfsContainerID = check_output(["docker",
                                              "run",
                                              "--net=host",
                                              "-d",
                                              "-v", "/mnt/ephemeral/:/ephemeral/:rw",
-                                             "computationalgenomicslab/apache-hadoop-worker:2.6.2", self.masterIP])[:-1]
+                                             "quay.io/ucsc_cgl/apache-hadoop-worker:2.6.2", self.masterIP])[:-1]
         return
 
     def stop(self):
