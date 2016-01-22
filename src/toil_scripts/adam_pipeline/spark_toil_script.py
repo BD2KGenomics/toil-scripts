@@ -178,7 +178,6 @@ def adam_transform(job, masterIP, inFile, snpFile, inputs):
 
     inFileName = inFile.split("/")[-1]
     remove_file(masterIP, inFileName+"*")
-    log.write(
 
     check_call(["docker", "run", "--net=host",
                 "quay.io/ucsc_cgl/adam:cd6ef41", 
