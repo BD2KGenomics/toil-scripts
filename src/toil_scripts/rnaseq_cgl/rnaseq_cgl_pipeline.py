@@ -673,7 +673,8 @@ def star(job, job_vars):
         wiggles = [os.path.basename(x) for x in glob.glob(os.path.join(work_dir, '*.bg'))]
         # Rename extension
         for wiggle in wiggles:
-            shutil.move(wiggle, os.path.splitext(wiggle)[0] + '.bedGraph')
+            shutil.move(os.path.join(work_dir, wiggle),
+                        os.path.join(work_dir, os.path.splitext(wiggle)[0] + '.bedGraph'))
         wiggles = [os.path.splitext(x)[0] + '.bedGraph' for x in wiggles]
         tarball_files(work_dir, 'wiggle.tar.gz', uuid=uuid, files=wiggles)
         ids['wiggle.tar.gz'] = job.fileStore.writeGlobalFile(os.path.join(work_dir, 'wiggle.tar.gz'))
