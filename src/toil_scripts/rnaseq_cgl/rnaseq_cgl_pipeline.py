@@ -447,7 +447,8 @@ def static_dag_launchpoint(job, job_vars):
 
 def process_sample_tar(job, job_vars):
     """
-    Converts sample.tar(.gz) into two fastq files
+    Converts sample.tar(.gz) into two fastq files.
+    Due to edge conditions... BEWARE: HERE BE DRAGONS
 
     job_vars: tuple     Tuple of dictionaries: input_args and ids
     """
@@ -474,26 +475,33 @@ def process_sample_tar(job, job_vars):
             raise subprocess.CalledProcessError
     else:
         os.remove(os.path.join(work_dir, 'sample.tar'))
-        # Grab R1/R2 if TCGA data
-        r1 = sorted(glob.glob(os.path.join(work_dir, '*_1*')))
-        r2 = sorted(glob.glob(os.path.join(work_dir, '*_2*')))
-        r = sorted(glob.glob(os.path.join(work_dir, '*')))
+        # Grab files from tarball
+        fastqs = []
+        for root, subdir, files in os.walk(work_dir):
+            fastqs.extend([os.path.join(root, x) for x in files])
+        # Check for read 1 and read 2 files
+        r1 = sorted([x for x in fastqs if '_1' in x])
+        r2 = sorted([x for x in fastqs if '_2' in x])
         if not r1 or not r2:
             # Check if using a different standard
-            r1 = sorted(glob.glob(os.path.join(work_dir, '*R1*')))
-            r2 = sorted(glob.glob(os.path.join(work_dir, '*R2*')))
+            r1 = sorted([x for x in fastqs if 'R1' in x])
+            r2 = sorted([x for x in fastqs if 'R2' in x])
+        # Prune file name matches from each list
+        if len(r1) > len(r2):
+            r1 = [x for x in r1 if x not in r2]
+        elif len(r2) > len(r1):
+            r2 = [x for x in r2 if x not in r1]
         if not r1 or not r2:
             # Sample is assumed to be single-ended
-            if r[0].endswith('.gz'):
+            if fastqs[0].endswith('.gz'):
                 with open(os.path.join(work_dir, 'R.fastq'), 'w') as f:
-                    subprocess.check_call(['zcat'] + r, stdout=f)
-            elif len(r) > 1:
+                    subprocess.check_call(['zcat'] + fastqs, stdout=f)
+            elif len(fastqs) > 1:
                 with open(os.path.join(work_dir, 'R.fastq'), 'w') as f:
-                    subprocess.check_call(['cat'] + r, stdout=f)
+                    subprocess.check_call(['cat'] + fastqs, stdout=f)
             else:
-                shutil.move(r[0], os.path.join(work_dir, 'R.fastq'))
+                shutil.move(fastqs[0], os.path.join(work_dir, 'R.fastq'))
             ids['R.fastq'] = job.fileStore.writeGlobalFile(os.path.join(work_dir, 'R.fastq'))
-
         else:
             # Sample is assumed to be paired end
             if r1[0].endswith('.gz') and r2[0].endswith('.gz'):
@@ -663,6 +671,10 @@ def star(job, job_vars):
     # Save Wiggle File
     if input_args['wiggle'] and input_args['s3_dir']:
         wiggles = [os.path.basename(x) for x in glob.glob(os.path.join(work_dir, '*.bg'))]
+        # Rename extension
+        for wiggle in wiggles:
+            shutil.move(wiggle, os.path.splitext(wiggle)[0] + '.bedGraph')
+        wiggles = [os.path.splitext(x)[0] + '.bedGraph' for x in wiggles]
         tarball_files(work_dir, 'wiggle.tar.gz', uuid=uuid, files=wiggles)
         ids['wiggle.tar.gz'] = job.fileStore.writeGlobalFile(os.path.join(work_dir, 'wiggle.tar.gz'))
         job.addChildJobFn(upload_wiggle_to_s3, job_vars)
@@ -689,7 +701,7 @@ def rsem(job, job_vars):
     subprocess.check_call(['curl', '-fs', '--retry', '5', '--create-dir', input_args['rsem_ref_hg38.tar.gz'], '-o',
                            os.path.join(work_dir, 'rsem_ref_hg38.tar.gz')])
     subprocess.check_call(['tar', '-xvf', os.path.join(work_dir, 'rsem_ref_hg38.tar.gz'), '-C', work_dir])
-    output_prefix = 'rsem'
+    prefix = 'rsem'
     # Call: RSEM
     parameters = ['--quiet',
                   '--no-qualities',
@@ -699,13 +711,13 @@ def rsem(job, job_vars):
                   '--fragment-length-mean', '-1.0',
                   '--bam', '/data/transcriptome.bam',
                   '/data/rsem_ref_hg38/hg38',
-                  output_prefix]
+                  prefix]
     if not ids['R_cutadapt.fastq']:
         parameters = ['--paired-end'] + parameters
     docker_call(tool='quay.io/ucsc_cgl/rsem:1.2.25--d4275175cc8df36967db460b06337a14f40d2f21',
                 tool_parameters=parameters, work_dir=work_dir, sudo=sudo)
-    os.rename(os.path.join(work_dir, output_prefix+'.genes.results'), os.path.join(work_dir, 'rsem_genes.results'))
-    os.rename(os.path.join(work_dir, output_prefix+'.isoforms.results'), os.path.join(work_dir, 'rsem_isoforms.results'))
+    os.rename(os.path.join(work_dir, prefix + '.genes.results'), os.path.join(work_dir, 'rsem_genes.results'))
+    os.rename(os.path.join(work_dir, prefix + '.isoforms.results'), os.path.join(work_dir, 'rsem_isoforms.results'))
     # Write to FileStore
     ids['rsem_genes.results'] = job.fileStore.writeGlobalFile(os.path.join(work_dir, 'rsem_genes.results'))
     ids['rsem_isoforms.results'] = job.fileStore.writeGlobalFile(os.path.join(work_dir, 'rsem_isoforms.results'))
