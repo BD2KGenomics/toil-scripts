@@ -880,16 +880,17 @@ def upload_bam_to_s3(job, job_vars):
     work_dir = job.fileStore.getLocalTempDir()
     uuid = input_args['uuid']
     # I/O
-    uuid_bam = return_input_paths(work_dir, ids, 'alignments.bam')
+    return_input_paths(work_dir, ids, 'alignments.bam')
+    bam_path = os.path.join(work_dir, 'alignments.bam')
     sample_name = uuid + '.bam'
     # Parse s3_dir to get bucket and s3 path
     s3_dir = input_args['s3_dir']
     bucket_name = s3_dir.split('/')[0]
-    bucket_dir = '/'.join(s3_dir.split('/')[1:])
+    bucket_dir = os.path.join('/'.join(s3_dir.split('/')[1:]), 'bam_files')
     # Upload to S3 via S3AM
     s3am_command = ['s3am',
                     'upload',
-                    'file://{}'.format(uuid_bam),
+                    'file://{}'.format(bam_path),
                     os.path.join('s3://', bucket_name, bucket_dir, sample_name)]
     subprocess.check_call(s3am_command)
 
