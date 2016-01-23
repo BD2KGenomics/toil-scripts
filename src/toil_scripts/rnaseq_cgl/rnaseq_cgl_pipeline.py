@@ -58,7 +58,9 @@ def build_parser():
     group.add_argument('-c', '--config', default=None,
                        help='Path to CSV. One sample per line with the format: uuid,url (see example config). '
                             'URLs follow the format of: https://www.address.com/file.tar or file:///full/path/file.tar.'
-                            ' Samples must be tarfiles that contain fastq files.')
+                            ' Samples must be tarfiles that contain fastq files. \n\nAlternatively, if your data is'
+                            'not tarred, you can create a CSV of one sample per line: uuid,url1,url2 .  Where url1'
+                            'and url2 refer to urls to the pair of fastq files.')
     group.add_argument('-f', '--config_fastq', default=None,
                        help='Path to CSV. One sample per line with the format: '
                             'uuid,file:///path/to/R_1.fastq,file:///path/to/R_2.fastq'
@@ -294,18 +296,7 @@ def parse_config(path_to_config):
         for line in f.readlines():
             if not line.isspace():
                 sample = line.strip().split(',')
-                assert len(sample) == 2, 'Error: Config file is inappropriately formatted. Read documentation.'
-                samples.append(sample)
-    return samples
-
-
-def parse_config_fastq(path_to_config):
-    samples = []
-    with open(path_to_config, 'r') as f:
-        for line in f.readlines():
-            if not line.isspace():
-                sample = line.strip().split(',')
-                assert len(sample) == 3, 'Error: Config file is inappropriately formatted. Read documentation.'
+                assert len(sample) == 2 or len(sample) == 3, 'Error: Config file is inappropriately formatted.'
                 samples.append(sample)
     return samples
 
@@ -351,15 +342,12 @@ def parse_input_samples(job, input_args):
     input_args: dict        Dictionary of input arguments (from main())
     """
     config = input_args['config']
-    config_fastq = input_args['config_fastq']
     sample_dir = input_args['dir']
     sample_urls = input_args['sample_urls']
     genetorrent = input_args['genetorrent']
     samples = None
     if config:
         samples = parse_config(config)
-    elif config_fastq:
-        samples = parse_config_fastq(config_fastq)
     elif sample_dir:
         files = os.listdir(sample_dir)
         samples = [[os.path.splitext(os.path.basename(f))[0],
@@ -396,17 +384,19 @@ def download_sample(job, input_args, sample):
     input_args: dict    Dictionary of input arguments
     sample: tuple       Contains uuid and sample_url
     """
+    sample_input = dict(input_args)
     uuid, url = None, None
     if len(sample) == 2:
         uuid, url = sample
+        sample_input['sample.tar'] = url
     if len(sample) == 3:
         uuid = sample[0]
         url = sample[1:]
+        sample_input['R1.fastq'] = url[0]
+        sample_input['R2.fastq'] = url[1]
     assert uuid and url, 'Issue with sample configuration retrieval: {}'.format(sample)
     # Update values unique to sample
-    sample_input = dict(input_args)
     sample_input['uuid'] = uuid
-    sample_input['sample.tar'] = url
     if sample_input['output_dir']:
         sample_input['output_dir'] = os.path.join(input_args['output_dir'], uuid)
     sample_input['cpu_count'] = multiprocessing.cpu_count()
@@ -416,8 +406,16 @@ def download_sample(job, input_args, sample):
     if sample_input['genetorrent']:
         ids['sample.tar'] = job.addChildJobFn(download_from_genetorrent, input_args, url, disk='40G').rv()
     elif type(url) is list and len(url) == 2:
-        ids['R1.fastq'] = job.fileStore.writeGlobalFile(urlparse(url[0]).path)
-        ids['R2.fastq'] = job.fileStore.writeGlobalFile(urlparse(url[1]).path)
+        if urlparse(url[0]) == 'file':
+            ids['R1.fastq'] = job.fileStore.writeGlobalFile(urlparse(url[0]).path)
+            ids['R2.fastq'] = job.fileStore.writeGlobalFile(urlparse(url[1]).path)
+        else:
+            if sample_input['ssec']:
+                ids['R1.fastq'] = job.addChildJobFn(download_encrypted_file, sample_input, 'R1.fastq', disk='40G').rv()
+                ids['R2.fastq'] = job.addChildJobFn(download_encrypted_file, sample_input, 'R1.fastq', disk='40G').rv()
+            else:
+                ids['R1.fastq'] = job.addChildJobFn(download_from_url, sample_input['R1.fastq'], disk='40G').rv()
+                ids['R2.fastq'] = job.addChildJobFn(download_from_url, sample_input['R1.fastq'], disk='40G').rv()
     elif urlparse(url).scheme == 'file':
         ids['sample.tar'] = job.fileStore.writeGlobalFile(urlparse(url).path)
     else:
@@ -856,6 +854,7 @@ def upload_bam_to_s3(job, job_vars):
     input_args, ids = job_vars
     work_dir = job.fileStore.getLocalTempDir()
     uuid = input_args['uuid']
+    key_path = input_args['ssec']
     # I/O
     read_from_filestore(job, work_dir, ids, 'transcriptome.bam')
     bam_path = os.path.join(work_dir, 'transcriptome.bam')
@@ -864,9 +863,15 @@ def upload_bam_to_s3(job, job_vars):
     s3_dir = input_args['s3_dir']
     bucket_name = s3_dir.split('/')[0]
     bucket_dir = os.path.join('/'.join(s3_dir.split('/')[1:]), 'bam_files')
+    base_url = 'https://s3-us-west-2.amazonaws.com/'
+    url = os.path.join(base_url, bucket_name, bucket_dir, sample_name)
+    # Generate keyfile for upload
+    with open(os.path.join(work_dir, 'temp.key'), 'wb') as f_out:
+        f_out.write(generate_unique_key(key_path, url))
     # Upload to S3 via S3AM
     s3am_command = ['s3am',
                     'upload',
+                    '--sse-key-file', os.path.join(work_dir, 'temp.key'),
                     'file://{}'.format(bam_path),
                     os.path.join('s3://', bucket_name, bucket_dir, sample_name)]
     subprocess.check_call(s3am_command)
@@ -884,8 +889,8 @@ def main():
     Job.Runner.addToilOptions(parser)
     args = parser.parse_args()
     # Store inputs from argparse
+    # Sanity checks
     inputs = {'config': args.config,
-              'config_fastq': args.config_fastq,
               'dir': args.dir,
               'sample_urls': args.sample_urls,
               'genetorrent': args.genetorrent,
@@ -906,7 +911,6 @@ def main():
               'cpu_count': None,
               'improper_pair': None,
               'single_end': None}
-    # Sanity checks
     if args.ssec:
         assert os.path.isfile(args.ssec)
     if args.config:
