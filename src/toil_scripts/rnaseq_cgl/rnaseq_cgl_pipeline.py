@@ -715,11 +715,11 @@ def rsem(job, job_vars):
         parameters = ['--paired-end'] + parameters
     docker_call(tool='quay.io/ucsc_cgl/rsem:1.2.25--d4275175cc8df36967db460b06337a14f40d2f21',
                 tool_parameters=parameters, work_dir=work_dir, sudo=sudo)
-    os.rename(os.path.join(work_dir, prefix + '.genes.results'), os.path.join(work_dir, 'rsem_genes.results'))
-    os.rename(os.path.join(work_dir, prefix + '.isoforms.results'), os.path.join(work_dir, 'rsem_isoforms.results'))
+    os.rename(os.path.join(work_dir, prefix + '.genes.results'), os.path.join(work_dir, 'rsem_gene.tab'))
+    os.rename(os.path.join(work_dir, prefix + '.isoforms.results'), os.path.join(work_dir, 'rsem_isoform.tab'))
     # Write to FileStore
-    ids['rsem_genes.results'] = job.fileStore.writeGlobalFile(os.path.join(work_dir, 'rsem_genes.results'))
-    ids['rsem_isoforms.results'] = job.fileStore.writeGlobalFile(os.path.join(work_dir, 'rsem_isoforms.results'))
+    ids['rsem_gene.tab'] = job.fileStore.writeGlobalFile(os.path.join(work_dir, 'rsem_gene.tab'))
+    ids['rsem_isoform.tab'] = job.fileStore.writeGlobalFile(os.path.join(work_dir, 'rsem_isoform.tab'))
     # Run child jobs
     return job.addChildJobFn(rsem_postprocess, job_vars).rv()
 
@@ -735,11 +735,13 @@ def rsem_postprocess(job, job_vars):
     uuid = input_args['uuid']
     sudo = input_args['sudo']
     # I/O
-    read_from_filestore(job, work_dir, ids, 'rsem_genes.results', 'rsem_isoforms.results')
+    read_from_filestore(job, work_dir, ids, 'rsem_gene.tab', 'rsem_isoform.tab')
     # Command
     sample = input_args['uuid']
     docker_call(tool='jvivian/rsem_postprocess', tool_parameters=[sample], work_dir=work_dir, sudo=sudo)
     # Tar output files together and store in fileStore
+    os.rename(os.path.join(work_dir, 'rsem_gene.tab'), os.path.join(work_dir, 'rsem_genes.results'))
+    os.rename(os.path.join(work_dir, 'rsem_isoform.tab'), os.path.join(work_dir, 'rsem_isoforms.results'))
     output_files = ['rsem.genes.norm_counts.tab', 'rsem.genes.raw_counts.tab', 'rsem.genes.norm_fpkm.tab',
                     'rsem.genes.norm_tpm.tab', 'rsem.isoform.norm_counts.tab', 'rsem.isoform.raw_counts.tab',
                     'rsem.isoform.norm_fpkm.tab', 'rsem.isoform.norm_tpm.tab', 'rsem_genes.results',
