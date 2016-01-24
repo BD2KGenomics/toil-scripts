@@ -50,6 +50,7 @@ def build_parser():
     parser.add_argument('-p', '--pac', required=True, help='Reference fasta file (pac)')
     parser.add_argument('-a', '--sa', required=True, help='Reference fasta file (sa)')
     parser.add_argument('-f', '--fai', required=True, help='Reference fasta file (fai)')
+    parser.add_argument('-t', '--alt', required=False, help='Alternate file for reference build (alt). Necessary for alt aware alignment.')
     parser.add_argument('-s', '--ssec', help='Path to Key File for SSE-C Encryption')
     parser.add_argument('-o', '--output_dir', default=None, help='full path where final results will be output')
     parser.add_argument('-u', '--sudo', dest='sudo', action='store_true', help='Docker usually needs sudo to execute '
@@ -57,6 +58,7 @@ def build_parser():
                                                                                'or when a member of a Docker group.')
     parser.add_argument('-3', '--s3_dir', default=None, help='S3 Directory, starting with bucket name. e.g.: '
                                                              'cgl-driver-projects/ckcc/rna-seq-samples/')
+    parser.add_argument('-k', '--use_bwakit', action='store_true', help='Use bwakit instead of the binary build of bwa')
     parser.set_defaults(sudo=False)
     return parser
 
@@ -229,6 +231,10 @@ def download_shared_files(job, input_args):
     input_args: dict        Input arguments (passed from main())
     """
     shared_files = ['ref.fa', 'ref.fa.amb', 'ref.fa.ann', 'ref.fa.bwt', 'ref.fa.pac', 'ref.fa.sa', 'ref.fa.fai']
+
+    if input_args['ref.fa.alt']:
+        shared_files.append('ref.fa.alt')
+
     shared_ids = {}
     for fname in shared_files:
         url = input_args[fname]
@@ -286,15 +292,31 @@ def static_dag_declaration(job, job_vars):
     # Define
     input_args, ids = job_vars
     cores = input_args['cpu_count']
-    bwa = job.wrapJobFn(run_bwa, job_vars, cores=cores, disk='150G')
-    conversion = job.wrapJobFn(bam_conversion, job_vars, bwa.rv(), disk='150G')
-    header = job.wrapJobFn(fix_bam_header, job_vars, conversion.rv(), disk='100G')
-    rg = job.wrapJobFn(add_readgroups, job_vars, header.rv(), memory='15G', disk='100G')
-    # Link
-    job.addChild(bwa)
-    bwa.addChild(conversion)
-    conversion.addChild(header)
-    header.addChild(rg)
+
+    # if we run with bwakit, we skip conversion
+    if input_args['use_bwakit']:
+
+        bwa = job.wrapJobFn(run_bwa, job_vars, cores=cores, disk='150G')
+        header = job.wrapJobFn(fix_bam_header, job_vars, bwa.rv(), disk='100G')
+        rg = job.wrapJobFn(add_readgroups, job_vars, header.rv(), memory='15G', disk='100G')
+        
+        # Link
+        job.addChild(bwa)
+        bwa.addChild(header)
+        header.addChild(rg)
+    
+    else:
+
+        bwa = job.wrapJobFn(run_bwa, job_vars, cores=cores, disk='150G')
+        conversion = job.wrapJobFn(bam_conversion, job_vars, bwa.rv(), disk='150G')
+        header = job.wrapJobFn(fix_bam_header, job_vars, conversion.rv(), disk='100G')
+        rg = job.wrapJobFn(add_readgroups, job_vars, header.rv(), memory='15G', disk='100G')
+        
+        # Link
+        job.addChild(bwa)
+        bwa.addChild(conversion)
+        conversion.addChild(header)
+        header.addChild(rg)
 
 
 def run_bwa(job, job_vars):
@@ -313,15 +335,41 @@ def run_bwa(job, job_vars):
     # Retrieve input files
     return_input_paths(job, work_dir, ids, 'ref.fa', 'ref.fa.amb', 'ref.fa.ann',
                        'ref.fa.bwt', 'ref.fa.pac', 'ref.fa.sa', 'ref.fa.fai')
-    # Call: BWA
-    parameters = ["mem",
-                  "-t", str(cores),
-                  "/data/ref.fa"] + ['/data/r1.fq.gz', '/data/r2.fq.gz']
 
-    with open(os.path.join(work_dir, 'aligned.sam'), 'w') as samfile:
-        docker_call(tool='quay.io/ucsc_cgl/bwa:0.7.12--dd5ac549b95eb3e5d166a5e310417ef13651994e',
-                    tool_parameters=parameters, work_dir=work_dir, outfile=samfile, sudo=sudo)
-    return job.fileStore.writeGlobalFile(os.path.join(work_dir, 'aligned.sam'))
+    if input_args['ref.fa.alt']:
+        return_input_paths(job, work_dir, ids, 'ref.fa.alt')
+
+    if input_args['use_bwakit']:
+        
+        # Call: bwakit
+        parameters = ['-o', '/data/aligned',
+                      '-t', str(cores),
+                      '/data/ref.fa',
+                      '/data/r1.fq.gz',
+                      '/data/r2.fq.gz']
+
+        docker_call(tool='quay.io/ucsc_cgl/bwakit:0.7.12',
+                    tool_parameters=parameters, work_dir=work_dir, sudo=sudo)
+
+        # bwa insists on adding an `*.aln.sam` suffix, so rename the output file
+        os.rename(os.path.join(work_dir, 'aligned.aln.bam'),
+                  os.path.join(work_dir, 'aligned.bam'))
+
+        # write aligned sam file to global file store
+        return job.fileStore.writeGlobalFile(os.path.join(work_dir, 'aligned.bam'))
+
+    else:
+        # Call: BWA
+        parameters = ["mem",
+                      "-t", str(cores),
+                      "/data/ref.fa"] + ['/data/r1.fq.gz', '/data/r2.fq.gz']
+
+        with open(os.path.join(work_dir, 'aligned.sam'), 'w') as samfile:
+            docker_call(tool='quay.io/ucsc_cgl/bwa:0.7.12--dd5ac549b95eb3e5d166a5e310417ef13651994e',
+                        tool_parameters=parameters, work_dir=work_dir, outfile=samfile, sudo=sudo)
+
+        # write aligned sam file to global file store
+        return job.fileStore.writeGlobalFile(os.path.join(work_dir, 'aligned.sam'))
 
 
 def bam_conversion(job, job_vars, sam_id):
@@ -476,13 +524,15 @@ def main():
               'ref.fa.pac': args.pac,
               'ref.fa.sa': args.sa,
               'ref.fa.fai': args.fai,
+              'ref.fa.alt': args.alt,
               'ssec': args.ssec,
               'output_dir': args.output_dir,
               'sudo': args.sudo,
               's3_dir': args.s3_dir,
               'lb': args.lb,
               'uuid': None,
-              'cpu_count': None}
+              'cpu_count': None,
+              'use_bwakit': args.use_bwakit}
 
     # Launch Pipeline
     Job.Runner.startToil(Job.wrapJobFn(download_shared_files, inputs), args)
