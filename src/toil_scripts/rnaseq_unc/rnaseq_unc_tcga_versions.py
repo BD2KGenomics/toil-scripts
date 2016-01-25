@@ -880,7 +880,7 @@ def upload_bam_to_s3(job, job_vars):
     work_dir = job.fileStore.getLocalTempDir()
     uuid = input_args['uuid']
     # I/O
-    return_input_paths(work_dir, ids, 'alignments.bam')
+    job.fileStore.readGlobalFile(ids['alignments.bam'], os.path.join(work_dir, 'alignments.bam'))
     bam_path = os.path.join(work_dir, 'alignments.bam')
     sample_name = uuid + '.bam'
     # Parse s3_dir to get bucket and s3 path
