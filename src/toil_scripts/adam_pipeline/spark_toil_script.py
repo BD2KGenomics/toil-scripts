@@ -173,7 +173,7 @@ def adam_transform(job, masterIP, inFile, snpFile, inputs):
                 "--conf", "spark.hadoop.fs.default.name=hdfs://%s:%s" % (masterIP, HDFS_MASTER_PORT),
                 "--conf", "spark.local.dir=/ephemeral/spark",
                 "--", "transform", 
-                inFile, "hdfs://"+masterIP+":"+HDFS_MASTER_PORT+"/mkdups.adam", 
+                inFile,  "hdfs://%s:%s/mkdups.adam" % (masterIP, HDFS_MASTER_PORT), 
                 "-mark_duplicate_reads"])
 
     inFileName = inFile.split("/")[-1]
