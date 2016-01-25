@@ -187,7 +187,8 @@ def adam_transform(job, masterIP, inFile, snpFile, inputs):
                 "--conf", "spark.hadoop.fs.default.name=hdfs://%s:%s" % (masterIP, HDFS_MASTER_PORT),
                 "--conf", "spark.local.dir=/ephemeral/spark",
                 "--", "transform", 
-                "hdfs://"+masterIP+":"+HDFS_MASTER_PORT+"/mkdups.adam", "hdfs://"+masterIP+":"+HDFS_MASTER_PORT+"/ri.adam",
+                "hdfs://%s:%s/mkdups.adam" % (masterIP, HDFS_MASTER_PORT),
+                "hdfs://%s:%s/ri.adam" % (masterIP, HDFS_MASTER_PORT),
                 "-realign_indels"])
 
     remove_file(masterIP, "mkdups.adam*")
@@ -200,7 +201,8 @@ def adam_transform(job, masterIP, inFile, snpFile, inputs):
                 "--conf", "spark.hadoop.fs.default.name=hdfs://%s:%s" % (masterIP, HDFS_MASTER_PORT),
                 "--conf", "spark.local.dir=/ephemeral/spark",
                 "--", "transform", 
-                "hdfs://"+masterIP+":"+HDFS_MASTER_PORT+"/ri.adam", "hdfs://"+masterIP+":"+HDFS_MASTER_PORT+"/bqsr.adam",
+                "hdfs://%s:%s/ri.adam" % (masterIP, HDFS_MASTER_PORT),
+                "hdfs://%s:%s/bqsr.adam" % (masterIP, HDFS_MASTER_PORT),
                 "-recalibrate_base_qualities", 
                 "-known_snps", snpFile])
     
@@ -214,7 +216,8 @@ def adam_transform(job, masterIP, inFile, snpFile, inputs):
                 "--conf", "spark.hadoop.fs.default.name=hdfs://%s:%s" % (masterIP, HDFS_MASTER_PORT),
                 "--conf", "spark.local.dir=/ephemeral/spark",
                 "--", "transform", 
-                "hdfs://"+masterIP+":"+HDFS_MASTER_PORT+"/bqsr.adam", outFile,
+                "hdfs://%s:%s/bqsr.adam" % (masterIP, HDFS_MASTER_PORT), 
+                outFile,
                 "-sort_reads", "-single"])
 
     remove_file(masterIP, "bqsr.adam*")
@@ -271,7 +274,6 @@ class MasterService(Job.Service):
         """
         log.write("stop masters\n")
         log.flush()
-
         call(["docker", "exec", self.sparkContainerID, "rm", "-r", "/ephemeral/spark"])
         call(["docker", "stop", self.sparkContainerID])
         call(["docker", "rm", self.sparkContainerID])
