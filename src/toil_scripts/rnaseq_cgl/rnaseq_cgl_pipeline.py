@@ -61,10 +61,6 @@ def build_parser():
                             ' Samples must be tarfiles that contain fastq files. \n\nAlternatively, if your data is'
                             'not tarred, you can create a CSV of one sample per line: uuid,url1,url2 .  Where url1'
                             'and url2 refer to urls to the pair of fastq files.')
-    group.add_argument('-f', '--config_fastq', default=None,
-                       help='Path to CSV. One sample per line with the format: '
-                            'uuid,file:///path/to/R_1.fastq,file:///path/to/R_2.fastq'
-                            'Samples must be a pair of fastq files with _1 and _2 in the name.')
     group.add_argument('-d', '--dir', default=None,
                        help='Path to directory of samples. Samples must be tarfiles that contain fastq files. '
                             'The UUID for the sample will be derived from the file basename.')
@@ -726,7 +722,9 @@ def rsem(job, job_vars):
 
 def rsem_postprocess(job, job_vars):
     """
-    Parses RSEMs output to produce the separate .tab files (TPM, FPKM, counts) for both gene and isoform
+    Parses RSEMs output to produce the separate .tab files (TPM, FPKM, counts) for both gene and isoform.
+    These are two-column files: Genes and Quantifications.
+    HUGO files are also provided that have been mapped from Gencode/ENSEMBLE names.
 
     job_vars: tuple     Tuple of dictionaries: input_args and ids
     """
@@ -736,18 +734,27 @@ def rsem_postprocess(job, job_vars):
     sudo = input_args['sudo']
     # I/O
     read_from_filestore(job, work_dir, ids, 'rsem_gene.tab', 'rsem_isoform.tab')
-    # Command
+    # Convert RSEM files into individual .tab files.
     sample = input_args['uuid']
     docker_call(tool='jvivian/rsem_postprocess', tool_parameters=[sample], work_dir=work_dir, sudo=sudo)
-    # Tar output files together and store in fileStore
     os.rename(os.path.join(work_dir, 'rsem_gene.tab'), os.path.join(work_dir, 'rsem_genes.results'))
     os.rename(os.path.join(work_dir, 'rsem_isoform.tab'), os.path.join(work_dir, 'rsem_isoforms.results'))
     output_files = ['rsem.genes.norm_counts.tab', 'rsem.genes.raw_counts.tab', 'rsem.genes.norm_fpkm.tab',
                     'rsem.genes.norm_tpm.tab', 'rsem.isoform.norm_counts.tab', 'rsem.isoform.raw_counts.tab',
                     'rsem.isoform.norm_fpkm.tab', 'rsem.isoform.norm_tpm.tab', 'rsem_genes.results',
                     'rsem_isoforms.results']
+    # Perform HUGO gene / isoform name mapping
+    genes = [x for x in output_files if 'gene' in x]
+    isoforms = [x for x in output_files if 'isoform' in x]
+    command = ['-g'] + genes + ['-i'] + isoforms
+    docker_call(tool='jvivian/gencode_hugo_mapping', tool_parameters=command, work_dir=work_dir, sudo=sudo)
+    hugo_files = [os.path.splitext(x)[0] + '.HUGO' + os.path.splitext(x)[1] for x in output_files]
+    # Create tarballs for outputs
     tarball_files(work_dir, tar_name='rsem.tar.gz', uuid=uuid, files=output_files)
-    return job.fileStore.writeGlobalFile(os.path.join(work_dir, 'rsem.tar.gz'))
+    tarball_files(work_dir, tar_name='rsem_hugo.tar.gz', uuid=uuid, files=hugo_files)
+    rsem_id = job.fileStore.writeGlobalFile(os.path.join(work_dir, 'rsem.tar.gz'))
+    hugo_id = job.fileStore.writeGlobalFile(os.path.join(work_dir, 'rsem_hugo.tar.gz'))
+    return rsem_id, hugo_id
 
 
 def consolidate_output(job, job_vars, output_ids_and_values):
@@ -759,11 +766,12 @@ def consolidate_output(job, job_vars, output_ids_and_values):
     input_args, ids = job_vars
     work_dir = job.fileStore.getLocalTempDir()
     # Retrieve IDs
-    rsem_id, kallisto_id, improper_pair, single_end = flatten(output_ids_and_values)
+    rsem_id, hugo_id, kallisto_id, improper_pair, single_end = flatten(output_ids_and_values)
     uuid = input_args['uuid']
     # Retrieve output file paths to consolidate
     rsem_tar = job.fileStore.readGlobalFile(rsem_id, os.path.join(work_dir, 'rsem.tar.gz'))
     kallisto_tar = job.fileStore.readGlobalFile(kallisto_id, os.path.join(work_dir, 'kallisto.tar.gz'))
+    hugo_tar = job.fileStore.readGlobalFile(hugo_id, os.path.join(work_dir, 'rsem_hugo.tar.gz'))
     # I/O
     if improper_pair:
         uuid = 'IMPROPERLY_PAIRED.' + uuid
@@ -772,12 +780,14 @@ def consolidate_output(job, job_vars, output_ids_and_values):
     out_tar = os.path.join(work_dir, uuid + '.tar.gz')
     # Consolidate separate tarballs into one as streams (avoids unnecessary untaring)
     with tarfile.open(os.path.join(work_dir, out_tar), 'w:gz') as f_out:
-        for tar in [rsem_tar, kallisto_tar]:
+        for tar in [rsem_tar, kallisto_tar, hugo_tar]:
             with tarfile.open(tar, 'r') as f_in:
                 for tarinfo in f_in:
                     with closing(f_in.extractfile(tarinfo)) as f_in_file:
                         if tar == rsem_tar:
                             tarinfo.name = os.path.join(uuid, 'RSEM', os.path.basename(tarinfo.name))
+                        elif tar == hugo_tar:
+                            tarinfo.name = os.path.join(uuid, 'RSEM', 'Hugo', os.path.basename(tarinfo.name))
                         else:
                             tarinfo.name = os.path.join(uuid, 'Kallisto', os.path.basename(tarinfo.name))
                         f_out.addfile(tarinfo, fileobj=f_in_file)
