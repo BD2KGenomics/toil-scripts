@@ -76,7 +76,6 @@ def call_conductor(masterIP, inputs, src, dst):
                 "--master", "spark://"+masterIP+":"+SPARK_MASTER_PORT,
                 "--conf", "spark.driver.memory=%s" % inputs["driverMemory"],
                 "--conf", "spark.executor.memory=%s" % inputs["executorMemory"],
-                "--conf", "spark.local.dir=/ephemeral/spark",
                 "--", "-C", src, dst])
 
 
@@ -127,7 +126,6 @@ def adam_convert(job, masterIP, inFile, snpFile, inputs):
                 "--conf", "spark.driver.memory=%s" % inputs["driverMemory"],
                 "--conf", "spark.executor.memory=%s" % inputs["executorMemory"],
                 "--conf", "spark.hadoop.fs.default.name=hdfs://%s:%s" % (masterIP, HDFS_MASTER_PORT),
-                "--conf", "spark.local.dir=/ephemeral/spark",
                 "--", "transform", 
                 inFile, adamFile])
     
@@ -142,7 +140,6 @@ def adam_convert(job, masterIP, inFile, snpFile, inputs):
                 "--conf", "spark.driver.memory=%s" % inputs["driverMemory"],
                 "--conf", "spark.executor.memory=%s" % inputs["executorMemory"],
                 "--conf", "spark.hadoop.fs.default.name=hdfs://%s:%s" % (masterIP, HDFS_MASTER_PORT),
-                "--conf", "spark.local.dir=/ephemeral/spark",
                 "--", "vcf2adam", 
                 "-only_variants", 
                 snpFile, adamSnpFile])
@@ -171,9 +168,10 @@ def adam_transform(job, masterIP, inFile, snpFile, inputs):
                 "--conf", "spark.driver.memory=%s" % inputs["driverMemory"],
                 "--conf", "spark.executor.memory=%s" % inputs["executorMemory"],
                 "--conf", "spark.hadoop.fs.default.name=hdfs://%s:%s" % (masterIP, HDFS_MASTER_PORT),
-                "--conf", "spark.local.dir=/ephemeral/spark",
                 "--", "transform", 
-                inFile,  "hdfs://%s:%s/mkdups.adam" % (masterIP, HDFS_MASTER_PORT), 
+                inFile,  "hdfs://%s:%s/mkdups.adam" % (masterIP, HDFS_MASTER_PORT),
+                "-aligned_read_predicate",
+                "-limit_projection",
                 "-mark_duplicate_reads"])
 
     inFileName = inFile.split("/")[-1]
@@ -185,7 +183,6 @@ def adam_transform(job, masterIP, inFile, snpFile, inputs):
                 "--conf", "spark.driver.memory=%s" % inputs["driverMemory"],
                 "--conf", "spark.executor.memory=%s" % inputs["executorMemory"],
                 "--conf", "spark.hadoop.fs.default.name=hdfs://%s:%s" % (masterIP, HDFS_MASTER_PORT),
-                "--conf", "spark.local.dir=/ephemeral/spark",
                 "--", "transform", 
                 "hdfs://%s:%s/mkdups.adam" % (masterIP, HDFS_MASTER_PORT),
                 "hdfs://%s:%s/ri.adam" % (masterIP, HDFS_MASTER_PORT),
@@ -199,7 +196,6 @@ def adam_transform(job, masterIP, inFile, snpFile, inputs):
                 "--conf", "spark.driver.memory=%s" % inputs["driverMemory"],
                 "--conf", "spark.executor.memory=%s" % inputs["executorMemory"],
                 "--conf", "spark.hadoop.fs.default.name=hdfs://%s:%s" % (masterIP, HDFS_MASTER_PORT),
-                "--conf", "spark.local.dir=/ephemeral/spark",
                 "--", "transform", 
                 "hdfs://%s:%s/ri.adam" % (masterIP, HDFS_MASTER_PORT),
                 "hdfs://%s:%s/bqsr.adam" % (masterIP, HDFS_MASTER_PORT),
@@ -214,7 +210,6 @@ def adam_transform(job, masterIP, inFile, snpFile, inputs):
                 "--conf", "spark.driver.memory=%s" % inputs["driverMemory"],
                 "--conf", "spark.executor.memory=%s" % inputs["executorMemory"],
                 "--conf", "spark.hadoop.fs.default.name=hdfs://%s:%s" % (masterIP, HDFS_MASTER_PORT),
-                "--conf", "spark.local.dir=/ephemeral/spark",
                 "--", "transform", 
                 "hdfs://%s:%s/bqsr.adam" % (masterIP, HDFS_MASTER_PORT), 
                 outFile,
@@ -260,6 +255,8 @@ class MasterService(Job.Service):
                                               "-d",
                                               "-v", "/mnt/ephemeral/:/ephemeral/:rw",
                                               "-e", "SPARK_MASTER_IP="+self.IP,
+                                              "-e", "SPARK_LOCAL_DIRS=/ephemeral/spark/local",
+                                              "-e", "SPARK_WORKER_DIR=/ephemeral/spark/work",
                                               "quay.io/ucsc_cgl/apache-spark-master:1.5.2"])[:-1]
         self.hdfsContainerID = check_output(["docker",
                                              "run",
@@ -302,6 +299,8 @@ class WorkerService(Job.Service):
                                               "-d",
                                               "-v", "/mnt/ephemeral/:/ephemeral/:rw",
                                               "-e", "\"SPARK_MASTER_IP="+self.masterIP+":"+SPARK_MASTER_PORT+"\"",
+                                              "-e", "SPARK_LOCAL_DIRS=/ephemeral/spark/local",
+                                              "-e", "SPARK_WORKER_DIR=/ephemeral/spark/work",
                                               "quay.io/ucsc_cgl/apache-spark-worker:1.5.2", 
                                               self.masterIP+":"+SPARK_MASTER_PORT])[:-1]
         self.hdfsContainerID = check_output(["docker",
