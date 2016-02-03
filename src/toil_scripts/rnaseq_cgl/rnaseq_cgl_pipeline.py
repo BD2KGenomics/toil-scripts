@@ -824,6 +824,10 @@ def upload_to_s3(job, job_vars):
     s3_dir = input_args['s3_dir']
     bucket_name = s3_dir.split('/')[0]
     bucket_dir = '/'.join(s3_dir.split('/')[1:])
+
+    # TODO: FOR TOIL RECOMPUTE ONLY
+    bucket_dir = os.path.join(bucket_dir, input_args['sample.tar'].split('/')[-2].split('-')[0])
+
     # Upload to S3 via boto
     conn = boto.connect_s3()
     bucket = conn.get_bucket(bucket_name)
@@ -853,7 +857,12 @@ def upload_wiggle_to_s3(job, job_vars):
     # Parse s3_dir to get bucket and s3 path
     s3_dir = input_args['s3_dir']
     bucket_name = s3_dir.split('/')[0]
-    bucket_dir = os.path.join('/'.join(s3_dir.split('/')[1:]), 'wiggle_files')
+
+    # TODO: FOR TOIL RECOMPUTE ONLY
+    # bucket_dir = os.path.join('/'.join(s3_dir.split('/')[1:]), 'wiggle_files')
+    bucket_dir = '/'.join(s3_dir.split('/')[1:])
+    bucket_dir = os.path.join(bucket_dir, input_args['sample.tar'].split('/')[-2].split('-')[0], 'wiggle_files')
+
     # Upload to S3 via S3AM
     s3am_command = ['s3am',
                     'upload',
@@ -874,7 +883,12 @@ def upload_bam_to_s3(job, job_vars):
     # Parse s3_dir to get bucket and s3 path
     s3_dir = input_args['s3_dir']
     bucket_name = s3_dir.split('/')[0]
-    bucket_dir = os.path.join('/'.join(s3_dir.split('/')[1:]), 'bam_files')
+
+    # TODO: FOR TOIL RECOMPUTE ONLY
+    # bucket_dir = os.path.join('/'.join(s3_dir.split('/')[1:]), 'bam_files')
+    bucket_dir = '/'.join(s3_dir.split('/')[1:])
+    bucket_dir = os.path.join(bucket_dir, input_args['sample.tar'].split('/')[-2].split('-')[0], 'bam_files')
+
     base_url = 'https://s3-us-west-2.amazonaws.com/'
     url = os.path.join(base_url, bucket_name, bucket_dir, sample_name)
     # Generate keyfile for upload
