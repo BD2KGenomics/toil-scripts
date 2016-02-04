@@ -519,7 +519,7 @@ def process_sample_tar(job, job_vars):
             ids['R2.fastq'] = job.fileStore.writeGlobalFile(os.path.join(work_dir, 'R2.fastq'))
         job.fileStore.deleteGlobalFile(ids['sample.tar'])
         # Start cutadapt step
-        return job.addChildJobFn(cutadapt, job_vars, disk='100G').rv()
+        return job.addChildJobFn(cutadapt, job_vars, disk='125G').rv()
 
 
 def cutadapt(job, job_vars):
@@ -572,7 +572,7 @@ def cutadapt(job, job_vars):
         ids['R2_cutadapt.fastq'] = job.fileStore.writeGlobalFile(os.path.join(work_dir, 'R2_cutadapt.fastq'))
     # start STAR and Kallisto steps
     rsem_output = job.addChildJobFn(star, job_vars, cores=cores, disk='150G', memory='40G').rv()
-    cores = 16 if cores >= 16 else cores
+    cores = min(cores, 16)
     kallisto_output = job.addChildJobFn(kallisto, job_vars, cores=cores, disk='100G').rv()
     return rsem_output, kallisto_output, input_args['improper_pair'], input_args['single_end']
 
@@ -676,7 +676,7 @@ def star(job, job_vars):
     if input_args['save_bam'] and input_args['s3_dir']:
         job.addChildJobFn(upload_bam_to_s3, job_vars)
     # RSEM doesn't tend to use more than 16 cores
-    cores = 16 if cores >= 16 else cores
+    cores = min(cores, 16)
     return job.addChildJobFn(rsem, job_vars, cores=cores, disk='50G').rv()
 
 
@@ -748,7 +748,7 @@ def rsem_postprocess(job, job_vars):
     isoforms = [x for x in output_files if 'isoform' in x]
     command = ['-g'] + genes + ['-i'] + isoforms
     docker_call(tool='jvivian/gencode_hugo_mapping', tool_parameters=command, work_dir=work_dir, sudo=sudo)
-    hugo_files = [os.path.splitext(x)[0] + '.HUGO' + os.path.splitext(x)[1] for x in output_files]
+    hugo_files = [os.path.splitext(x)[0] + '.hugo' + os.path.splitext(x)[1] for x in output_files]
     # Create tarballs for outputs
     tarball_files(work_dir, tar_name='rsem.tar.gz', uuid=uuid, files=output_files)
     tarball_files(work_dir, tar_name='rsem_hugo.tar.gz', uuid=uuid, files=hugo_files)
