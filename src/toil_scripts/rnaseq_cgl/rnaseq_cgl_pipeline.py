@@ -329,6 +329,21 @@ def download_from_genetorrent(job, input_args, analysis_id):
     return job.fileStore.writeGlobalFile(sample[0])
 
 
+def partitions(l, partition_size):
+    """
+    >>> list(partitions([], 10))
+    []
+    >>> list(partitions([1,2,3,4,5], 1))
+    [[1], [2], [3], [4], [5]]
+    >>> list(partitions([1,2,3,4,5], 2))
+    [[1, 2], [3, 4], [5]]
+    >>> list(partitions([1,2,3,4,5], 5))
+    [[1, 2, 3, 4, 5]]
+    """
+    for i in xrange(0, len(l), partition_size):
+        yield l[i:i+partition_size]
+
+
 # Job Functions
 def parse_input_samples(job, input_args):
     """
@@ -363,13 +378,14 @@ def batcher(job, input_args, samples):
     input_args: dict             Dictionary of input arguments
     samples: list/iterable       target list/iterable that spawns one job per item
     """
-    if len(samples) > 1:
-        a = samples[len(samples)/2:]
-        b = samples[:len(samples)/2]
-        job.addChildJobFn(batcher, input_args, a)
-        job.addChildJobFn(batcher, input_args, b)
+    num_partitions = 10
+    partition_size = len(samples) / num_partitions
+    if partition_size > 1:
+        for partition in partitions(samples, partition_size):
+            job.addChildJobFn(batcher, input_args, partition)
     else:
-        job.addChildJobFn(download_sample, input_args, samples[0])
+        for sample in samples:
+            job.addChildJobFn(download_sample, input_args, sample)
 
 
 def download_sample(job, input_args, sample):
@@ -562,7 +578,7 @@ def cutadapt(job, job_vars):
                 shutil.move(os.path.join(work_dir, 'R1.fastq'), os.path.join(work_dir, 'R1_cutadapt.fastq'))
                 shutil.move(os.path.join(work_dir, 'R2.fastq'), os.path.join(work_dir, 'R2_cutadapt.fastq'))
         else:
-            raise subprocess.CalledProcessError
+            raise subprocess.CalledProcessError(p.returncode, parameters, stdout)
     # Write to fileStore
     if ids['R.fastq']:
         ids['R_cutadapt.fastq'] = job.fileStore.writeGlobalFile(os.path.join(work_dir, 'R_cutadapt.fastq'))
@@ -842,6 +858,18 @@ def upload_to_s3(job, job_vars):
         k.set_contents_from_filename(uuid_tar)
 
 
+def s3am_with_retry(*args):
+    retry_count = 3
+    for i in xrange(retry_count):
+        s3am_command = ['s3am', 'upload', '--resume'] + list(args)
+        ret_code = subprocess.call(s3am_command)
+        if ret_code == 0:
+            return
+        else:
+            print 'S3AM failed with status code: {}'.format(ret_code)
+    raise RuntimeError, 'S3AM failed to upload after {} retries.'.format(retry_count)
+
+
 def upload_wiggle_to_s3(job, job_vars):
     input_args, ids = job_vars
     work_dir = job.fileStore.getLocalTempDir()
@@ -855,11 +883,9 @@ def upload_wiggle_to_s3(job, job_vars):
     bucket_name = s3_dir.split('/')[0]
     bucket_dir = os.path.join('/'.join(s3_dir.split('/')[1:]), 'wiggle_files')
     # Upload to S3 via S3AM
-    s3am_command = ['s3am',
-                    'upload',
-                    'file://{}'.format(wiggle_tar),
-                    os.path.join('s3://', bucket_name, bucket_dir, sample_name)]
-    subprocess.check_call(s3am_command)
+    s3am_with_retry('file://{}'.format(wiggle_tar),
+                    os.path.join('s3://', bucket_name, bucket_dir, sample_name))
+
 
 
 def upload_bam_to_s3(job, job_vars):
@@ -881,12 +907,9 @@ def upload_bam_to_s3(job, job_vars):
     with open(os.path.join(work_dir, 'temp.key'), 'wb') as f_out:
         f_out.write(generate_unique_key(key_path, url))
     # Upload to S3 via S3AM
-    s3am_command = ['s3am',
-                    'upload',
-                    '--sse-key-file', os.path.join(work_dir, 'temp.key'),
+    s3am_with_retry('--sse-key-file', os.path.join(work_dir, 'temp.key'),
                     'file://{}'.format(bam_path),
-                    os.path.join('s3://', bucket_name, bucket_dir, sample_name)]
-    subprocess.check_call(s3am_command)
+                    os.path.join('s3://', bucket_name, bucket_dir, sample_name))
 
 
 def main():
