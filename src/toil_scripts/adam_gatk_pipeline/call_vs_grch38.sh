@@ -5,11 +5,9 @@ set -x -v
 # Frank Austin Nothaft, fnothaft@berkeley.edu
 #
 # Pipeline for alt-aware alignment against the GRCh38 build used in the 1000G vs. b38 recompute,
-# followed by preprocessing using ADAM, and variant calling using the HaplotypeCaller.
-#
-# Precautionary step: Create location where jobStore and tmp files will exist and set TOIL_HOME.
+# preprocessing using ADAM followed by variant calling using GATK HaplotypeCaller, and preprocessing
+# using GATK followed by variant calling using GATK HaplotypeCaller.
 
-# Execution of pipeline
 python -m toil_scripts.adam_gatk_pipeline.align_and_call \
     aws:us-west-2:fnothaft-toil-jobstore \
     --retryCount 1 \
@@ -40,3 +38,4 @@ python -m toil_scripts.adam_gatk_pipeline.align_and_call \
     --workDir /var/lib/toil \
     --file_size 1G \
     --logInfo
+

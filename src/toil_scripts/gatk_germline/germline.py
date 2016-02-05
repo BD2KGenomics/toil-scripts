@@ -53,6 +53,8 @@ def build_parser():
     parser.add_argument('-t', '--hapmap', required=True, help='hapmap_3.3.b37.vcf URL')
     parser.add_argument('-o', '--output_dir', default="./data", help='Full path to final output dir')
     parser.add_argument('-se', '--file_size', default='100G', help='Approximate input file size. Should be given as %d[TGMK], e.g., for a 100 gigabyte file, use --file_size 100G')
+    parser.add_argument('-x', '--suffix', default="", help='additional suffix, if any')
+
     return parser
 
 
@@ -406,10 +408,11 @@ def apply_vqsr_snp(job, shared_ids, input_args):
     work_dir = job.fileStore.getLocalTempDir()
 
     uuid = input_args['uuid']
+    suffix = input_args['suffix']
     input_files = ['ref.fa', 'ref.fa.fai', 'ref.dict', 'unified.raw.BOTH.gatk.vcf',
                    'HAPSNP.tranches', 'HAPSNP.recal']
     read_from_filestore(job, work_dir, shared_ids, *input_files)
-    output = '{}.HAPSNP.vqsr.SNP.vcf'.format(uuid)
+    output = '{}.HAPSNP.vqsr.SNP{}.vcf'.format(uuid, suffix)
     command = ['-T', 'ApplyRecalibration',
                '-input', 'unified.raw.BOTH.gatk.vcf',
                '-o', output,
@@ -426,17 +429,19 @@ def apply_vqsr_snp(job, shared_ids, input_args):
 
 def upload_or_move(job, input_args, output):
     
+    work_dir = job.fileStore.getLocalTempDir()
+
     # are we moving this into a local dir, or up to s3?
     if input_args['output_dir']:
         # get output path and 
         output_dir = input_args['output_dir']
-        work_dir = job.fileStore.getLocalTempDir()
+
         make_directory(output_dir)
         move_to_output_dir(work_dir, output_dir, output)
 
     elif input_args['s3_dir']:
         
-        job.addChildJobFn(upload_to_s3, job_vars, output, disk=input_args['file_size'])
+        upload_to_s3(work_dir, job_vars, output)
 
     else:
 
@@ -484,10 +489,11 @@ def apply_vqsr_indel(job, shared_ids, input_args):
     """
     work_dir = job.fileStore.getLocalTempDir()
     uuid = input_args['uuid']
+    suffix = input_args['suffix']
     input_files = ['ref.fa', 'ref.fa.fai', 'ref.dict', 'unified.raw.BOTH.gatk.vcf',
                    'HAPINDEL.recal', 'HAPINDEL.tranches', 'HAPINDEL.plots']
     read_from_filestore(job, work_dir, shared_ids, *input_files)
-    output = '{}.HAPSNP.vqsr.INDEL.vcf'.format(uuid)
+    output = '{}.HAPSNP.vqsr.INDEL{}.vcf'.format(uuid, suffix)
     command = ['-T', 'ApplyRecalibration',
                '-input', 'unified.raw.BOTH.gatk.vcf',
                '-o', output,
@@ -515,6 +521,7 @@ if __name__ == '__main__':
               'hapmap.vcf': args.hapmap,
               'omni.vcf': args.omni,
               'output_dir': args.output_dir,
+              'suffix': args.suffix,
               'uuid': None,
               'cpu_count': str(multiprocessing.cpu_count()),
               'file_size': args.file_size,

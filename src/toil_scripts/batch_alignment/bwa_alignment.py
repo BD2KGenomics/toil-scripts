@@ -197,6 +197,8 @@ def docker_call(work_dir,
 
     base_docker_call = ('docker run %s --log-driver=none -v %s:/data' % (rm, work_dir)).split()
 
+    log.warn("Calling docker with %s." % " ".join(base_docker_call))
+
     if sudo:
         base_docker_call = ['sudo'] + base_docker_call
     if java_opts:
@@ -534,13 +536,8 @@ def upload_to_s3(work_dir, input_args, output_file):
     job_vars: tuple         Contains the dictionaries: input_args and ids
     """
 
-    # Parse s3_dir to get bucket and s3 path
-    s3_dir = input_args['s3_dir']
-    bucket_name = s3_dir.lstrip('/').split('/')[0]
-    bucket_dir = '/'.join(s3_dir.lstrip('/').split('/')[1:])
-    base_url = 'https://s3.amazonaws.com/'
-    url = os.path.join(base_url, bucket_name, bucket_dir, output_file)
-    
+    work_dir = job.fileStore.getLocalTempDir()
+
     if input_args['aws_access_key']:
         os.environ['AWS_ACCESS_KEY_ID'] = input_args['aws_access_key']
     if input_args['aws_secret_key']:
@@ -601,6 +598,7 @@ def main():
     parser = build_parser()
     Job.Runner.addToilOptions(parser)
     args = parser.parse_args()
+
     # Store input parameters in a dictionary
     inputs = {'config': args.config,
               'ref.fa': args.ref,

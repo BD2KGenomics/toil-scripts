@@ -47,6 +47,7 @@ def build_parser():
     parser.add_argument('-s', '--ssec', help='A key that can be used to fetch encrypted data')
     parser.add_argument('-3', '--s3_dir', default=None, help='S3 Directory, starting with bucket name. e.g.: '
                                                              'cgl-driver-projects/ckcc/rna-seq-samples/')
+    parser.add_argument('-x', '--suffix', default=".bqsr", help='additional suffix, if any')
     parser.add_argument('-u', '--sudo', dest='sudo', action='store_true', help='Docker usually needs sudo to execute '
                                                                                'locally, but not''when running Mesos '
                                                                                'or when a member of a Docker group.')
@@ -160,6 +161,21 @@ def copy_to_output_dir(work_dir, output_dir, uuid=None, files=None):
         else:
             shutil.copy(os.path.join(work_dir, fname), os.path.join(output_dir, '{}.{}'.format(uuid, fname)))
 
+def upload_or_move(job, input_args, output):
+
+    # are we moving this into a local dir, or up to s3?
+    if input_args['output_dir']:
+        # get output path and
+        output_dir = input_args['output_dir']
+        work_dir = job.fileStore.getLocalTempDir()
+        make_directory(output_dir)
+        move_to_output_dir(work_dir, output_dir, output)
+
+    elif input_args['s3_dir']:
+        job.addChildJobFn(upload_to_s3, job_vars, output, disk='80G')
+
+    else:
+        raise ValueError('No output_directory or s3_dir defined. Cannot determine where to store %s' % output)
 
 def download_from_url(job, url, name):
     """
@@ -628,13 +644,14 @@ def print_reads(job, shared_ids, input_args):
     """
     # Unpack convenience variables for job
     uuid = input_args['uuid']
+    suffix = input_args['suffix']
     work_dir = job.fileStore.getLocalTempDir()
     sudo = input_args['sudo']
     # Retrieve input file paths
     return_input_paths(job, work_dir, shared_ids, 'ref.fa', 'sample.indel.bam',
                        'ref.fa.fai', 'ref.dict', 'sample.indel.bam.bai', 'sample.recal.table')
     # Output file
-    outfile = '{}.bqsr.bam'.format(uuid)
+    outfile = '{}{}.bam'.format(uuid, suffix)
     outpath = os.path.join(work_dir, outfile)
     # Call: GATK -- PrintReads
     parameters = ['-T', 'PrintReads',
@@ -648,7 +665,7 @@ def print_reads(job, shared_ids, input_args):
                 work_dir=work_dir, tool_parameters=parameters,
                 java_opts='-Xmx15g', sudo=sudo, outfiles=[outfile])
 
-    move_to_output_dir(work_dir, input_args['output_dir'], outfile)
+    upload_or_move(job, input_args, outfile)
 
 def main():
     """
@@ -668,6 +685,7 @@ def main():
               's3_dir': pargs.s3_dir,
               'sudo': pargs.sudo,
               'ssec': pargs.ssec,
+              'suffix': pargs.suffix,
               'cpu_count': str(multiprocessing.cpu_count())}
 
 

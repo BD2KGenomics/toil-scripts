@@ -6,26 +6,36 @@
 Pipeline to go from FASTQ to VCF using both the ADAM+HaplotypeCaller pipeline
 as well as the GATK best practices pipeline.
 
-This doesn't contain the GATK best practices pipeline yet though. More work TBD.
+  0 --> ... --> 4 --> 5
+                |     |++(6)
+                |     7 --> 9 --> ... --> 12 --> 13 --> ... --> 17
+                |     ++(8)                                     |
+                |                                               18
+                |                                              /  \
+                |                                            19    20
+                |                                           /        \
+                |                                         21          22
+                |
+                |
+                + --> 23 --> ... --> 34 --> 35 --> ... --> 39
+                                                           |
+                                                           40
+                                                          /  \
+                                                        41    42
+                                                       /        \
+                                                      43         44
 
-        0 --> 1 --> 2 --> 3 --> 4 --> 5
-                                      |++(6)
-                                      7 --> 9 --> 10 --> 11 --> 12 <snip1>
-                                       ++(8)
 
-        <snip1 /> 12 --> 13 --> 14 --> 15 --> 16 --> 17
-                                                     |
-                                                     18
-                                                    /  \
-                                                  19    20
-                                                 /        \
-                                               21          22
+BWA alignment
 
 0   bwa alignment to a reference
 1   samtools sam to bam conversion (no sort)
 2   Fix header
 3   Add read groups
 4   Upload to S3
+
+ADAM preprocessing
+
 5   Start master
 6   Master Service
 7   Start Workers
@@ -34,6 +44,9 @@ This doesn't contain the GATK best practices pipeline yet though. More work TBD.
 10  ADAM Convert
 11  ADAM Transform
 12  Upload Data
+
+GATK haplotype caller
+
 13  Start GATK box
 14  Download reference
 15  Index reference
@@ -45,16 +58,48 @@ This doesn't contain the GATK best practices pipeline yet though. More work TBD.
 21  Apply VQSR model to SNPs
 22  Apply VQSR model to INDELs
 
-However, the pipeline in this file is actually just three encapsulated jobs:
+GATK preprocessing
 
-        A --> B --> C
+23  Download shared data
+24  Reference preprocessing
+25  Download sample 
+26  Index
+27  Sort
+28  Mark duplicates
+29  Index
+30  Realigner target 
+31  Indel realignment
+32  Index
+33  Base recalibration
+34  Output BQSR file
 
-A  Run BWA (jobs 0-4)
-B  Run ADAM (jobs 5-12)
-C  Run GATK (jobs 13-22)
+GATK haplotype caller
 
-Those hypens should be en dashes. Alas, TIL (2/1/16) that Python does not like
-non-ASCII text in comments.
+35  Start GATK box
+36  Download reference
+37  Index reference
+38  Build reference dictionary
+39  Index samples
+40  Run HaplotypeCaller
+41  Run VQSR on SNPs
+42  Run VQSR on INDELs
+43  Apply VQSR model to SNPs
+44  Apply VQSR model to INDELs
+
+
+However, the pipeline in this file is actually just five encapsulated jobs:
+
+        A
+       / \
+      B   D
+      |   |
+      C   E
+
+A  Run BWA alignment (jobs 0-4)
+B  Run ADAM preprocessing (jobs 5-12)
+C  Run GATK haplotype caller (jobs 13-22)
+D  Run GATK preprocessing (jobs 23-34)
+E  Run GATK haplotype caller (jobs 35-44)
 
 ===================================================================
 :Dependencies:
@@ -78,6 +123,7 @@ from toil.job import Job
 from toil_scripts.adam_pipeline.spark_toil_script import *
 from toil_scripts.batch_alignment.bwa_alignment import *
 from toil_scripts.gatk_germline.germline import *
+from toil_scripts.gatk_processing.gatk_preprocessing import *
 
 def build_parser():
 
@@ -147,14 +193,16 @@ def build_parser():
     # return built parser
     return parser
 
-def static_dag(job, s3_bucket, bucket_region, uuid, bwa_inputs, adam_inputs, gatk_inputs):
+def static_dag(job, s3_bucket, uuid, bwa_inputs, adam_inputs, gatk_preprocess_inputs, gatk_adam_call_inputs, gatk_gatk_call_inputs):
     """
     Prefer this here as it allows us to pull the job functions from other jobs
     without rewrapping the job functions back together.
 
     bwa_inputs: Input arguments to be passed to BWA.
     adam_inputs: Input arguments to be passed to ADAM.
-    gatk_inputs: Input arguments to be passed to the GATK.
+    gatk_preprocess_inputs: Input arguments to be passed to GATK preprocessing.
+    gatk_adam_call_inputs: Input arguments to be passed to GATK haplotype caller for the result of ADAM preprocessing.
+    gatk_gatk_call_inputs: Input arguments to be passed to GATK haplotype caller for the result of GATK preprocessing.
     """
 
     # get work directory
@@ -178,30 +226,56 @@ def static_dag(job, s3_bucket, bucket_region, uuid, bwa_inputs, adam_inputs, gat
     bwafp.close()
     bwa_inputs['config'] = job.fileStore.writeGlobalFile(bwa_config_path)
 
-    # write config for gatk
-    gatk_config_path = os.path.join(work_dir, "%s_gatk_config.csv" % uuid)
-    gatkfp = open(gatk_config_path, "w")
-    print >> gatkfp, "%s,https://s3%s.amazonaws.com/%s/analysis/%s.bam" % (uuid, bucket_region, s3_bucket, uuid)
-    gatkfp.flush()
-    gatkfp.close()
-    gatk_inputs['config'] = job.fileStore.writeGlobalFile(gatk_config_path)
-    
-    # get head bwa job function and encapsulate it
-    bwa = job.wrapJobFn(download_shared_files,
+    # write config for GATK preprocessing
+    gatk_preprocess_config_path = os.path.join(work_dir, "%s_gatk_preprocess_config.csv" % uuid)
+    gatk_preprocess_fp = open(gatk_preprocess_config_path, "w")
+    print >> gatk_preprocess_fp, "%s,https://s3%s.amazonaws.com/%s/alignment/%s.bam" % (uuid, bucket_region, s3_bucket, uuid)
+    gatk_preprocess_fp.flush()
+    gatk_preprocess_fp.close()
+    gatk_preprocess_inputs['config'] = job.fileStore.writeGlobalFile(gatk_preprocess_config_path)
+
+    # write config for GATK haplotype caller for the result of ADAM preprocessing
+    gatk_adam_call_config_path = os.path.join(work_dir, "%s_gatk_adam_call_config.csv" % uuid)
+    gatk_adam_call_fp = open(gatk_adam_call_config_path, "w")
+    print >> gatk_adam_call_fp, "%s,https://s3%s.amazonaws.com/%s/analysis/%s.adam.bam" % (uuid, bucket_region, s3_bucket, uuid)
+    gatk_adam_call_fp.flush()
+    gatk_adam_call_fp.close()
+    gatk_adam_call_inputs['config'] = job.fileStore.writeGlobalFile(gatk_adam_call_config_path)
+
+    # write config for GATK haplotype caller for the result of GATK preprocessing
+    gatk_gatk_call_config_path = os.path.join(work_dir, "%s_gatk_gatk_call_config.csv" % uuid)
+    gatk_gatk_call_fp = open(gatk_gatk_call_config_path, "w")
+    print >> gatk_gatk_call_fp, "%s,https://s3%s.amazonaws.com/%s/analysis/%s.gatk.bam" % (uuid, bucket_region, s3_bucket, uuid)
+    gatk_gatk_call_fp.flush()
+    gatk_gatk_call_fp.close()
+    gatk_gatk_call_inputs['config'] = job.fileStore.writeGlobalFile(gatk_gatk_call_config_path)
+
+    # get head BWA alignment job function and encapsulate it
+    bwa = job.wrapJobFn(toil_scripts.batch_alignment.bwa_alignment.download_shared_files,
                         bwa_inputs).encapsulate()
 
-    # get head ADAM job function and encapsulate it
-    adam = job.wrapJobFn(start_master,
-                         adam_inputs).encapsulate()
-    
-    # get head GATK job function and encapsulate it
-    gatk = job.wrapJobFn(batch_start,
-                         gatk_inputs).encapsulate()
+    # get head ADAM preprocessing job function and encapsulate it
+    adam_preprocess = job.wrapJobFn(toil_scripts.adam_pipeline.spark_toil_script.start_master,
+                                    adam_inputs).encapsulate()
+
+    # get head GATK preprocessing job function and encapsulate it
+    gatk_preprocess = job.wrapJobFn(toil_scripts.gatk_processing.download_shared_files,
+                                    gatk_preprocess_inputs).encapsulate()
+
+    # get head GATK haplotype caller job function for the result of ADAM preprocessing and encapsulate it
+    gatk_adam_call = job.wrapJobFn(toil_scripts.gatk_germline.germline.batch_start,
+                                   gatk_adam_call_inputs).encapsulate()
+
+    # get head GATK haplotype caller job function for the result of GATK preprocessing and encapsulate it
+    gatk_gatk_call = job.wrapJobFn(toil_scripts.gatk_germline.germline.batch_start,
+                                   gatk_gatk_call_inputs).encapsulate()
 
     # wire up dag
     job.addChild(bwa)
-    bwa.addChild(adam)
-    adam.addChild(gatk)
+    bwa.addChild(adam_preprocess)
+    adam_preprocess.addChild(gatk_adam_call)
+    bwa.addChild(gatk_preprocess)
+    gatk_preprocess.addChild(gatk_gatk_call)
 
 if __name__ == '__main__':
     
@@ -239,25 +313,54 @@ if __name__ == '__main__':
                    'sudo': args.sudo,
                    'bamName': 's3://%s/alignment/%s.bam' % (args.s3_bucket, args.uuid)}
 
-    gatk_inputs = {'ref.fa': args.ref,
-                   'phase.vcf': args.phase,
-                   'mills.vcf': args.mills,
-                   'dbsnp.vcf': args.dbsnp,
-                   'hapmap.vcf': args.hapmap,
-                   'omni.vcf': args.omni,
-                   'output_dir': None,
-                   'uuid': None,
-                   'cpu_count': str(multiprocessing.cpu_count()),
-                   'ssec': None,
-                   's3_dir': "%s/%s/analysis" % (args.s3_bucket, args.uuid),
-                   'file_size': args.file_size,
-                   'aws_access_key':  args.aws_access_key,
-                   'aws_secret_key':  args.aws_secret_key}
+    gatk_preprocess_inputs = {'ref.fa': args.ref,
+                              'phase.vcf': args.phase,
+                              'mills.vcf': args.mills,
+                              'dbsnp.vcf': args.dbsnp,
+                              'output_dir': None,
+                              'sudo': args.sudo,
+                              'ssec': None,
+                              'cpu_count': str(multiprocessing.cpu_count()),
+                              'suffix': '.gatk',
+                              's3_dir': "%s/%s/analysis" % (args.s3_bucket, args.uuid),}
+    
+    gatk_adam_call_inputs = {'ref.fa': args.ref,
+                             'phase.vcf': args.phase,
+                             'mills.vcf': args.mills,
+                             'dbsnp.vcf': args.dbsnp,
+                             'hapmap.vcf': args.hapmap,
+                             'omni.vcf': args.omni,
+                             'output_dir': None,
+                             'uuid': None,
+                             'cpu_count': str(multiprocessing.cpu_count()),
+                             'ssec': None,
+                             's3_dir': "%s/%s/analysis" % (args.s3_bucket, args.uuid),
+                             'file_size': args.file_size,
+                             'aws_access_key':  args.aws_access_key,
+                             'aws_secret_key':  args.aws_secret_key,
+                             'suffix': '.adam'}
+
+    gatk_gatk_call_inputs = {'ref.fa': args.ref,
+                             'phase.vcf': args.phase,
+                             'mills.vcf': args.mills,
+                             'dbsnp.vcf': args.dbsnp,
+                             'hapmap.vcf': args.hapmap,
+                             'omni.vcf': args.omni,
+                             'output_dir': None,
+                             'uuid': None,
+                             'cpu_count': str(multiprocessing.cpu_count()),
+                             'ssec': None,
+                             's3_dir': "%s/%s/analysis" % (args.s3_bucket, args.uuid),
+                             'file_size': args.file_size,
+                             'aws_access_key':  args.aws_access_key,
+                             'aws_secret_key':  args.aws_secret_key,
+                             'suffix': '.gatk'}
 
     Job.Runner.startToil(Job.wrapJobFn(static_dag,
                                        args.s3_bucket,
-                                       args.bucket_region,
                                        args.uuid,
                                        bwa_inputs,
                                        adam_inputs,
-                                       gatk_inputs), args)
+                                       gatk_preprocess_inputs,
+                                       gatk_adam_call_inputs,
+                                       gatk_gatk_call_inputs), args)

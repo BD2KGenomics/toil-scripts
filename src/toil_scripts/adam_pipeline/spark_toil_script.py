@@ -67,7 +67,9 @@ def call_conductor(masterIP, inputs, src, dst):
     """
     Invokes the conductor container.
     """
-    docker_call(no_rm = True,work_dir = os.getcwd(), tool = "quay.io/ucsc_cgl/conductor",
+    docker_call(no_rm = True,
+                work_dir = os.getcwd(),
+                tool = "quay.io/ucsc_cgl/conductor",
                 docker_parameters = ["--net=host",
                                      "-e", "AWS_ACCESS_KEY="+inputs['accessKey'],
                                      "-e", "AWS_SECRET_KEY="+inputs['secretKey']],
@@ -80,7 +82,9 @@ def call_conductor(masterIP, inputs, src, dst):
 
 def call_adam(inputs, masterIP, arguments):
 
-    docker_call(no_rm = True,work_dir = os.getcwd(), tool = "quay.io/ucsc_cgl/adam:cd6ef41", 
+    docker_call(no_rm = True,
+                work_dir = os.getcwd(),
+                tool = "quay.io/ucsc_cgl/adam:cd6ef41", 
                 docker_parameter = ["--net=host"],
                 tool_parameters = ["--master", "spark://"+masterIP+":"+SPARK_MASTER_PORT, 
                  "--conf", "spark.driver.memory=%s" % inputs["driverMemory"],
@@ -242,7 +246,9 @@ class MasterService(Job.Service):
         else:
             self.IP = check_output(["hostname", "-f",])[:-1]
 
-        self.sparkContainerID = docker_call(no_rm = True,work_dir = os.getcwd(), tool = "quay.io/ucsc_cgl/apache-spark-master:1.5.2",
+        self.sparkContainerID = docker_call(no_rm = True,
+                                            work_dir = os.getcwd(),
+                                            tool = "quay.io/ucsc_cgl/apache-spark-master:1.5.2",
                                             docker_parameters = ["--net=host",
                                                                  "-d",
                                                                  "-v", "/mnt/ephemeral/:/ephemeral/:rw",
@@ -252,7 +258,9 @@ class MasterService(Job.Service):
                                             tool_parameters = [],
                                             sudo = self.sudo,
                                             check_output = True)[:-1]
-        self.hdfsContainerID = docker_call(no_rm = True,work_dir = os.getcwd(), tool = "quay.io/ucsc_cgl/apache-hadoop-master:2.6.2",
+        self.hdfsContainerID = docker_call(no_rm = True,
+                                           work_dir = os.getcwd(),
+                                           tool = "quay.io/ucsc_cgl/apache-hadoop-master:2.6.2",
                                            docker_parameters = ["--net=host",
                                                                 "-d"],
                                            tool_parameters = [self.IP],
@@ -294,7 +302,9 @@ class WorkerService(Job.Service):
         log.write("start workers\n")
         log.flush()
 
-        self.sparkContainerID = docker_call(no_rm = True,work_dir = os.getcwd(), tool = "quay.io/ucsc_cgl/apache-spark-worker:1.5.2",
+        self.sparkContainerID = docker_call(no_rm = True,
+                                            work_dir = os.getcwd(),
+                                            tool = "quay.io/ucsc_cgl/apache-spark-worker:1.5.2",
                                             docker_parameters = ["--net=host", 
                                                                  "-d",
                                                                  "-v", "/mnt/ephemeral/:/ephemeral/:rw",
@@ -304,7 +314,9 @@ class WorkerService(Job.Service):
                                             tool_parameters = [self.masterIP+":"+SPARK_MASTER_PORT],
                                             sudo = inputs['sudo'],
                                             check_output = True)[:-1]
-        self.hdfsContainerID = docker_call(no_rm = True,work_dir = os.getcwd(), tool = "quay.io/ucsc_cgl/apache-hadoop-worker:2.6.2",
+        self.hdfsContainerID = docker_call(no_rm = True,
+                                           work_dir = os.getcwd(),
+                                           tool = "quay.io/ucsc_cgl/apache-hadoop-worker:2.6.2",
                                            docker_parameters = ["--net=host",
                                                                 "-d",
                                                                 "-v", "/mnt/ephemeral/:/ephemeral/:rw"],
