@@ -50,6 +50,8 @@ import tarfile
 import multiprocessing
 from urlparse import urlparse
 from toil.job import Job
+import logging
+logging.basicConfig(level=logging.INFO)
 
 
 def build_parser():
@@ -578,6 +580,7 @@ def cutadapt(job, job_vars):
                 shutil.move(os.path.join(work_dir, 'R1.fastq'), os.path.join(work_dir, 'R1_cutadapt.fastq'))
                 shutil.move(os.path.join(work_dir, 'R2.fastq'), os.path.join(work_dir, 'R2_cutadapt.fastq'))
         else:
+            logging.error('Stdout: {}\n\nStderr: {}'.format(stdout, stderr))
             raise subprocess.CalledProcessError(p.returncode, parameters, stderr)
     # Write to fileStore
     if ids['R.fastq']:
