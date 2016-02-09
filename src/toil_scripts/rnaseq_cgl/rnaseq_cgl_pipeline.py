@@ -49,7 +49,10 @@ import shutil
 import tarfile
 import multiprocessing
 from urlparse import urlparse
+import time
 from toil.job import Job
+import logging
+logging.basicConfig(level=logging.INFO)
 
 
 def build_parser():
@@ -329,6 +332,21 @@ def download_from_genetorrent(job, input_args, analysis_id):
     return job.fileStore.writeGlobalFile(sample[0])
 
 
+def partitions(l, partition_size):
+    """
+    >>> list(partitions([], 10))
+    []
+    >>> list(partitions([1,2,3,4,5], 1))
+    [[1], [2], [3], [4], [5]]
+    >>> list(partitions([1,2,3,4,5], 2))
+    [[1, 2], [3, 4], [5]]
+    >>> list(partitions([1,2,3,4,5], 5))
+    [[1, 2, 3, 4, 5]]
+    """
+    for i in xrange(0, len(l), partition_size):
+        yield l[i:i+partition_size]
+
+
 # Job Functions
 def parse_input_samples(job, input_args):
     """
@@ -363,13 +381,14 @@ def batcher(job, input_args, samples):
     input_args: dict             Dictionary of input arguments
     samples: list/iterable       target list/iterable that spawns one job per item
     """
-    if len(samples) > 1:
-        a = samples[len(samples)/2:]
-        b = samples[:len(samples)/2]
-        job.addChildJobFn(batcher, input_args, a)
-        job.addChildJobFn(batcher, input_args, b)
+    num_partitions = 10
+    partition_size = len(samples) / num_partitions
+    if partition_size > 1:
+        for partition in partitions(samples, partition_size):
+            job.addChildJobFn(batcher, input_args, partition)
     else:
-        job.addChildJobFn(download_sample, input_args, samples[0])
+        for sample in samples:
+            job.addChildJobFn(download_sample, input_args, sample)
 
 
 def download_sample(job, input_args, sample):
@@ -519,7 +538,7 @@ def process_sample_tar(job, job_vars):
             ids['R2.fastq'] = job.fileStore.writeGlobalFile(os.path.join(work_dir, 'R2.fastq'))
         job.fileStore.deleteGlobalFile(ids['sample.tar'])
         # Start cutadapt step
-        return job.addChildJobFn(cutadapt, job_vars, disk='100G').rv()
+        return job.addChildJobFn(cutadapt, job_vars, disk='125G').rv()
 
 
 def cutadapt(job, job_vars):
@@ -562,7 +581,8 @@ def cutadapt(job, job_vars):
                 shutil.move(os.path.join(work_dir, 'R1.fastq'), os.path.join(work_dir, 'R1_cutadapt.fastq'))
                 shutil.move(os.path.join(work_dir, 'R2.fastq'), os.path.join(work_dir, 'R2_cutadapt.fastq'))
         else:
-            raise subprocess.CalledProcessError
+            logging.error('Stdout: {}\n\nStderr: {}'.format(stdout, stderr))
+            raise subprocess.CalledProcessError(p.returncode, parameters, stderr)
     # Write to fileStore
     if ids['R.fastq']:
         ids['R_cutadapt.fastq'] = job.fileStore.writeGlobalFile(os.path.join(work_dir, 'R_cutadapt.fastq'))
@@ -572,7 +592,7 @@ def cutadapt(job, job_vars):
         ids['R2_cutadapt.fastq'] = job.fileStore.writeGlobalFile(os.path.join(work_dir, 'R2_cutadapt.fastq'))
     # start STAR and Kallisto steps
     rsem_output = job.addChildJobFn(star, job_vars, cores=cores, disk='150G', memory='40G').rv()
-    cores = 16 if cores >= 16 else cores
+    cores = min(cores, 16)
     kallisto_output = job.addChildJobFn(kallisto, job_vars, cores=cores, disk='100G').rv()
     return rsem_output, kallisto_output, input_args['improper_pair'], input_args['single_end']
 
@@ -672,11 +692,11 @@ def star(job, job_vars):
         wiggles = [os.path.splitext(x)[0] + '.bedGraph' for x in wiggles]
         tarball_files(work_dir, 'wiggle.tar.gz', uuid=uuid, files=wiggles)
         ids['wiggle.tar.gz'] = job.fileStore.writeGlobalFile(os.path.join(work_dir, 'wiggle.tar.gz'))
-        job.addChildJobFn(upload_wiggle_to_s3, job_vars)
+        job.addChildJobFn(upload_wiggle_to_s3, job_vars, disk='10G', cores=cores)
     if input_args['save_bam'] and input_args['s3_dir']:
-        job.addChildJobFn(upload_bam_to_s3, job_vars)
+        job.addChildJobFn(upload_bam_to_s3, job_vars, disk='20G', cores=cores)
     # RSEM doesn't tend to use more than 16 cores
-    cores = 16 if cores >= 16 else cores
+    cores = min(cores, 16)
     return job.addChildJobFn(rsem, job_vars, cores=cores, disk='50G').rv()
 
 
@@ -748,7 +768,7 @@ def rsem_postprocess(job, job_vars):
     isoforms = [x for x in output_files if 'isoform' in x]
     command = ['-g'] + genes + ['-i'] + isoforms
     docker_call(tool='jvivian/gencode_hugo_mapping', tool_parameters=command, work_dir=work_dir, sudo=sudo)
-    hugo_files = [os.path.splitext(x)[0] + '.HUGO' + os.path.splitext(x)[1] for x in output_files]
+    hugo_files = [os.path.splitext(x)[0] + '.hugo' + os.path.splitext(x)[1] for x in output_files]
     # Create tarballs for outputs
     tarball_files(work_dir, tar_name='rsem.tar.gz', uuid=uuid, files=output_files)
     tarball_files(work_dir, tar_name='rsem_hugo.tar.gz', uuid=uuid, files=hugo_files)
@@ -768,6 +788,7 @@ def consolidate_output(job, job_vars, output_ids_and_values):
     # Retrieve IDs
     rsem_id, hugo_id, kallisto_id, improper_pair, single_end = flatten(output_ids_and_values)
     uuid = input_args['uuid']
+    cores = input_args['cpu_count']
     # Retrieve output file paths to consolidate
     rsem_tar = job.fileStore.readGlobalFile(rsem_id, os.path.join(work_dir, 'rsem.tar.gz'))
     kallisto_tar = job.fileStore.readGlobalFile(kallisto_id, os.path.join(work_dir, 'kallisto.tar.gz'))
@@ -804,7 +825,7 @@ def consolidate_output(job, job_vars, output_ids_and_values):
     ids['uuid.tar.gz'] = job.fileStore.writeGlobalFile(out_tar)
     # If S3 bucket argument specified, upload to S3
     if input_args['s3_dir']:
-        job.addChildJobFn(upload_to_s3, (input_args, ids))
+        job.addChildJobFn(upload_to_s3, (input_args, ids), cores=cores)
 
 
 def upload_to_s3(job, job_vars):
@@ -846,9 +867,25 @@ def upload_to_s3(job, job_vars):
         k.set_contents_from_filename(uuid_tar)
 
 
+def s3am_with_retry(cores, *args):
+    retry_count = 3
+    for i in xrange(retry_count):
+        s3am_command = ['s3am', 'upload', '--resume', '--part-size=50M',
+                        '--upload-slots={}'.format(cores),
+                        '--download-slots={}'.format(cores)] + list(args)
+        ret_code = subprocess.call(s3am_command)
+        if ret_code == 0:
+            return
+        else:
+            print 'S3AM failed with status code: {}'.format(ret_code)
+            time.sleep(60)
+    raise RuntimeError, 'S3AM failed to upload after {} retries.'.format(retry_count)
+
+
 def upload_wiggle_to_s3(job, job_vars):
     input_args, ids = job_vars
     work_dir = job.fileStore.getLocalTempDir()
+    cores = input_args['cpu_count']
     uuid = input_args['uuid']
     # I/O
     read_from_filestore(job, work_dir, ids, 'wiggle.tar.gz')
@@ -864,17 +901,16 @@ def upload_wiggle_to_s3(job, job_vars):
     bucket_dir = os.path.join(bucket_dir, input_args['sample.tar'].split('/')[-2].split('-')[0], 'wiggle_files')
 
     # Upload to S3 via S3AM
-    s3am_command = ['s3am',
-                    'upload',
-                    'file://{}'.format(wiggle_tar),
-                    os.path.join('s3://', bucket_name, bucket_dir, sample_name)]
-    subprocess.check_call(s3am_command)
+    s3am_with_retry(cores, 'file://{}'.format(wiggle_tar),
+                    os.path.join('s3://', bucket_name, bucket_dir, sample_name))
+
 
 
 def upload_bam_to_s3(job, job_vars):
     input_args, ids = job_vars
     work_dir = job.fileStore.getLocalTempDir()
     uuid = input_args['uuid']
+    cores = input_args['cpu_count']
     key_path = input_args['ssec']
     # I/O
     read_from_filestore(job, work_dir, ids, 'transcriptome.bam')
@@ -895,12 +931,9 @@ def upload_bam_to_s3(job, job_vars):
     with open(os.path.join(work_dir, 'temp.key'), 'wb') as f_out:
         f_out.write(generate_unique_key(key_path, url))
     # Upload to S3 via S3AM
-    s3am_command = ['s3am',
-                    'upload',
-                    '--sse-key-file', os.path.join(work_dir, 'temp.key'),
+    s3am_with_retry(cores, '--sse-key-file', os.path.join(work_dir, 'temp.key'),
                     'file://{}'.format(bam_path),
-                    os.path.join('s3://', bucket_name, bucket_dir, sample_name)]
-    subprocess.check_call(s3am_command)
+                    os.path.join('s3://', bucket_name, bucket_dir, sample_name))
 
 
 def main():
