@@ -849,7 +849,7 @@ def upload_to_s3(job, job_vars):
     bucket = conn.get_bucket(bucket_name)
     k = Key(bucket)
     if 'error.txt' in ids:
-        read_from_filestore(job, work_dir, 'error.txt')
+        read_from_filestore(job, work_dir, ids, 'error.txt')
         k.key = os.path.join(bucket_dir, uuid + '.ERROR')
         k.set_contents_from_filename(os.path.join(work_dir, 'error.txt'))
     else:
@@ -892,7 +892,6 @@ def upload_wiggle_to_s3(job, job_vars):
     # Upload to S3 via S3AM
     s3am_with_retry(cores, 'file://{}'.format(wiggle_tar),
                     os.path.join('s3://', bucket_name, bucket_dir, sample_name))
-
 
 
 def upload_bam_to_s3(job, job_vars):
