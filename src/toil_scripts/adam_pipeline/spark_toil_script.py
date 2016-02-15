@@ -31,8 +31,10 @@ toil            - pip install --pre toil
 
 import argparse
 import os
+import multiprocessing
 from subprocess import call, check_call, check_output
 import sys
+import time
 from toil.job import Job
 from toil_scripts.batch_alignment.bwa_alignment import docker_call
 
@@ -48,7 +50,7 @@ def start_master(job, inputs):
     """
     log.write("master job\n")
     log.flush()
-    masterIP = job.addService(MasterService(inputs['sudo']))
+    masterIP = job.addService(MasterService(inputs['sudo'], "%s G" % inputs['executorMemory']))
     job.addChildJobFn(start_workers, masterIP, inputs)
 
 
@@ -59,8 +61,8 @@ def start_workers(job, masterIP, inputs):
     log.write("workers job\n")
     log.flush()
     for i in range(inputs['numWorkers']):
-        job.addService(WorkerService(masterIP, inputs['sudo']))
-    job.addFollowOnJobFn(download_data, masterIP, inputs)
+        job.addService(WorkerService(masterIP, inputs['sudo'], "%s G" % inputs['executorMemory']))
+    job.addFollowOnJobFn(download_data, masterIP, inputs, memory = "%s G" % inputs['driverMemory'])
 
 
 def call_conductor(masterIP, inputs, src, dst):
@@ -74,23 +76,32 @@ def call_conductor(masterIP, inputs, src, dst):
                                      "-e", "AWS_ACCESS_KEY="+inputs['accessKey'],
                                      "-e", "AWS_SECRET_KEY="+inputs['secretKey']],
                 tool_parameters = ["--master", "spark://"+masterIP+":"+SPARK_MASTER_PORT,
-                 "--conf", "spark.driver.memory=%s" % inputs["driverMemory"],
-                 "--conf", "spark.executor.memory=%s" % inputs["executorMemory"],
+                 "--conf", "spark.driver.memory=%sg" % inputs["driverMemory"],
+                 "--conf", "spark.executor.memory=%sg" % inputs["executorMemory"],
                  "--", "-C", src, dst],
                 sudo = inputs['sudo'])
 
 
-def call_adam(inputs, masterIP, arguments):
+def call_adam(masterIP, inputs, arguments):
+
+    params = []
+    default_params = ["--master", ("spark://%s:%s" % (masterIP, SPARK_MASTER_PORT)), 
+                      "--conf", ("spark.driver.memory=%sg" % inputs["driverMemory"]),
+                      "--conf", ("spark.executor.memory=%sg" % inputs["executorMemory"]),
+                      "--conf", ("spark.hadoop.fs.default.name=hdfs://%s:%s" % (masterIP, HDFS_MASTER_PORT)),
+                      "--"]
+    try:
+        params = default_params + arguments
+    except:
+        log.error("parms: %s" % str(default_params))
+        log.error("args: %s" % str(arguments))
+        raise
 
     docker_call(no_rm = True,
                 work_dir = os.getcwd(),
                 tool = "quay.io/ucsc_cgl/adam:cd6ef41", 
-                docker_parameter = ["--net=host"],
-                tool_parameters = ["--master", "spark://"+masterIP+":"+SPARK_MASTER_PORT, 
-                 "--conf", "spark.driver.memory=%s" % inputs["driverMemory"],
-                 "--conf", "spark.executor.memory=%s" % inputs["executorMemory"],
-                 "--conf", "spark.hadoop.fs.default.name=hdfs://%s:%s" % (masterIP, HDFS_MASTER_PORT),
-                 "--"] + arguments,
+                docker_parameters = ["--net=host"],
+                tool_parameters = params,
                 sudo = inputs['sudo'])
 
 
@@ -123,7 +134,7 @@ def download_data(job, masterIP, inputs):
 
     call_conductor(masterIP, inputs, inputs['bamName'], hdfsBAM)
      
-    job.addFollowOnJobFn(adam_convert, masterIP, hdfsBAM, hdfsSNPs, inputs)
+    job.addFollowOnJobFn(adam_convert, masterIP, hdfsBAM, hdfsSNPs, inputs, memory = "%s G" % inputs['driverMemory'])
 
 
 def adam_convert(job, masterIP, inFile, snpFile, inputs):
@@ -154,7 +165,7 @@ def adam_convert(job, masterIP, inFile, snpFile, inputs):
     snpFileName = snpFile.split("/")[-1]
     remove_file(masterIP, snpFileName)
  
-    job.addFollowOnJobFn(adam_transform, masterIP, adamFile, adamSnpFile, inputs)
+    job.addFollowOnJobFn(adam_transform, masterIP, adamFile, adamSnpFile, inputs, memory = "%s G" % inputs['driverMemory'])
 
 
 def adam_transform(job, masterIP, inFile, snpFile, inputs):
@@ -208,7 +219,7 @@ def adam_transform(job, masterIP, inFile, snpFile, inputs):
 
     remove_file(masterIP, "bqsr.adam*")
 
-    job.addFollowOnJobFn(upload_data, masterIP, outFile, inputs)
+    job.addFollowOnJobFn(upload_data, masterIP, outFile, inputs, memory = '%s G' % inputs['driverMemory'])
 
 
 def upload_data(job, masterIP, hdfsName, inputs):
@@ -220,18 +231,23 @@ def upload_data(job, masterIP, hdfsName, inputs):
 
     fileSystem, path = hdfsName.split('://')
     nameOnly = path.split('/')[-1]
+    
+    uploadName = "%s/%s" % (inputs['outDir'], nameOnly.replace('.processed', ''))
+    if inputs['suffix']:
+        uploadName = uploadName.replace('.bam', '%s.bam' % inputs['suffix'])
 
-    call_conductor(masterIP, inputs, hdfsName, inputs['outDir']+"/"+nameOnly)
+    call_conductor(masterIP, inputs, hdfsName, uploadName)
     
 # SERVICE CLASSES
 
 class MasterService(Job.Service):
 
-    def __init__(self, sudo):
+    def __init__(self, sudo, memory):
 
-        Job.Service.__init__(self)
         self.sudo = sudo
-
+        self.memory = memory
+        self.cores = multiprocessing.cpu_count()
+        Job.Service.__init__(self, memory = self.memory, cores = self.cores)
 
     def start(self):
         """
@@ -290,10 +306,12 @@ class MasterService(Job.Service):
                 
 class WorkerService(Job.Service):
     
-    def __init__(self, masterIP, sudo):
-        Job.Service.__init__(self)
+    def __init__(self, masterIP, sudo, memory):
         self.masterIP = masterIP
         self.sudo = sudo
+        self.memory = memory
+        self.cores = multiprocessing.cpu_count()
+        Job.Service.__init__(self, memory = self.memory, cores = self.cores)
 
     def start(self):
         """
@@ -312,8 +330,9 @@ class WorkerService(Job.Service):
                                                                  "-e", "SPARK_LOCAL_DIRS=/ephemeral/spark/local",
                                                                  "-e", "SPARK_WORKER_DIR=/ephemeral/spark/work"],
                                             tool_parameters = [self.masterIP+":"+SPARK_MASTER_PORT],
-                                            sudo = inputs['sudo'],
+                                            sudo = self.sudo,
                                             check_output = True)[:-1]
+        
         self.hdfsContainerID = docker_call(no_rm = True,
                                            work_dir = os.getcwd(),
                                            tool = "quay.io/ucsc_cgl/apache-hadoop-worker:2.6.2",
@@ -321,9 +340,67 @@ class WorkerService(Job.Service):
                                                                 "-d",
                                                                 "-v", "/mnt/ephemeral/:/ephemeral/:rw"],
                                            tool_parameters = [self.masterIP],
-                                           sudo = inputs['sudo'],
+                                           sudo = self.sudo,
                                            check_output = True)[:-1]
-                                           
+        
+        # fake do/while to check if HDFS is up
+        hdfs_down = True
+        retries = 0
+        while hdfs_down and (retries < 5):
+
+            sys.stderr.write("Sleeping 30 seconds before checking HDFS startup.")
+            time.sleep(30)
+            clusterID = ""
+            try:
+                clusterID = check_output(["docker",
+                                          "exec",
+                                          self.hdfsContainerID,
+                                          "grep",
+                                          "clusterID",
+                                          "-R",
+                                          "/opt/apache-hadoop/logs"])
+            except:
+                # grep returns a non-zero exit code if the pattern is not found
+                # we expect to not find the pattern, so a non-zero code is OK
+                pass
+
+            if "Incompatible" in clusterID:
+                sys.stderr.write("Hadoop Datanode failed to start with: %s" % clusterID)
+                sys.stderr.write("Retrying container startup, retry #%d." % retries)
+                retries += 1
+
+                sys.stderr.write("Removing ephemeral hdfs directory.")
+                check_call(["docker",
+                            "exec",
+                            self.hdfsContainerID,
+                            "rm",
+                            "-rf",
+                            "/ephemeral/hdfs"])
+
+                sys.stderr.write("Killing container %s." % self.hdfsContainerID)
+                check_call(["docker",
+                            "kill",
+                            self.hdfsContainerID])
+
+                # todo: this is copied code. clean up!
+                sys.stderr.write("Restarting datanode.")
+                self.hdfsContainerID = docker_call(no_rm = True,
+                                                   work_dir = os.getcwd(),
+                                                   tool = "quay.io/ucsc_cgl/apache-hadoop-worker:2.6.2",
+                                                   docker_parameters = ["--net=host",
+                                                                        "-d",
+                                                                        "-v", "/mnt/ephemeral/:/ephemeral/:rw"],
+                                                   tool_parameters = [self.masterIP],
+                                                   sudo = self.sudo,
+                                                   check_output = True)[:-1]
+
+            else:
+                sys.stderr.write("HDFS datanode started up OK!")
+                hdfs_down = False
+
+        if retries >= 5:
+            raise RuntimeError("Failed %d times trying to start HDFS datanode." % retries)
+                                   
         return
 
     def stop(self):
@@ -390,7 +467,8 @@ def main(args):
               'secretKey':  options.aws_secret_key,
               'driverMemory': options.driver_memory,
               'executorMemory': options.executor_memory,
-              'sudo': options.sudo}
+              'sudo': options.sudo,
+              'suffix': None}
 
     Job.Runner.startToil(Job.wrapJobFn(start_master, inputs), options)
 

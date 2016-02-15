@@ -197,8 +197,6 @@ def docker_call(work_dir,
 
     base_docker_call = ('docker run %s --log-driver=none -v %s:/data' % (rm, work_dir)).split()
 
-    log.warn("Calling docker with %s." % " ".join(base_docker_call))
-
     if sudo:
         base_docker_call = ['sudo'] + base_docker_call
     if java_opts:
@@ -206,8 +204,8 @@ def docker_call(work_dir,
     if docker_parameters:
         base_docker_call = base_docker_call + docker_parameters
 
-    log.warn("Calling docker with %s." % " ".join(base_docker_call))
-    sys.stderr.write( "Calling docker with %s\n" % " ".join(base_docker_call))
+    log.warn("Calling docker with %s." % " ".join(base_docker_call + [tool] + tool_parameters))
+    sys.stderr.write( "Calling docker with %s\n" % " ".join(base_docker_call + [tool] + tool_parameters))
 
     try:
         if outfile:
@@ -392,7 +390,7 @@ def run_bwa(job, job_vars):
                       '/data/r2.fq.gz']
 
         try:
-            docker_call(tool='quay.io/ucsc_cgl/bwakit:0.7.12',
+            docker_call(tool='quay.io/ucsc_cgl/bwakit:0.7.12--testuid',
                         tool_parameters=parameters, work_dir=work_dir, sudo=sudo)
         except:
             last = work_dir.split('/')[-1]
@@ -405,10 +403,9 @@ def run_bwa(job, job_vars):
         # bwa insists on adding an `*.aln.sam` suffix, so rename the output file
         os.rename(os.path.join(work_dir, 'aligned.aln.bam'),
                   os.path.join(work_dir, 'aligned.bam'))
-
-        # write aligned sam file to global file store
+        
         return job.fileStore.writeGlobalFile(os.path.join(work_dir, 'aligned.bam'))
-
+        
     else:
         # Call: BWA
         parameters = ["mem",
@@ -459,7 +456,16 @@ def fix_bam_header(job, job_vars, bam_id):
     input_args, ids = job_vars
     sudo = input_args['sudo']
     # Retrieve input file
-    job.fileStore.readGlobalFile(bam_id, os.path.join(work_dir, 'aligned.bam'))
+    try:
+        job.fileStore.readGlobalFile(bam_id, os.path.join(work_dir, 'aligned.bam'))
+    except:
+        # remove and retry?
+        try:
+            os.remove(os.path.join(work_dir, 'aligned.bam'))
+        except:
+            pass
+        
+        job.fileStore.readGlobalFile(bam_id, os.path.join(work_dir, 'aligned.bam'))
     # Call: Samtools
     parameters = ['view',
                   '-H',
@@ -536,12 +542,10 @@ def upload_to_s3(work_dir, input_args, output_file):
     job_vars: tuple         Contains the dictionaries: input_args and ids
     """
 
-    work_dir = job.fileStore.getLocalTempDir()
-
-    if input_args['aws_access_key']:
-        os.environ['AWS_ACCESS_KEY_ID'] = input_args['aws_access_key']
-    if input_args['aws_secret_key']:
-        os.environ['AWS_SECRET_ACCESS_KEY'] = input_args['aws_secret_key']
+    # Parse s3_dir to get bucket and s3 path
+    s3_dir = input_args['s3_dir']
+    bucket_name = s3_dir.lstrip('/').split('/')[0]
+    bucket_dir = '/'.join(s3_dir.lstrip('/').split('/')[1:])
 
     # what is the path we are uploading to?
     s3_path = os.path.join('s3://', bucket_name, bucket_dir, output_file)
@@ -549,6 +553,9 @@ def upload_to_s3(work_dir, input_args, output_file):
     # does this need to be uploaded with encryption?
     if input_args['ssec']:
        key_path = input_args['ssec']
+
+       base_url = 'https://s3.amazonaws.com/'
+       url = os.path.join(base_url, bucket_name, bucket_dir, output_file)
 
        # Generate keyfile for upload
        with open(os.path.join(work_dir, uuid + '.key'), 'wb') as f_out:
