@@ -523,8 +523,6 @@ if __name__ == '__main__':
               'cpu_count': str(multiprocessing.cpu_count()),
               'file_size': args.file_size,
               'ssec': None,
-              'aws_access_key': None,
-              'aws_secret_key': None,
               'sudo': False}
     
     Job.Runner.startToil(Job.wrapJobFn(batch_start, inputs), args)

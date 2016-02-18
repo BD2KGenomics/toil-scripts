@@ -143,10 +143,6 @@ def build_parser():
                         help = 'S3 Bucket URI')
     parser.add_argument('-3r', '--bucket_region', default = "us-west-2",
                         help = 'Region of the S3 bucket. Defaults to us-east-1.')
-    parser.add_argument('-y', '--aws_access_key', required = True,
-                        help = 'Amazon web services access key')
-    parser.add_argument('-S', '--aws_secret_key', required = True,
-                        help = 'Amazon web services secret key')
 
     # add file size argument
     parser.add_argument('-se', '--file_size', default = '100G',
@@ -339,17 +335,13 @@ if __name__ == '__main__':
                   's3_dir': "%s/alignment" % args.s3_bucket,
                   'cpu_count': None,
                   'file_size': args.file_size,
-                  'use_bwakit': args.use_bwakit,
-                  'aws_access_key':  args.aws_access_key,
-                  'aws_secret_key':  args.aws_secret_key}
+                  'use_bwakit': args.use_bwakit}
     
     if args.num_nodes <= 1:
         raise ValueError("--num_nodes allocates one Spark/HDFS master and n-1 workers, and thus must be greater than 1. %d was passed." % args.num_nodes)
 
     adam_inputs = {'numWorkers': args.num_nodes - 1,
                    'knownSNPs':  args.dbsnp.replace("https://s3-us-west-2.amazonaws.com/", "s3://"),
-                   'accessKey':  args.aws_access_key,
-                   'secretKey':  args.aws_secret_key,
                    'driverMemory': args.driver_memory,
                    'executorMemory': args.executor_memory,
                    'sudo': args.sudo,
@@ -376,8 +368,6 @@ if __name__ == '__main__':
                              'cpu_count': str(multiprocessing.cpu_count()),
                              'ssec': None,
                              'file_size': args.file_size,
-                             'aws_access_key':  args.aws_access_key,
-                             'aws_secret_key':  args.aws_secret_key,
                              'suffix': '.adam',
                              'sudo': args.sudo}
 
@@ -392,8 +382,6 @@ if __name__ == '__main__':
                              'cpu_count': str(multiprocessing.cpu_count()),
                              'ssec': None,
                              'file_size': args.file_size,
-                             'aws_access_key':  args.aws_access_key,
-                             'aws_secret_key':  args.aws_secret_key,
                              'suffix': '.gatk',
                              'sudo': args.sudo}
 

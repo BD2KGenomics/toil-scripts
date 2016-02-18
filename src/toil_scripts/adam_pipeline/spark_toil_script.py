@@ -72,9 +72,7 @@ def call_conductor(masterIP, inputs, src, dst):
     docker_call(no_rm = True,
                 work_dir = os.getcwd(),
                 tool = "quay.io/ucsc_cgl/conductor",
-                docker_parameters = ["--net=host",
-                                     "-e", "AWS_ACCESS_KEY="+inputs['accessKey'],
-                                     "-e", "AWS_SECRET_KEY="+inputs['secretKey']],
+                docker_parameters = ["--net=host"],
                 tool_parameters = ["--master", "spark://"+masterIP+":"+SPARK_MASTER_PORT,
                  "--conf", "spark.driver.memory=%sg" % inputs["driverMemory"],
                  "--conf", "spark.executor.memory=%sg" % inputs["executorMemory"],
@@ -430,10 +428,6 @@ def build_parser():
                         help = 's3 directory url in which to place output files')
     parser.add_argument('-k', '--known_SNPs', required = True,
                         help = 'The full s3 url of a VCF file of known snps')
-    parser.add_argument('-a', '--aws_access_key', required = True,
-                        help = 'Amazon web services access key')
-    parser.add_argument('-s', '--aws_secret_key', required = True,
-                        help = 'Amazon web services secret key')
     parser.add_argument('-d', '--driver_memory', required = True,
                         help = 'Amount of memory to allocate for Spark Driver.')
     parser.add_argument('-q', '--executor_memory', required = True,
@@ -457,8 +451,6 @@ def main(args):
               'outDir':     options.output_directory,
               'bamName':    options.input_file_name,
               'knownSNPs':  options.known_SNPs,
-              'accessKey':  options.aws_access_key,
-              'secretKey':  options.aws_secret_key,
               'driverMemory': options.driver_memory,
               'executorMemory': options.executor_memory,
               'sudo': options.sudo,
