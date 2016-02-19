@@ -130,7 +130,7 @@ def build_parser():
     parser = argparse.ArgumentParser()
 
     # add sample uuid
-    parser.add_argument('-U', '--uuid', required = True,
+    parser.add_argument('-U', '--uuid_manifest', required = True,
                         help = 'Sample UUID.')
 
     # what pipeline are we running
@@ -197,6 +197,27 @@ def build_parser():
     
     # return built parser
     return parser
+
+
+def sample_loop(job, bucket_region, s3_bucket, uuid_list, bwa_inputs, adam_inputs, gatk_preprocess_inputs, gatk_adam_call_inputs, gatk_gatk_call_inputs, pipeline_to_run):
+  """
+  Loops over the sample_ids (uuids) in the manifest, creating child jobs to process each
+  """
+
+  for uuid in uuid_list:
+
+    ## set uuid inputs
+    bwa_inputs['lb'] = uuid
+    bwa_inputs['uuid'] = uuid
+    adam_inputs['outDir'] = "s3://%s/analysis/%s" % (s3_bucket, uuid)
+    adam_inputs['bamName'] = "s3://%s/alignment/%s.bam" % (s3_bucket, uuid)
+    gatk_preprocess_inputs['s3_dir'] =  "%s/analysis/%s" % (s3_bucket, uuid)
+    gatk_adam_call_inputs['s3_dir'] = "%s/analysis/%s" % (s3_bucket, uuid)
+    gatk_gatk_call_inputs['s3_dir'] = "%s/analysis/%s" % (s3_bucket, uuid)
+
+    job.addChildJobFn(static_dag, bucket_region, s3_bucket, uuid, bwa_inputs, adam_inputs, gatk_preprocess_inputs, gatk_adam_call_inputs, gatk_gatk_call_inputs, pipeline_to_run )
+    
+  
 
 def static_dag(job, bucket_region, s3_bucket, uuid, bwa_inputs, adam_inputs, gatk_preprocess_inputs, gatk_adam_call_inputs, gatk_gatk_call_inputs, pipeline_to_run):
     """
@@ -275,9 +296,11 @@ def static_dag(job, bucket_region, s3_bucket, uuid, bwa_inputs, adam_inputs, gat
     gatk_gatk_call = job.wrapJobFn(batch_start,
                                    gatk_gatk_call_inputs).encapsulate()
 
+    
+
     # wire up dag
     job.addChild(bwa)
-    
+   
     if (pipeline_to_run == "adam" or
         pipeline_to_run == "both"):
         bwa.addChild(adam_preprocess)
@@ -287,6 +310,7 @@ def static_dag(job, bucket_region, s3_bucket, uuid, bwa_inputs, adam_inputs, gat
         pipeline_to_run == "both"):
         bwa.addChild(gatk_preprocess)
         gatk_preprocess.addChild(gatk_gatk_call)
+   
 
 if __name__ == '__main__':
     
@@ -294,6 +318,13 @@ if __name__ == '__main__':
     Job.Runner.addToilOptions(args_parser)
     args = args_parser.parse_args()
 
+    ## Parse manifest file
+    uuid_list = []
+    with open(args.uuid_manifest) as f_manifest:
+      for uuid in f_manifest:
+        uuid_list.append(uuid.strip())
+
+    
     bwa_inputs = {'ref.fa': args.ref,
                   'ref.fa.amb': args.amb,
                   'ref.fa.ann': args.ann,
@@ -306,8 +337,6 @@ if __name__ == '__main__':
                   'output_dir': None,
                   'sudo': args.sudo,
                   's3_dir': "%s/alignment" % args.s3_bucket,
-                  'lb': args.uuid,
-                  'uuid': args.uuid,
                   'cpu_count': None,
                   'file_size': args.file_size,
                   'use_bwakit': args.use_bwakit,
@@ -318,14 +347,12 @@ if __name__ == '__main__':
         raise ValueError("--num_nodes allocates one Spark/HDFS master and n-1 workers, and thus must be greater than 1. %d was passed." % args.num_nodes)
 
     adam_inputs = {'numWorkers': args.num_nodes - 1,
-                   'outDir':     's3://%s/analysis/%s' % (args.s3_bucket, args.uuid),
                    'knownSNPs':  args.dbsnp.replace("https://s3-us-west-2.amazonaws.com/", "s3://"),
                    'accessKey':  args.aws_access_key,
                    'secretKey':  args.aws_secret_key,
                    'driverMemory': args.driver_memory,
                    'executorMemory': args.executor_memory,
                    'sudo': args.sudo,
-                   'bamName': 's3://%s/alignment/%s.bam' % (args.s3_bucket, args.uuid),
                    'suffix': '.adam'}
 
     gatk_preprocess_inputs = {'ref.fa': args.ref,
@@ -336,8 +363,7 @@ if __name__ == '__main__':
                               'sudo': args.sudo,
                               'ssec': None,
                               'cpu_count': str(multiprocessing.cpu_count()),
-                              'suffix': '.gatk',
-                              's3_dir': "%s/analysis/%s" % (args.s3_bucket, args.uuid),}
+                              'suffix': '.gatk' }
     
     gatk_adam_call_inputs = {'ref.fa': args.ref.replace('.fa', '.sorted.fa'),
                              'phase.vcf': args.phase,
@@ -349,7 +375,6 @@ if __name__ == '__main__':
                              'uuid': None,
                              'cpu_count': str(multiprocessing.cpu_count()),
                              'ssec': None,
-                             's3_dir': "%s/analysis/%s" % (args.s3_bucket, args.uuid),
                              'file_size': args.file_size,
                              'aws_access_key':  args.aws_access_key,
                              'aws_secret_key':  args.aws_secret_key,
@@ -366,7 +391,6 @@ if __name__ == '__main__':
                              'uuid': None,
                              'cpu_count': str(multiprocessing.cpu_count()),
                              'ssec': None,
-                             's3_dir': "%s/analysis/%s" % (args.s3_bucket, args.uuid),
                              'file_size': args.file_size,
                              'aws_access_key':  args.aws_access_key,
                              'aws_secret_key':  args.aws_secret_key,
@@ -378,10 +402,10 @@ if __name__ == '__main__':
         args.pipeline_to_run != "both"):
         raise ValueError("--pipeline_to_run must be either 'adam', 'gatk', or 'both'. %s was passed." % args.pipeline_to_run)
 
-    Job.Runner.startToil(Job.wrapJobFn(static_dag,
+    Job.Runner.startToil(Job.wrapJobFn(sample_loop,
                                        args.bucket_region,
                                        args.s3_bucket,
-                                       args.uuid,
+                                       uuid_list,
                                        bwa_inputs,
                                        adam_inputs,
                                        gatk_preprocess_inputs,
