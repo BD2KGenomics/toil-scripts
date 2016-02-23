@@ -795,8 +795,10 @@ def consolidate_output(job, job_vars, output_ids_and_values):
     # I/O
     if improper_pair:
         uuid = 'IMPROPERLY_PAIRED.' + uuid
+        input_args['uuid'] = uuid
     if single_end:
         uuid = 'SINGLE-END.' + uuid
+        input_args['uuid'] = uuid
     out_tar = os.path.join(work_dir, uuid + '.tar.gz')
     # Consolidate separate tarballs into one as streams (avoids unnecessary untaring)
     with tarfile.open(os.path.join(work_dir, out_tar), 'w:gz') as f_out:
