@@ -142,7 +142,6 @@ def download_from_url(job, url):
         try:
             download_cmd = ['curl', '-fs', '--retry', '5', '--create-dir', url, '-o', file_path]
             log.info("Downloading file using command %s." % " ".join(download_cmd))
-            sys.stderr.write( "Downloading file using command %s.\n" % " ".join(download_cmd))
             subprocess.check_call(download_cmd)
         except OSError:
             raise RuntimeError('Failed to find "curl". Install via "apt-get install curl"')
@@ -205,7 +204,6 @@ def docker_call(work_dir,
         base_docker_call = base_docker_call + docker_parameters
 
     log.warn("Calling docker with %s." % " ".join(base_docker_call + [tool] + tool_parameters))
-    sys.stderr.write( "Calling docker with %s\n" % " ".join(base_docker_call + [tool] + tool_parameters))
 
     try:
         if outfile:
@@ -389,16 +387,8 @@ def run_bwa(job, job_vars):
                       '/data/r1.fq.gz',
                       '/data/r2.fq.gz']
 
-        try:
-            docker_call(tool='quay.io/ucsc_cgl/bwakit:0.7.12--testuid',
-                        tool_parameters=parameters, work_dir=work_dir, sudo=sudo)
-        except:
-            last = work_dir.split('/')[-1]
-            log.warn("Copying files from %s to /mnt/ephemeral/frank/%s" % (work_dir, last))
-            sys.stderr.write("Copying files from %s to /mnt/ephemeral/frank/%s\n" % (work_dir, last))
-
-            shutil.copytree(work_dir, "/mnt/ephemeral/frank/%s" % last)
-            raise
+        docker_call(tool='quay.io/ucsc_cgl/bwakit:0.7.12--528bb9bf73099a31e74a7f5e6e3f2e0a41da486e',
+                    tool_parameters=parameters, work_dir=work_dir, sudo=sudo)
 
         # bwa insists on adding an `*.aln.sam` suffix, so rename the output file
         os.rename(os.path.join(work_dir, 'aligned.aln.bam'),
@@ -505,7 +495,8 @@ def add_readgroups(job, job_vars, bam_id):
     output_file = '{}.bam'.format(uuid)
     # Retrieve input file
     job.fileStore.readGlobalFile(bam_id, os.path.join(work_dir, 'aligned_fixpg.bam'))
-    sys.stderr.write("Read global file to %s, adding read groups and saving to %s." % (os.path.join(work_dir, 'aligned_fixpg.bam'), os.path.join(work_dir, output_file)))
+    log.warn("Read global file to %s, adding read groups and saving to %s." % (os.path.join(work_dir, 'aligned_fixpg.bam'), os.path.join(work_dir, output_file)))
+
     # Call: Samtools
     parameters = ['AddOrReplaceReadGroups',
                   'I=/data/aligned_fixpg.bam',
@@ -523,16 +514,8 @@ def add_readgroups(job, job_vars, bam_id):
     if input_args['output_dir']:
         copy_to_output_dir(work_dir=work_dir, output_dir=input_args['output_dir'], files=[output_file])
     if input_args['s3_dir']:
-        try:
-            upload_to_s3(work_dir, input_args, output_file)
-        except:
-            last = work_dir.split('/')[-1]
-            log.warn("Copying files from %s to /mnt/ephemeral/frank/%s" % (work_dir, last))
-            sys.stderr.write("Copying files from %s to /mnt/ephemeral/frank/%s\n" % (work_dir, last))
+        upload_to_s3(work_dir, input_args, output_file)
         
-            shutil.copytree(work_dir, "/mnt/ephemeral/frank/%s" % last)
-            raise
-
 
 def upload_to_s3(work_dir, input_args, output_file):
     """

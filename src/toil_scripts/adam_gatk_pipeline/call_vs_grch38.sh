@@ -9,13 +9,13 @@ set -x -v
 # using GATK followed by variant calling using GATK HaplotypeCaller.
 
 python -m toil_scripts.adam_gatk_pipeline.align_and_call \
-    aws:us-west-2:fnothaft-toil-jobstore-new \
+    ${JOBSTORE} \
     --retryCount 1 \
     --uuid_manifest my_manifest_file \
-    --s3_bucket paschall-fc-test-west-2 \
-    --bucket_region us-west-2 \
-    --aws_access_key ${FC_AWS_ACCESS_KEY_ID} \
-    --aws_secret_key ${FC_AWS_SECRET_ACCESS_KEY} \
+    --s3_bucket ${BUCKET} \
+    --bucket_region ${REGION} \
+    --aws_access_key ${AWS_ACCESS_KEY_ID} \
+    --aws_secret_key ${AWS_SECRET_ACCESS_KEY} \
     --ref https://s3-us-west-2.amazonaws.com/cgl-pipeline-inputs/variant_grch38_reordered/GRCh38_full_analysis_set_plus_decoy_hla.reordered.fa \
     --amb https://s3-us-west-2.amazonaws.com/cgl-pipeline-inputs/variant_grch38_reordered/GRCh38_full_analysis_set_plus_decoy_hla.reordered.fa.amb \
     --ann https://s3-us-west-2.amazonaws.com/cgl-pipeline-inputs/variant_grch38_reordered/GRCh38_full_analysis_set_plus_decoy_hla.reordered.fa.ann \

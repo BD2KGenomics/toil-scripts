@@ -365,7 +365,7 @@ if __name__ == '__main__':
                               'cpu_count': str(multiprocessing.cpu_count()),
                               'suffix': '.gatk' }
     
-    gatk_adam_call_inputs = {'ref.fa': args.ref.replace('.fa', '.sorted.fa'),
+    gatk_adam_call_inputs = {'ref.fa': args.ref,
                              'phase.vcf': args.phase,
                              'mills.vcf': args.mills,
                              'dbsnp.vcf': args.dbsnp,

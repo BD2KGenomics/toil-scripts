@@ -90,12 +90,6 @@ def call_adam(masterIP, inputs, arguments):
                       "--conf", ("spark.executor.memory=%sg" % inputs["executorMemory"]),
                       "--conf", ("spark.hadoop.fs.default.name=hdfs://%s:%s" % (masterIP, HDFS_MASTER_PORT)),
                       "--"]
-    try:
-        params = default_params + arguments
-    except:
-        log.error("parms: %s" % str(default_params))
-        log.error("args: %s" % str(arguments))
-        raise
 
     docker_call(no_rm = True,
                 work_dir = os.getcwd(),
