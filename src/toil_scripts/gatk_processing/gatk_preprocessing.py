@@ -29,7 +29,9 @@ import hashlib
 import base64
 import subprocess
 import shutil
+import sys
 from toil.job import Job
+from toil_scripts.batch_alignment.bwa_alignment import upload_to_s3
 
 debug = False 
 
@@ -47,6 +49,7 @@ def build_parser():
     parser.add_argument('-s', '--ssec', help='A key that can be used to fetch encrypted data')
     parser.add_argument('-3', '--s3_dir', default=None, help='S3 Directory, starting with bucket name. e.g.: '
                                                              'cgl-driver-projects/ckcc/rna-seq-samples/')
+    parser.add_argument('-x', '--suffix', default=".bqsr", help='additional suffix, if any')
     parser.add_argument('-u', '--sudo', dest='sudo', action='store_true', help='Docker usually needs sudo to execute '
                                                                                'locally, but not''when running Mesos '
                                                                                'or when a member of a Docker group.')
@@ -160,8 +163,22 @@ def copy_to_output_dir(work_dir, output_dir, uuid=None, files=None):
         else:
             shutil.copy(os.path.join(work_dir, fname), os.path.join(output_dir, '{}.{}'.format(uuid, fname)))
 
+def upload_or_move(job, work_dir, input_args, output):
 
-def download_from_url(job, url, name):
+    # are we moving this into a local dir, or up to s3?
+    if input_args['output_dir']:
+        # get output path and
+        output_dir = input_args['output_dir']
+        make_directory(output_dir)
+        move_to_output_dir(work_dir, output_dir, output)
+
+    elif input_args['s3_dir']:
+        upload_to_s3(work_dir, input_args, output)
+
+    else:
+        raise ValueError('No output_directory or s3_dir defined. Cannot determine where to store %s' % output)
+
+def download_from_url_gatk(job, url, name):
     """
     Simple curl request made for a given url
 
@@ -232,7 +249,7 @@ def docker_path(file_path):
     return os.path.join('/data', os.path.basename(file_path))
 
 
-def docker_call(work_dir, tool_parameters, tool, java_opts=None,
+def docker_call_preprocess(work_dir, tool_parameters, tool, java_opts=None,
                 outfiles=None, sudo=False):
     """
     Makes subprocess call of a command to a docker container.
@@ -245,8 +262,10 @@ def docker_call(work_dir, tool_parameters, tool, java_opts=None,
     sudo: bool              If the user wants the docker command executed as sudo
     """
     base_docker_call = 'docker run --log-driver=none --rm -v {}:/data'.format(work_dir).split()
-    if sudo:
-        base_docker_call = ['sudo'] + base_docker_call
+
+    # no-op sudo
+    #if sudo:
+    #    base_docker_call = ['sudo'] + base_docker_call
     if java_opts:
         base_docker_call = base_docker_call + ['-e', 'JAVA_OPTS={}'.format(java_opts)]
     if debug:
@@ -295,10 +314,21 @@ def create_reference_index(job, ref_id, sudo):
     """
     work_dir = job.fileStore.getLocalTempDir()
     # Retrieve file path to reference
-    job.fileStore.readGlobalFile(ref_id, os.path.join(work_dir, 'ref.fa'))  
+    try:
+        job.fileStore.readGlobalFile(ref_id, os.path.join(work_dir, 'ref.fa'))  
+    except:
+        sys.stderr.write("Failed when reading global file %s to %s. Retrying with dict index." % (ref_id,
+                                                                                                  os.path.join(work_dir, 'ref.fa')))
+        
+        try:
+            job.fileStore.readGlobalFile(ref_id['ref.fa'], os.path.join(work_dir, 'ref.fa'))  
+        except:
+            sys.stderr.write("Reading %s on retry failed." % ref_id['ref.fa'])
+            raise
+
     # Call: Samtools
     command = ['faidx', 'ref.fa']
-    docker_call(work_dir=work_dir, tool_parameters=command,
+    docker_call_preprocess(work_dir=work_dir, tool_parameters=command,
                 tool='quay.io/ucsc_cgl/samtools:0.1.19--dd5ac549b95eb3e5d166a5e310417ef13651994e',
                 outfiles=['ref.fa.fai'],
                 sudo=sudo)
@@ -320,7 +350,7 @@ def create_reference_dict(job, ref_id, sudo):
     ref_path = job.fileStore.readGlobalFile(ref_id, os.path.join(work_dir, 'ref.fa'))
     # Call: picardtools
     command = ['CreateSequenceDictionary', 'R=ref.fa', 'O=ref.dict']
-    docker_call(work_dir=work_dir, tool_parameters=command,
+    docker_call_preprocess(work_dir=work_dir, tool_parameters=command,
                 tool='quay.io/ucsc_cgl/picardtools:1.95--dd5ac549b95eb3e5d166a5e310417ef13651994e',
                 outfiles=['ref.dict'],
                 sudo=sudo)
@@ -329,7 +359,7 @@ def create_reference_dict(job, ref_id, sudo):
 
 
 # TODO Start of Pipeline
-def download_shared_files(job, input_args):
+def download_gatk_files(job, input_args):
     """
     Downloads files shared by all samples in the pipeline
 
@@ -337,7 +367,7 @@ def download_shared_files(job, input_args):
     """
     shared_ids = {}
     for fname in ['ref.fa', 'phase.vcf', 'mills.vcf', 'dbsnp.vcf']:
-        shared_ids[fname] = job.addChildJobFn(download_from_url, url=input_args[fname], name=fname).rv()
+        shared_ids[fname] = job.addChildJobFn(download_from_url_gatk, url=input_args[fname], name=fname).rv()
     job.addFollowOnJobFn(reference_preprocessing, shared_ids, input_args)
 
 
@@ -349,13 +379,17 @@ def reference_preprocessing(job, shared_ids, input_args):
     shared_ids: dict        Dictionary of fileStore IDs
     """
     ref_id = shared_ids['ref.fa']
+    if isinstance(ref_id, dict):
+        sys.stderr.write("shared_ids['ref.fa'] is a dict. %s['ref_id'] = %s." % (shared_ids, ref_id))
+        ref_id = ref_id['ref.fa']
+
     sudo = input_args['sudo']
     shared_ids['ref.fa.fai'] = job.addChildJobFn(create_reference_index, ref_id, sudo).rv()
     shared_ids['ref.dict'] = job.addChildJobFn(create_reference_dict, ref_id, sudo).rv()
-    job.addFollowOnJobFn(spawn_batch_jobs, shared_ids, input_args)
+    job.addFollowOnJobFn(spawn_batch_preprocessing, shared_ids, input_args)
 
 
-def spawn_batch_jobs(job, shared_ids, input_args):
+def spawn_batch_preprocessing(job, shared_ids, input_args):
     """
     Spawn a pipeline for each sample in the configuration file
 
@@ -364,6 +398,15 @@ def spawn_batch_jobs(job, shared_ids, input_args):
     """
     samples = []
     config = input_args['config']
+
+    # does the config file exist locally? if not, try to read from job store
+    if not os.path.exists(config):
+
+        work_dir = job.fileStore.getLocalTempDir()
+        config_path = os.path.join(work_dir, 'config.txt')
+        job.fileStore.readGlobalFile(config, config_path)
+        config = config_path
+
     with open(config, 'r') as f:
         for line in f.readlines():
             if not line.isspace():
@@ -390,7 +433,7 @@ def download_sample(job, shared_ids, input_args, sample):
     if input_args['ssec']:
         shared_ids['sample.bam'] = job.addChildJobFn(download_encrypted_file, input_args, 'sample.bam').rv()
     else:
-        shared_ids['sample.bam'] = job.addChildJobFn(download_from_url, url=url, name='sample.bam').rv()
+        shared_ids['sample.bam'] = job.addChildJobFn(download_from_url_gatk, url=url, name='sample.bam').rv()
     job.addFollowOnJobFn(index_sample, shared_ids, input_args)
 
 
@@ -411,7 +454,7 @@ def index_sample(job, shared_ids, input_args):
     # Retrieve file path
     # Call: index the normal.bam
     parameters = ['index', 'sample.bam']
-    docker_call(work_dir=work_dir, tool_parameters=parameters,
+    docker_call_preprocess(work_dir=work_dir, tool_parameters=parameters,
                 tool='quay.io/ucsc_cgl/samtools:0.1.19--dd5ac549b95eb3e5d166a5e310417ef13651994e',
                 outfiles=['sample.bam.bai'],
                 sudo=sudo)
@@ -434,7 +477,7 @@ def sort_sample(job, shared_ids, input_args):
                'OUTPUT=sample.sorted.bam',
                'SORT_ORDER=coordinate']
     sudo = input_args['sudo']
-    docker_call(work_dir=work_dir, tool_parameters=command,
+    docker_call_preprocess(work_dir=work_dir, tool_parameters=command,
                 tool='quay.io/ucsc_cgl/picardtools:1.95--dd5ac549b95eb3e5d166a5e310417ef13651994e',
                 outfiles=['sample.sorted.bam'],
                 sudo=sudo)
@@ -457,7 +500,7 @@ def mark_dups_sample(job, shared_ids, input_args):
                'OUTPUT=sample.mkdups.bam',
                'METRICS_FILE=metrics.txt',
                'ASSUME_SORTED=true']
-    docker_call(work_dir=work_dir, tool_parameters=command,
+    docker_call_preprocess(work_dir=work_dir, tool_parameters=command,
                 tool='quay.io/ucsc_cgl/picardtools:1.95--dd5ac549b95eb3e5d166a5e310417ef13651994e',
                 outfiles=['sample.mkdups.bam'],
                 sudo=sudo)
@@ -482,7 +525,7 @@ def index_mkdups(job, shared_ids, input_args):
     # Retrieve file path
     # Call: index the normal.bam
     parameters = ['index', 'sample.mkdups.bam']
-    docker_call(work_dir=work_dir, tool_parameters=parameters,
+    docker_call_preprocess(work_dir=work_dir, tool_parameters=parameters,
                 tool='quay.io/ucsc_cgl/samtools:0.1.19--dd5ac549b95eb3e5d166a5e310417ef13651994e',
                 outfiles=['sample.mkdups.bam.bai'],
                 sudo=sudo)
@@ -516,7 +559,7 @@ def realigner_target_creator(job, shared_ids, input_args):
                   '--downsampling_type', 'NONE',
                   '-o', 'sample.intervals']
 
-    docker_call(work_dir=work_dir, tool_parameters=parameters,
+    docker_call_preprocess(work_dir=work_dir, tool_parameters=parameters,
 		tool='quay.io/ucsc_cgl/gatk:3.4--dd5ac549b95eb3e5d166a5e310417ef13651994e',
                 java_opts='-Xmx10g',
                 outfiles=['sample.intervals'],
@@ -553,7 +596,7 @@ def indel_realignment(job, shared_ids, input_args):
                   '-maxReads', str(720000),
                   '-maxInMemory', str(5400000),
                   '-o', 'sample.indel.bam']
-    docker_call(tool='quay.io/ucsc_cgl/gatk:3.4--dd5ac549b95eb3e5d166a5e310417ef13651994e',
+    docker_call_preprocess(tool='quay.io/ucsc_cgl/gatk:3.4--dd5ac549b95eb3e5d166a5e310417ef13651994e',
                 work_dir=work_dir, tool_parameters=parameters,
                 java_opts='-Xmx10g', sudo=sudo,
                 outfiles=['sample.indel.bam', 'sample.indel.bam.bai'])
@@ -579,7 +622,7 @@ def index_indel(job, shared_ids, input_args):
     # Retrieve file path
     # Call: index the normal.bam
     parameters = ['index', 'sample.indel.bam']
-    docker_call(work_dir=work_dir, tool_parameters=parameters,
+    docker_call_preprocess(work_dir=work_dir, tool_parameters=parameters,
                 tool='quay.io/ucsc_cgl/samtools:0.1.19--dd5ac549b95eb3e5d166a5e310417ef13651994e',
                 outfiles=['sample.indel.bam.bai'],
                 sudo=sudo)
@@ -610,7 +653,7 @@ def base_recalibration(job, shared_ids, input_args):
                   '-I', 'sample.indel.bam',
                   '-knownSites', 'dbsnp.vcf',
                   '-o', 'sample.recal.table']
-    docker_call(tool='quay.io/ucsc_cgl/gatk:3.4--dd5ac549b95eb3e5d166a5e310417ef13651994e',
+    docker_call_preprocess(tool='quay.io/ucsc_cgl/gatk:3.4--dd5ac549b95eb3e5d166a5e310417ef13651994e',
                 work_dir=work_dir, tool_parameters=parameters,
                 java_opts='-Xmx15g', sudo=sudo,
                 outfiles=['sample.recal.table'])
@@ -628,13 +671,14 @@ def print_reads(job, shared_ids, input_args):
     """
     # Unpack convenience variables for job
     uuid = input_args['uuid']
+    suffix = input_args['suffix']
     work_dir = job.fileStore.getLocalTempDir()
     sudo = input_args['sudo']
     # Retrieve input file paths
     return_input_paths(job, work_dir, shared_ids, 'ref.fa', 'sample.indel.bam',
                        'ref.fa.fai', 'ref.dict', 'sample.indel.bam.bai', 'sample.recal.table')
     # Output file
-    outfile = '{}.bqsr.bam'.format(uuid)
+    outfile = '{}{}.bam'.format(uuid, suffix)
     outpath = os.path.join(work_dir, outfile)
     # Call: GATK -- PrintReads
     parameters = ['-T', 'PrintReads',
@@ -644,11 +688,11 @@ def print_reads(job, shared_ids, input_args):
                   '-I', 'sample.indel.bam',
                   '-BQSR', 'sample.recal.table',
                   '-o', outfile]
-    docker_call(tool='quay.io/ucsc_cgl/gatk:3.4--dd5ac549b95eb3e5d166a5e310417ef13651994e',
+    docker_call_preprocess(tool='quay.io/ucsc_cgl/gatk:3.4--dd5ac549b95eb3e5d166a5e310417ef13651994e',
                 work_dir=work_dir, tool_parameters=parameters,
                 java_opts='-Xmx15g', sudo=sudo, outfiles=[outfile])
 
-    move_to_output_dir(work_dir, input_args['output_dir'], outfile)
+    upload_or_move(job, work_dir, input_args, outfile)
 
 def main():
     """
@@ -668,11 +712,12 @@ def main():
               's3_dir': pargs.s3_dir,
               'sudo': pargs.sudo,
               'ssec': pargs.ssec,
+              'suffix': pargs.suffix,
               'cpu_count': str(multiprocessing.cpu_count())}
 
 
     # Launch Pipeline
-    Job.Runner.startToil(Job.wrapJobFn(download_shared_files, inputs), pargs)
+    Job.Runner.startToil(Job.wrapJobFn(download_gatk_files, inputs), pargs)
 
 if __name__ == '__main__':
     main()

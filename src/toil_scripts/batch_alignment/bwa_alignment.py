@@ -32,11 +32,16 @@ from collections import OrderedDict
 import hashlib
 import multiprocessing
 import os
+import sys
 import errno
 import subprocess
 import shutil
 import tarfile
+import logging
 from toil.job import Job
+
+
+log = logging.getLogger(__name__)
 
 
 def build_parser():
@@ -59,6 +64,7 @@ def build_parser():
     parser.add_argument('-3', '--s3_dir', default=None, help='S3 Directory, starting with bucket name. e.g.: '
                                                              'cgl-driver-projects/ckcc/rna-seq-samples/')
     parser.add_argument('-k', '--use_bwakit', action='store_true', help='Use bwakit instead of the binary build of bwa')
+    parser.add_argument('-se', '--file_size', default='100G', help='Approximate input file size. Should be given as %d[TGMK], e.g., for a 100 gigabyte file, use --file_size 100G')
     parser.set_defaults(sudo=False)
     return parser
 
@@ -134,7 +140,9 @@ def download_from_url(job, url):
     file_path = os.path.join(work_dir, os.path.basename(url))
     if not os.path.exists(file_path):
         try:
-            subprocess.check_call(['curl', '-fs', '--retry', '5', '--create-dir', url, '-o', file_path])
+            download_cmd = ['curl', '-fs', '--retry', '5', '--create-dir', url, '-o', file_path]
+            log.info("Downloading file using command %s." % " ".join(download_cmd))
+            subprocess.check_call(download_cmd)
         except OSError:
             raise RuntimeError('Failed to find "curl". Install via "apt-get install curl"')
     assert os.path.exists(file_path)
@@ -164,7 +172,15 @@ def return_input_paths(job, work_dir, ids, *args):
     return paths.values()
 
 
-def docker_call(work_dir, tool_parameters, tool, java_opts=None, outfile=None, sudo=False):
+def docker_call(work_dir,
+                tool_parameters,
+                tool,
+                java_opts=None,
+                outfile=None,
+                sudo=False,
+                docker_parameters=None,
+                check_output=False,
+                no_rm=False):
     """
     Makes subprocess call of a command to a docker container.
 
@@ -174,16 +190,30 @@ def docker_call(work_dir, tool_parameters, tool, java_opts=None, outfile=None, s
     outfile: file           Filehandle that stderr will be passed to
     sudo: bool              If the user wants the docker command executed as sudo
     """
-    base_docker_call = 'docker run --rm --log-driver=none -v {}:/data'.format(work_dir).split()
+    rm = '--rm'
+    if no_rm:
+        rm = ''
+
+    base_docker_call = ('docker run %s --log-driver=none -v %s:/data' % (rm, work_dir)).split()
+
     if sudo:
         base_docker_call = ['sudo'] + base_docker_call
     if java_opts:
         base_docker_call = base_docker_call + ['-e', 'JAVA_OPTS={}'.format(java_opts)]
+    if docker_parameters:
+        base_docker_call = base_docker_call + docker_parameters
+
+    log.warn("Calling docker with %s." % " ".join(base_docker_call + [tool] + tool_parameters))
+
     try:
         if outfile:
             subprocess.check_call(base_docker_call + [tool] + tool_parameters, stdout=outfile)
         else:
-            subprocess.check_call(base_docker_call + [tool] + tool_parameters)
+            if check_output:
+                return subprocess.check_output(base_docker_call + [tool] + tool_parameters)
+            else:
+                subprocess.check_call(base_docker_call + [tool] + tool_parameters)
+
     except subprocess.CalledProcessError:
         raise RuntimeError('docker command returned a non-zero exit status. Check error logs.')
     except OSError:
@@ -252,6 +282,15 @@ def parse_config(job, shared_ids, input_args):
     """
     samples = []
     config = input_args['config']
+
+    # does the config file exist locally? if not, try to read from job store
+    if not os.path.exists(config):
+
+        work_dir = job.fileStore.getLocalTempDir()
+        config_path = os.path.join(work_dir, 'config.txt')
+        job.fileStore.readGlobalFile(config, config_path)
+        config = config_path
+
     with open(config, 'r') as f_in:
         for line in f_in:
             line = line.strip().split(',')
@@ -261,7 +300,7 @@ def parse_config(job, shared_ids, input_args):
     input_args['cpu_count'] = multiprocessing.cpu_count()
     job_vars = (input_args, shared_ids)
     for sample in samples:
-        job.addChildJobFn(download_inputs, job_vars, sample, cores=input_args['cpu_count'], memory='20 G', disk='100 G')
+        job.addChildJobFn(download_inputs, job_vars, sample, cores=input_args['cpu_count'], memory='20 G', disk=input_args['file_size'])
 
 
 def download_inputs(job, job_vars, sample):
@@ -277,9 +316,9 @@ def download_inputs(job, job_vars, sample):
     for i in xrange(2):
         if input_args['ssec']:
             key_path = input_args['ssec']
-            ids['r{}.fq.gz'.format(i+1)] = job.addChildJobFn(download_encrypted_file, urls[i], key_path, disk='100G').rv()
+            ids['r{}.fq.gz'.format(i+1)] = job.addChildJobFn(download_encrypted_file, urls[i], key_path, disk=input_args['file_size']).rv()
         else:
-            ids['r{}.fq.gz'.format(i+1)] = job.addChildJobFn(download_from_url, urls[i], disk='100G').rv()
+            ids['r{}.fq.gz'.format(i+1)] = job.addChildJobFn(download_from_url, urls[i], disk=input_args['file_size']).rv()
     job.addFollowOnJobFn(static_dag_declaration, job_vars)
 
 
@@ -296,9 +335,9 @@ def static_dag_declaration(job, job_vars):
     # if we run with bwakit, we skip conversion
     if input_args['use_bwakit']:
 
-        bwa = job.wrapJobFn(run_bwa, job_vars, cores=cores, disk='150G')
-        header = job.wrapJobFn(fix_bam_header, job_vars, bwa.rv(), disk='100G')
-        rg = job.wrapJobFn(add_readgroups, job_vars, header.rv(), memory='15G', disk='100G')
+        bwa = job.wrapJobFn(run_bwa, job_vars, cores=cores, disk=input_args['file_size'])
+        header = job.wrapJobFn(fix_bam_header, job_vars, bwa.rv(), disk=input_args['file_size'])
+        rg = job.wrapJobFn(add_readgroups, job_vars, header.rv(), memory='15G', disk=input_args['file_size'])
         
         # Link
         job.addChild(bwa)
@@ -307,10 +346,10 @@ def static_dag_declaration(job, job_vars):
     
     else:
 
-        bwa = job.wrapJobFn(run_bwa, job_vars, cores=cores, disk='150G')
-        conversion = job.wrapJobFn(bam_conversion, job_vars, bwa.rv(), disk='150G')
-        header = job.wrapJobFn(fix_bam_header, job_vars, conversion.rv(), disk='100G')
-        rg = job.wrapJobFn(add_readgroups, job_vars, header.rv(), memory='15G', disk='100G')
+        bwa = job.wrapJobFn(run_bwa, job_vars, cores=cores, disk=input_args['file_size'])
+        conversion = job.wrapJobFn(bam_conversion, job_vars, bwa.rv(), disk=input_args['file_size'])
+        header = job.wrapJobFn(fix_bam_header, job_vars, conversion.rv(), disk=input_args['file_size'])
+        rg = job.wrapJobFn(add_readgroups, job_vars, header.rv(), memory='15G', disk=input_args['file_size'])
         
         # Link
         job.addChild(bwa)
@@ -348,16 +387,15 @@ def run_bwa(job, job_vars):
                       '/data/r1.fq.gz',
                       '/data/r2.fq.gz']
 
-        docker_call(tool='quay.io/ucsc_cgl/bwakit:0.7.12',
+        docker_call(tool='quay.io/ucsc_cgl/bwakit:0.7.12--528bb9bf73099a31e74a7f5e6e3f2e0a41da486e',
                     tool_parameters=parameters, work_dir=work_dir, sudo=sudo)
 
         # bwa insists on adding an `*.aln.sam` suffix, so rename the output file
         os.rename(os.path.join(work_dir, 'aligned.aln.bam'),
                   os.path.join(work_dir, 'aligned.bam'))
-
-        # write aligned sam file to global file store
+        
         return job.fileStore.writeGlobalFile(os.path.join(work_dir, 'aligned.bam'))
-
+        
     else:
         # Call: BWA
         parameters = ["mem",
@@ -408,7 +446,16 @@ def fix_bam_header(job, job_vars, bam_id):
     input_args, ids = job_vars
     sudo = input_args['sudo']
     # Retrieve input file
-    job.fileStore.readGlobalFile(bam_id, os.path.join(work_dir, 'aligned.bam'))
+    try:
+        job.fileStore.readGlobalFile(bam_id, os.path.join(work_dir, 'aligned.bam'))
+    except:
+        # remove and retry?
+        try:
+            os.remove(os.path.join(work_dir, 'aligned.bam'))
+        except:
+            pass
+        
+        job.fileStore.readGlobalFile(bam_id, os.path.join(work_dir, 'aligned.bam'))
     # Call: Samtools
     parameters = ['view',
                   '-H',
@@ -448,6 +495,8 @@ def add_readgroups(job, job_vars, bam_id):
     output_file = '{}.bam'.format(uuid)
     # Retrieve input file
     job.fileStore.readGlobalFile(bam_id, os.path.join(work_dir, 'aligned_fixpg.bam'))
+    log.warn("Read global file to %s, adding read groups and saving to %s." % (os.path.join(work_dir, 'aligned_fixpg.bam'), os.path.join(work_dir, output_file)))
+
     # Call: Samtools
     parameters = ['AddOrReplaceReadGroups',
                   'I=/data/aligned_fixpg.bam',
@@ -460,45 +509,69 @@ def add_readgroups(job, job_vars, bam_id):
                   'SM={}'.format(uuid)]
     docker_call(tool='quay.io/ucsc_cgl/picardtools:1.95--dd5ac549b95eb3e5d166a5e310417ef13651994e',
                 tool_parameters=parameters, work_dir=work_dir, java_opts='-Xmx15G', sudo=sudo)
-    ids['out_bam'] = job.fileStore.writeGlobalFile(os.path.join(work_dir, output_file))
+
     # Either write file to local output directory or upload to S3 cloud storage
     if input_args['output_dir']:
         copy_to_output_dir(work_dir=work_dir, output_dir=input_args['output_dir'], files=[output_file])
     if input_args['s3_dir']:
-        job.addChildJobFn(upload_to_s3, job_vars, disk='80G')
+        upload_to_s3(work_dir, input_args, output_file)
+        
 
-
-def upload_to_s3(job, job_vars):
+def upload_to_s3(work_dir, input_args, output_file):
     """
     Uploads a file to S3 via S3AM with encryption.  This pipeline assumes all
     BAMS contain patient data and must be encrypted upon upload.
 
     job_vars: tuple         Contains the dictionaries: input_args and ids
     """
-    # Unpack variables
-    input_args, ids = job_vars
-    uuid = input_args['uuid']
-    key_path = input_args['ssec']
-    work_dir = job.fileStore.getLocalTempDir()
+
     # Parse s3_dir to get bucket and s3 path
     s3_dir = input_args['s3_dir']
     bucket_name = s3_dir.lstrip('/').split('/')[0]
     bucket_dir = '/'.join(s3_dir.lstrip('/').split('/')[1:])
-    base_url = 'https://s3-us-west-2.amazonaws.com/'
-    url = os.path.join(base_url, bucket_name, bucket_dir, uuid + '.bam')
-    # Retrieve file to be uploaded
-    job.fileStore.readGlobalFile(ids['out_bam'], os.path.join(work_dir, uuid + '.bam'))
-    # Generate keyfile for upload
-    with open(os.path.join(work_dir, uuid + '.key'), 'wb') as f_out:
-        f_out.write(generate_unique_key(key_path, url))
-    # Upload to S3 via S3AM
-    s3am_command = ['s3am',
-                    'upload',
-                    '--sse-key-file', os.path.join(work_dir, uuid + '.key'),
-                    'file://{}'.format(os.path.join(work_dir, uuid + '.bam')),
-                    os.path.join('s3://', bucket_name, bucket_dir, uuid + '.bam')]
-    subprocess.check_call(s3am_command)
 
+    # what is the path we are uploading to?
+    s3_path = os.path.join('s3://', bucket_name, bucket_dir, output_file)
+
+    # does this need to be uploaded with encryption?
+    if input_args['ssec']:
+       key_path = input_args['ssec']
+
+       base_url = 'https://s3.amazonaws.com/'
+       url = os.path.join(base_url, bucket_name, bucket_dir, output_file)
+
+       # Generate keyfile for upload
+       with open(os.path.join(work_dir, uuid + '.key'), 'wb') as f_out:
+           f_out.write(generate_unique_key(key_path, url))
+
+       # Upload to S3 via S3AM
+       s3am_command = ['s3am',
+                       'upload',
+                       '--sse-key-file', os.path.join(work_dir, uuid + '.key'),
+                       'file://{}'.format(os.path.join(work_dir, output_file)),
+                       s3_path]
+
+    else:
+        # Upload to S3 via S3AM
+        s3am_command = ['s3am',
+                        'upload',
+                        'file://{}'.format(os.path.join(work_dir, output_file)),
+                        s3_path]
+
+    # run upload
+    log.info("Calling s3am with %s" % " ".join(s3am_command))
+    try:
+        subprocess.check_call(s3am_command)
+    except:
+        log.error("Upload to %s failed. Cancelling..." % s3_path)
+        s3am_cancel = ['s3am', 'cancel', s3_path]
+        
+        try:
+            subprocess.check_call(s3am_cancel)
+        except:
+            log.error("Cancelling upload with '%s' failed." % " ".join(s3am_cancel))
+
+        raise
 
 def main():
     """
@@ -515,6 +588,7 @@ def main():
     parser = build_parser()
     Job.Runner.addToilOptions(parser)
     args = parser.parse_args()
+
     # Store input parameters in a dictionary
     inputs = {'config': args.config,
               'ref.fa': args.ref,
@@ -532,7 +606,10 @@ def main():
               'lb': args.lb,
               'uuid': None,
               'cpu_count': None,
-              'use_bwakit': args.use_bwakit}
+              'file_size': args.file_size,
+              'use_bwakit': args.use_bwakit,
+              'aws_access_key': None,
+              'aws_secret_key': None}
 
     # Launch Pipeline
     Job.Runner.startToil(Job.wrapJobFn(download_shared_files, inputs), args)
