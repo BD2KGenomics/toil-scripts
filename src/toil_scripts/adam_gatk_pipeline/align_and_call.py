@@ -142,6 +142,9 @@ def build_parser():
                         help = "Skip preprocessing and start running from variant calling. Implies --skip_alignment.",
                         action = 'store_true')
 
+    #
+    parser.add_argument('--autoscale_cluster', action='store_true', help = "Scales cluster during pipeline run")
+
     # add bucket args
     parser.add_argument('-3', '--s3_bucket', required = True,
                         help = 'S3 Bucket URI')
@@ -390,7 +393,8 @@ if __name__ == '__main__':
                   's3_dir': "%s/alignment" % args.s3_bucket,
                   'cpu_count': None,
                   'file_size': args.file_size,
-                  'use_bwakit': args.use_bwakit}
+                  'use_bwakit': args.use_bwakit,
+                  'autoscale_cluster': args.autoscale_cluster}
 
     if args.num_nodes <= 1:
         raise ValueError("--num_nodes allocates one Spark/HDFS master and n-1 workers, and thus must be greater than 1. %d was passed." % args.num_nodes)
@@ -400,6 +404,7 @@ if __name__ == '__main__':
                    'driverMemory': args.driver_memory,
                    'executorMemory': args.executor_memory,
                    'sudo': args.sudo,
+                   'autoscale_cluster': args.autoscale_cluster,
                    'suffix': '.adam'}
 
     gatk_preprocess_inputs = {'ref.fa': args.ref,
@@ -424,6 +429,7 @@ if __name__ == '__main__':
                              'ssec': None,
                              'file_size': args.file_size,
                              'suffix': '.adam',
+                             'autoscale_cluster': args.autoscale_cluster,
                              'sudo': args.sudo}
 
     gatk_gatk_call_inputs = {'ref.fa': args.ref,
@@ -438,6 +444,7 @@ if __name__ == '__main__':
                              'ssec': None,
                              'file_size': args.file_size,
                              'suffix': '.gatk',
+                             'autoscale_cluster': args.autoscale_cluster,
                              'sudo': args.sudo}
 
     if (args.pipeline_to_run != "adam" and
