@@ -82,7 +82,6 @@ def call_conductor(masterIP, inputs, src, dst):
 
 def call_adam(masterIP, inputs, arguments):
 
-    params = []
     default_params = ["--master", ("spark://%s:%s" % (masterIP, SPARK_MASTER_PORT)), 
                       "--conf", ("spark.driver.memory=%sg" % inputs["driverMemory"]),
                       "--conf", ("spark.executor.memory=%sg" % inputs["executorMemory"]),
@@ -93,7 +92,7 @@ def call_adam(masterIP, inputs, arguments):
                 work_dir = os.getcwd(),
                 tool = "quay.io/ucsc_cgl/adam:cd6ef41", 
                 docker_parameters = ["--net=host"],
-                tool_parameters = params,
+                tool_parameters = default_params + arguments,
                 sudo = inputs['sudo'])
 
 

@@ -113,6 +113,7 @@ S3AM            - pip install --s3am (requires ~/.boto config file)
 
 # import from python system libraries
 import argparse
+import copy
 import multiprocessing
 import os
 
@@ -202,16 +203,22 @@ def sample_loop(job, bucket_region, s3_bucket, uuid_list, bwa_inputs, adam_input
 
   for uuid in uuid_list:
 
-    ## set uuid inputs
-    bwa_inputs['lb'] = uuid
-    bwa_inputs['uuid'] = uuid
-    adam_inputs['outDir'] = "s3://%s/analysis/%s" % (s3_bucket, uuid)
-    adam_inputs['bamName'] = "s3://%s/alignment/%s.bam" % (s3_bucket, uuid)
-    gatk_preprocess_inputs['s3_dir'] =  "%s/analysis/%s" % (s3_bucket, uuid)
-    gatk_adam_call_inputs['s3_dir'] = "%s/analysis/%s" % (s3_bucket, uuid)
-    gatk_gatk_call_inputs['s3_dir'] = "%s/analysis/%s" % (s3_bucket, uuid)
+    uuid_bwa_inputs = copy.deepcopy(bwa_inputs)
+    uuid_adam_inputs = copy.deepcopy(adam_inputs)
+    uuid_gatk_preprocess_inputs = copy.deepcopy(gatk_preprocess_inputs)
+    uuid_gatk_adam_call_inputs = copy.deepcopy(gatk_adam_call_inputs)
+    uuid_gatk_gatk_call_inputs = copy.deepcopy(gatk_gatk_call_inputs)
 
-    job.addChildJobFn(static_dag, bucket_region, s3_bucket, uuid, bwa_inputs, adam_inputs, gatk_preprocess_inputs, gatk_adam_call_inputs, gatk_gatk_call_inputs, pipeline_to_run )
+    ## set uuid inputs
+    uuid_bwa_inputs['lb'] = uuid
+    uuid_bwa_inputs['uuid'] = uuid
+    uuid_adam_inputs['outDir'] = "s3://%s/analysis/%s" % (s3_bucket, uuid)
+    uuid_adam_inputs['bamName'] = "s3://%s/alignment/%s.bam" % (s3_bucket, uuid)
+    uuid_gatk_preprocess_inputs['s3_dir'] =  "%s/analysis/%s" % (s3_bucket, uuid)
+    uuid_gatk_adam_call_inputs['s3_dir'] = "%s/analysis/%s" % (s3_bucket, uuid)
+    uuid_gatk_gatk_call_inputs['s3_dir'] = "%s/analysis/%s" % (s3_bucket, uuid)
+
+    job.addChildJobFn(static_dag, bucket_region, s3_bucket, uuid, uuid_bwa_inputs, uuid_adam_inputs, uuid_gatk_preprocess_inputs, uuid_gatk_adam_call_inputs, uuid_gatk_gatk_call_inputs, pipeline_to_run )
     
   
 

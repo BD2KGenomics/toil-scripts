@@ -91,7 +91,7 @@ def download_url(job, url, filename):
             subprocess.check_call(['curl', '-fs', '--retry', '5', '--create-dir', url, '-o', file_path])
         except subprocess.CalledProcessError as cpe:
             raise RuntimeError(
-                '\nNecessary file could not be acquired: %s. Got error "%s". Check input URL' % (url, e))
+                '\nNecessary file could not be acquired: %s. Got error "%s". Check input URL' % (url, cpe))
         except OSError:
             raise RuntimeError('Failed to find "curl". Install via "apt-get install curl"')
     assert os.path.exists(file_path)
