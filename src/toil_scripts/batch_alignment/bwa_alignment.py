@@ -607,9 +607,7 @@ def main():
               'uuid': None,
               'cpu_count': None,
               'file_size': args.file_size,
-              'use_bwakit': args.use_bwakit,
-              'aws_access_key': None,
-              'aws_secret_key': None}
+              'use_bwakit': args.use_bwakit}
 
     # Launch Pipeline
     Job.Runner.startToil(Job.wrapJobFn(download_shared_files, inputs), args)
