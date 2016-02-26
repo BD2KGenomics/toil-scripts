@@ -138,6 +138,12 @@ def build_parser():
     parser.add_argument('-PR', '--pipeline_to_run',
                         help = "Whether we should run 'adam', 'gatk', or 'both'. Default is 'both'.",
                         default = 'both')
+    parser.add_argument('-SA', '--skip_alignment',
+                        help = "Skip alignment and start running from preprocessing.",
+                        action = 'store_true')
+    parser.add_argument('-SP', '--skip_preprocessing',
+                        help = "Skip preprocessing and start running from variant calling. Implies --skip_alignment.",
+                        action = 'store_true')
 
     # add bucket args
     parser.add_argument('-3', '--s3_bucket', required = True,
@@ -196,7 +202,18 @@ def build_parser():
     return parser
 
 
-def sample_loop(job, bucket_region, s3_bucket, uuid_list, bwa_inputs, adam_inputs, gatk_preprocess_inputs, gatk_adam_call_inputs, gatk_gatk_call_inputs, pipeline_to_run):
+def sample_loop(job,
+                bucket_region,
+                s3_bucket,
+                uuid_list,
+                bwa_inputs,
+                adam_inputs,
+                gatk_preprocess_inputs,
+                gatk_adam_call_inputs,
+                gatk_gatk_call_inputs,
+                pipeline_to_run,
+                skip_alignment,
+                skip_preprocessing):
   """
   Loops over the sample_ids (uuids) in the manifest, creating child jobs to process each
   """
@@ -218,11 +235,32 @@ def sample_loop(job, bucket_region, s3_bucket, uuid_list, bwa_inputs, adam_input
     uuid_gatk_adam_call_inputs['s3_dir'] = "%s/analysis/%s" % (s3_bucket, uuid)
     uuid_gatk_gatk_call_inputs['s3_dir'] = "%s/analysis/%s" % (s3_bucket, uuid)
 
-    job.addChildJobFn(static_dag, bucket_region, s3_bucket, uuid, uuid_bwa_inputs, uuid_adam_inputs, uuid_gatk_preprocess_inputs, uuid_gatk_adam_call_inputs, uuid_gatk_gatk_call_inputs, pipeline_to_run )
+    job.addChildJobFn(static_dag,
+                      bucket_region,
+                      s3_bucket,
+                      uuid,
+                      uuid_bwa_inputs,
+                      uuid_adam_inputs,
+                      uuid_gatk_preprocess_inputs,
+                      uuid_gatk_adam_call_inputs,
+                      uuid_gatk_gatk_call_inputs,
+                      pipeline_to_run,
+                      skip_alignment,
+                      skip_preprocessing)
     
   
-
-def static_dag(job, bucket_region, s3_bucket, uuid, bwa_inputs, adam_inputs, gatk_preprocess_inputs, gatk_adam_call_inputs, gatk_gatk_call_inputs, pipeline_to_run):
+def static_dag(job,
+               bucket_region,
+               s3_bucket,
+               uuid,
+               bwa_inputs,
+               adam_inputs,
+               gatk_preprocess_inputs,
+               gatk_adam_call_inputs,
+               gatk_gatk_call_inputs,
+               pipeline_to_run,
+               skip_alignment,
+               skip_preprocessing):
     """
     Prefer this here as it allows us to pull the job functions from other jobs
     without rewrapping the job functions back together.
@@ -299,20 +337,35 @@ def static_dag(job, bucket_region, s3_bucket, uuid, bwa_inputs, adam_inputs, gat
     gatk_gatk_call = job.wrapJobFn(batch_start,
                                    gatk_gatk_call_inputs).encapsulate()
 
-    
-
     # wire up dag
-    job.addChild(bwa)
+    if not skip_alignment:
+        job.addChild(bwa)
    
     if (pipeline_to_run == "adam" or
         pipeline_to_run == "both"):
-        bwa.addChild(adam_preprocess)
-        adam_preprocess.addChild(gatk_adam_call)
+        
+        if skip_preprocessing:
+            job.addChild(gatk_adam_call)
+        else:
+            if skip_alignment:
+                job.addChild(adam_preprocess)
+            else:
+                bwa.addChild(adam_preprocess)
+
+            adam_preprocess.addChild(gatk_adam_call)
 
     if (pipeline_to_run == "gatk" or
         pipeline_to_run == "both"):
-        bwa.addChild(gatk_preprocess)
-        gatk_preprocess.addChild(gatk_gatk_call)
+
+        if skip_preprocessing:
+            job.addChild(gatk_gatk_call)
+        else:
+            if skip_alignment:
+                job.addChild(gatk_preprocess)
+            else:
+                bwa.addChild(gatk_preprocess)
+
+            gatk_preprocess.addChild(gatk_gatk_call)
    
 
 if __name__ == '__main__':
@@ -406,4 +459,6 @@ if __name__ == '__main__':
                                        gatk_preprocess_inputs,
                                        gatk_adam_call_inputs,
                                        gatk_gatk_call_inputs,
-                                       args.pipeline_to_run), args)
+                                       args.pipeline_to_run,
+                                       args.skip_alignment,
+                                       args.skip_preprocessing), args)
