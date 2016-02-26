@@ -169,6 +169,7 @@ def upload_or_move(job, work_dir, input_args, output):
     if input_args['output_dir']:
         # get output path and
         output_dir = input_args['output_dir']
+        # FIXME: undefined function
         make_directory(output_dir)
         move_to_output_dir(work_dir, output_dir, output)
 
