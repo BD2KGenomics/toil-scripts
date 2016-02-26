@@ -196,6 +196,7 @@ def create_reference_index_hc(job, shared_ids, input_args):
     # Unpack convenience variables for job
     work_dir = job.fileStore.getLocalTempDir()
     # Retrieve file path
+    # FIXME: unused variable
     ref_path = return_input_paths(job, work_dir, shared_ids, 'ref.fa')
     faidx_output = os.path.join(work_dir, 'ref.fa.fai')
     # Call: Samtools
@@ -221,6 +222,7 @@ def create_reference_dict_hc(job, shared_ids, input_args):
     # Unpack convenience variables for job
     work_dir = job.fileStore.getLocalTempDir()
     # Retrieve file path
+    # FIXME: unused variable
     ref_path = return_input_paths(job, work_dir, shared_ids, 'ref.fa')
     # Call: picardtools
     picard_output = os.path.join(work_dir, 'ref.dict')
@@ -299,6 +301,7 @@ def index(job, shared_ids, input_args):
     """
     work_dir = job.fileStore.getLocalTempDir()
     # Retrieve file path
+    # FIXME: unused variable
     bam_path = return_input_paths(job, work_dir, shared_ids, 'toil.bam')
     output_path = os.path.join(work_dir, 'toil.bam.bai')
     # Call: index the normal.bam

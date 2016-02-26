@@ -32,7 +32,6 @@ from collections import OrderedDict
 import hashlib
 import multiprocessing
 import os
-import sys
 import errno
 import subprocess
 import shutil
@@ -541,6 +540,7 @@ def upload_to_s3(work_dir, input_args, output_file):
        url = os.path.join(base_url, bucket_name, bucket_dir, output_file)
 
        # Generate keyfile for upload
+       # FIXME: undefined variable uuid
        with open(os.path.join(work_dir, uuid + '.key'), 'wb') as f_out:
            f_out.write(generate_unique_key(key_path, url))
 
