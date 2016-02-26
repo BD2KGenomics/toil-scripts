@@ -31,6 +31,8 @@ import subprocess
 import shutil
 import sys
 from toil.job import Job
+
+from toil_scripts import download_from_s3_url
 from toil_scripts.batch_alignment.bwa_alignment import upload_to_s3
 
 debug = False 
@@ -189,21 +191,24 @@ def download_from_url_gatk(job, url, name):
     work_dir = job.fileStore.getLocalTempDir()
     file_path = os.path.join(work_dir, name)
     if not os.path.exists(file_path):
-        try:
-            if debug:
-                debug_log = open('download_from_url', 'a')
-                debug_log.write(file_path + '\n')
-                debug_log.close()
-                f = open(file_path, 'w')
-                f.write('debug')
-                f.close()
-            else:
-                subprocess.check_call(['curl', '-fs', '--retry', '5', '--create-dir', url, '-o', file_path])
-        except subprocess.CalledProcessError:
-            raise RuntimeError(
-                '\nNecessary file could not be acquired: {}. Check input URL'.format(url))
-        except OSError:
-            raise RuntimeError('Failed to find "curl". Install via "apt-get install curl"')
+        if url.startswith('s3:'):
+            download_from_s3_url(file_path, url)
+        else:
+            try:
+                if debug:
+                    debug_log = open('download_from_url', 'a')
+                    debug_log.write(file_path + '\n')
+                    debug_log.close()
+                    f = open(file_path, 'w')
+                    f.write('debug')
+                    f.close()
+                else:
+                    subprocess.check_call(['curl', '-fs', '--retry', '5', '--create-dir', url, '-o', file_path])
+            except subprocess.CalledProcessError:
+                raise RuntimeError(
+                    '\nNecessary file could not be acquired: {}. Check input URL'.format(url))
+            except OSError:
+                raise RuntimeError('Failed to find "curl". Install via "apt-get install curl"')
     assert os.path.exists(file_path)
     return job.fileStore.writeGlobalFile(file_path)
 
