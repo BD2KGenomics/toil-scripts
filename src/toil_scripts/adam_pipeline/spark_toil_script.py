@@ -90,7 +90,7 @@ def call_adam(masterIP, inputs, arguments):
 
     docker_call(no_rm = True,
                 work_dir = os.getcwd(),
-                tool = "quay.io/ucsc_cgl/adam:cd6ef41", 
+                tool = "quay.io/ucsc_cgl/adam:962-ehf--381b783ca398042b9a2739e630ec0de3d5416684",
                 docker_parameters = ["--net=host"],
                 tool_parameters = default_params + arguments,
                 sudo = inputs['sudo'])
