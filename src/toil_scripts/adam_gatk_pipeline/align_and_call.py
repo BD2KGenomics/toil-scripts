@@ -278,10 +278,6 @@ def static_dag(job,
     else:
         bucket_region = "-%s" % bucket_region
 
-    # does the work directory exist?
-    if not os.path.exists(work_dir):
-        os.mkdirs(work_dir)
-
     # write config for bwa
     bwa_config_path = os.path.join(work_dir, '{uuid}_bwa_config.csv'.format(**locals()))
     bwafp = open(bwa_config_path, "w")
