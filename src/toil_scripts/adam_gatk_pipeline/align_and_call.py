@@ -209,11 +209,11 @@ def sample_loop(job, bucket_region, s3_bucket, uuid_list, bwa_inputs, adam_input
     ## set uuid inputs
     uuid_bwa_inputs['lb'] = uuid
     uuid_bwa_inputs['uuid'] = uuid
-    uuid_adam_inputs['outDir'] = "s3://%s/analysis/%s" % (s3_bucket, uuid)
-    uuid_adam_inputs['bamName'] = "s3://%s/alignment/%s.bam" % (s3_bucket, uuid)
-    uuid_gatk_preprocess_inputs['s3_dir'] =  "%s/analysis/%s" % (s3_bucket, uuid)
-    uuid_gatk_adam_call_inputs['s3_dir'] = "%s/analysis/%s" % (s3_bucket, uuid)
-    uuid_gatk_gatk_call_inputs['s3_dir'] = "%s/analysis/%s" % (s3_bucket, uuid)
+    uuid_adam_inputs['outDir'] = 's3://{s3_bucket}/analysis/{uuid}'.format(**locals())
+    uuid_adam_inputs['bamName'] = 's3://{s3_bucket}/alignment/{uuid}.bam'.format(**locals())
+    uuid_gatk_preprocess_inputs['s3_dir'] = '{s3_bucket}/analysis/{uuid}'.format(**locals())
+    uuid_gatk_adam_call_inputs['s3_dir'] = '{s3_bucket}/analysis/{uuid}'.format(**locals())
+    uuid_gatk_gatk_call_inputs['s3_dir'] = '{s3_bucket}/analysis/{uuid}'.format(**locals())
 
     job.addChildJobFn(static_dag, bucket_region, s3_bucket, uuid, uuid_bwa_inputs, uuid_adam_inputs, uuid_gatk_preprocess_inputs, uuid_gatk_adam_call_inputs, uuid_gatk_gatk_call_inputs, pipeline_to_run )
 
@@ -245,33 +245,35 @@ def static_dag(job, bucket_region, s3_bucket, uuid, bwa_inputs, adam_inputs, gat
         os.mkdirs(work_dir)
 
     # write config for bwa
-    bwa_config_path = os.path.join(work_dir, "%s_bwa_config.csv" % uuid)
+    bwa_config_path = os.path.join(work_dir, '{uuid}_bwa_config.csv'.format(**locals()))
     bwafp = open(bwa_config_path, "w")
-    print >> bwafp, "%s,https://s3%s.amazonaws.com/%s/sequence/%s_1.fastq.gz,https://s3%s.amazonaws.com/%s/sequence/%s_2.fastq.gz" % (uuid, bucket_region, s3_bucket, uuid, bucket_region, s3_bucket, uuid)
+    print >> bwafp, ('{uuid}'
+                     ',s3://{s3_bucket}/sequence/{uuid}_1.fastq.gz'
+                     ',s3://{s3_bucket}/sequence/{uuid}_2.fastq.gz'.format(**locals()))
     bwafp.flush()
     bwafp.close()
     bwa_inputs['config'] = job.fileStore.writeGlobalFile(bwa_config_path)
 
     # write config for GATK preprocessing
-    gatk_preprocess_config_path = os.path.join(work_dir, "%s_gatk_preprocess_config.csv" % uuid)
+    gatk_preprocess_config_path = os.path.join(work_dir, '{uuid}_gatk_preprocess_config.csv'.format(**locals()))
     gatk_preprocess_fp = open(gatk_preprocess_config_path, "w")
-    print >> gatk_preprocess_fp, "%s,https://s3%s.amazonaws.com/%s/alignment/%s.bam" % (uuid, bucket_region, s3_bucket, uuid)
+    print >> gatk_preprocess_fp, '{uuid},s3://{s3_bucket}/alignment/{uuid}.bam'.format(**locals())
     gatk_preprocess_fp.flush()
     gatk_preprocess_fp.close()
     gatk_preprocess_inputs['config'] = job.fileStore.writeGlobalFile(gatk_preprocess_config_path)
 
     # write config for GATK haplotype caller for the result of ADAM preprocessing
-    gatk_adam_call_config_path = os.path.join(work_dir, "%s_gatk_adam_call_config.csv" % uuid)
+    gatk_adam_call_config_path = os.path.join(work_dir, '{uuid}_gatk_adam_call_config.csv'.format(**locals()))
     gatk_adam_call_fp = open(gatk_adam_call_config_path, "w")
-    print >> gatk_adam_call_fp, "%s,https://s3%s.amazonaws.com/%s/analysis/%s/%s.adam.bam" % (uuid, bucket_region, s3_bucket, uuid, uuid)
+    print >> gatk_adam_call_fp, '{uuid},s3://{s3_bucket}/analysis/{uuid}/{uuid}.adam.bam'.format(**locals())
     gatk_adam_call_fp.flush()
     gatk_adam_call_fp.close()
     gatk_adam_call_inputs['config'] = job.fileStore.writeGlobalFile(gatk_adam_call_config_path)
 
     # write config for GATK haplotype caller for the result of GATK preprocessing
-    gatk_gatk_call_config_path = os.path.join(work_dir, "%s_gatk_gatk_call_config.csv" % uuid)
+    gatk_gatk_call_config_path = os.path.join(work_dir, '{uuid}_gatk_gatk_call_config.csv'.format(**locals()))
     gatk_gatk_call_fp = open(gatk_gatk_call_config_path, "w")
-    print >> gatk_gatk_call_fp, "%s,https://s3%s.amazonaws.com/%s/analysis/%s/%s.gatk.bam" % (uuid, bucket_region, s3_bucket, uuid, uuid)
+    print >> gatk_gatk_call_fp, '{uuid},s3://{s3_bucket}/analysis/{uuid}/{uuid}.gatk.bam'.format(**locals())
     gatk_gatk_call_fp.flush()
     gatk_gatk_call_fp.close()
     gatk_gatk_call_inputs['config'] = job.fileStore.writeGlobalFile(gatk_gatk_call_config_path)

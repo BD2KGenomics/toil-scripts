@@ -39,6 +39,7 @@ import tarfile
 import logging
 from toil.job import Job
 
+from toil_scripts import download_from_s3_url
 
 log = logging.getLogger(__name__)
 
@@ -138,12 +139,15 @@ def download_from_url(job, url):
     work_dir = job.fileStore.getLocalTempDir()
     file_path = os.path.join(work_dir, os.path.basename(url))
     if not os.path.exists(file_path):
-        try:
-            download_cmd = ['curl', '-fs', '--retry', '5', '--create-dir', url, '-o', file_path]
-            log.info("Downloading file using command %s." % " ".join(download_cmd))
-            subprocess.check_call(download_cmd)
-        except OSError:
-            raise RuntimeError('Failed to find "curl". Install via "apt-get install curl"')
+        if url.startswith('s3:'):
+            download_from_s3_url(file_path, url)
+        else:
+            try:
+                download_cmd = ['curl', '-fs', '--retry', '5', '--create-dir', url, '-o', file_path]
+                log.info("Downloading file using command %s." % " ".join(download_cmd))
+                subprocess.check_call(download_cmd)
+            except OSError:
+                raise RuntimeError('Failed to find "curl". Install via "apt-get install curl"')
     assert os.path.exists(file_path)
     return job.fileStore.writeGlobalFile(file_path)
 
