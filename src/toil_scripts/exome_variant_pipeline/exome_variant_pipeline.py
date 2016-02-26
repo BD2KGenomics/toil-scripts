@@ -56,6 +56,8 @@ import errno
 import tarfile
 from toil.job import Job
 
+from toil_scripts import download_from_s3_url
+
 
 def build_parser():
     """
@@ -178,13 +180,16 @@ def download_from_url(job, url, name):
     work_dir = job.fileStore.getLocalTempDir()
     file_path = os.path.join(work_dir, name)
     if not os.path.exists(file_path):
-        try:
-            subprocess.check_call(['curl', '-fs', '--retry', '5', '--create-dir', url, '-o', file_path])
-        except subprocess.CalledProcessError:
-            raise RuntimeError(
-                '\nNecessary file could not be acquired: {}. Check input URL'.format(url))
-        except OSError:
-            raise RuntimeError('Failed to find "curl". Install via "apt-get install curl"')
+        if url.startswith('s3:'):
+            download_from_s3_url(file_path, url)
+        else:
+            try:
+                subprocess.check_call(['curl', '-fs', '--retry', '5', '--create-dir', url, '-o', file_path])
+            except subprocess.CalledProcessError:
+                raise RuntimeError(
+                    '\nNecessary file could not be acquired: {}. Check input URL'.format(url))
+            except OSError:
+                raise RuntimeError('Failed to find "curl". Install via "apt-get install curl"')
     assert os.path.exists(file_path)
     return job.fileStore.writeGlobalFile(file_path)
 
