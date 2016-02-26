@@ -112,10 +112,7 @@ S3AM            - pip install --s3am (requires ~/.boto config file)
 """
 
 # import from python system libraries
-import argparse
 import copy
-import multiprocessing
-import os
 
 # import toil features
 from toil.job import Job
@@ -197,7 +194,7 @@ def build_parser():
                         help = '1000G_omni.5.b37.vcf URL')
     parser.add_argument('-H', '--hapmap', required = True,
                         help = 'hapmap_3.3.b37.vcf URL')
-    
+
     # return built parser
     return parser
 
@@ -247,8 +244,8 @@ def sample_loop(job,
                       pipeline_to_run,
                       skip_alignment,
                       skip_preprocessing)
-    
-  
+
+
 def static_dag(job,
                bucket_region,
                s3_bucket,
@@ -343,7 +340,7 @@ def static_dag(job,
    
     if (pipeline_to_run == "adam" or
         pipeline_to_run == "both"):
-        
+
         if skip_preprocessing:
             job.addChild(gatk_adam_call)
         else:
@@ -369,7 +366,7 @@ def static_dag(job,
    
 
 if __name__ == '__main__':
-    
+
     args_parser = build_parser()
     Job.Runner.addToilOptions(args_parser)
     args = args_parser.parse_args()
@@ -380,7 +377,7 @@ if __name__ == '__main__':
       for uuid in f_manifest:
         uuid_list.append(uuid.strip())
 
-    
+
     bwa_inputs = {'ref.fa': args.ref,
                   'ref.fa.amb': args.amb,
                   'ref.fa.ann': args.ann,
@@ -396,7 +393,7 @@ if __name__ == '__main__':
                   'cpu_count': None,
                   'file_size': args.file_size,
                   'use_bwakit': args.use_bwakit}
-    
+
     if args.num_nodes <= 1:
         raise ValueError("--num_nodes allocates one Spark/HDFS master and n-1 workers, and thus must be greater than 1. %d was passed." % args.num_nodes)
 
@@ -416,7 +413,7 @@ if __name__ == '__main__':
                               'ssec': None,
                               'cpu_count': str(multiprocessing.cpu_count()),
                               'suffix': '.gatk' }
-    
+
     gatk_adam_call_inputs = {'ref.fa': args.ref,
                              'phase.vcf': args.phase,
                              'mills.vcf': args.mills,
