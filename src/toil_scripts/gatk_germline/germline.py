@@ -410,7 +410,7 @@ def genotype_gvcf(job, shared_ids, input_args):
     # run vqsr
     job.addChildJobFn(vqsr_snp, shared_ids, input_args)
     job.addChildJobFn(vqsr_indel, shared_ids, input_args)
-    job.addFollowOnJobFn(cleanup, input_args)
+
 
 def vqsr_snp(job, shared_ids, input_args):
     """
@@ -564,15 +564,6 @@ def apply_vqsr_indel(job, shared_ids, input_args):
                 sudo = input_args['sudo'])
 
     upload_or_move_hc(work_dir, input_args, output)
-
-def cleanup(input_args):
-    """
-    Does nothing unless run from the ADAM/GATK pipeline
-    If run from the ADAM/GATK pipeline, reduces node requirements by 1
-    """
-    if "autoscale_cluster" in input_args and input_args["autoscale_cluster"]:
-        Samples.decrease_nodes(inputs['uuid'], 1)
-
 
 
 if __name__ == '__main__':

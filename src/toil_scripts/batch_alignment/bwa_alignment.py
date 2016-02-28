@@ -38,9 +38,8 @@ import shutil
 import tarfile
 import logging
 from toil.job import Job
-from toil_scripts import download_from_s3_url
 
-from toil_scripts.adam_uberscript.automated_scaling import Samples
+from toil_scripts import download_from_s3_url
 
 log = logging.getLogger(__name__)
 
@@ -265,9 +264,6 @@ def download_shared_files(job, input_args):
     input_args: dict        Input arguments (passed from main())
     """
     shared_files = ['ref.fa', 'ref.fa.amb', 'ref.fa.ann', 'ref.fa.bwt', 'ref.fa.pac', 'ref.fa.sa', 'ref.fa.fai']
-
-    if "autoscale_cluster" in input_args and input_args["autoscale_cluster"]:
-        Samples.increase_nodes(nodes_per_sample, inputs['uuid'], 1)
 
     if input_args['ref.fa.alt']:
         shared_files.append('ref.fa.alt')
@@ -580,7 +576,6 @@ def upload_to_s3(work_dir, input_args, output_file):
             log.error("Cancelling upload with '%s' failed." % " ".join(s3am_cancel))
 
         raise
-
 
 def main():
     """

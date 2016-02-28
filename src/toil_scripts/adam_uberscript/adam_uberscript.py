@@ -72,7 +72,7 @@ def launch_cluster(params):
                            '--ssh-opts="-o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no"',
                            'toil-leader',
                            '-a',
-                           inputs['manifest'], ":~/manifest"])
+                           params.manifest_path, ":~/manifest"])
     subprocess.check_call(['cgcloud',
                            'rsync',
                            '--zone', "{0}a".format(aws_region),
@@ -234,6 +234,7 @@ def grow_cluster(n, instance_type, cluster_name, spot_bid):
                                '--cluster-name', str(cluster_name),
                                '--spot-bid', str(spot_bid),
                                '--zone', ("%sa" % aws_region),
+                               '--spot-tentative',
                                'toil'])
 
         # how much did we grow by?
@@ -417,6 +418,7 @@ def main():
     parser_cluster.add_argument('-T', '--leader-type', default='m3.medium', help='Sets leader instance type.')
     parser_cluster.add_argument('-b', '--boto-path', default='/home/mesosbox/.boto', type=str,
                                 help='Path to local .boto file to be placed on leader.')
+    parser_cluster.add_argument('-M', '--manifest-path', required=True, help='Path to manifest file.')
 
     # Launch Pipeline
     parser_pipeline = subparsers.add_parser('launch-pipeline', help='Launches pipeline')
