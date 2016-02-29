@@ -112,10 +112,7 @@ S3AM            - pip install --s3am (requires ~/.boto config file)
 """
 
 # import from python system libraries
-import argparse
 import copy
-import multiprocessing
-import os
 
 # import toil features
 from toil.job import Job
@@ -138,6 +135,12 @@ def build_parser():
     parser.add_argument('-PR', '--pipeline_to_run',
                         help = "Whether we should run 'adam', 'gatk', or 'both'. Default is 'both'.",
                         default = 'both')
+    parser.add_argument('-SA', '--skip_alignment',
+                        help = "Skip alignment and start running from preprocessing.",
+                        action = 'store_true')
+    parser.add_argument('-SP', '--skip_preprocessing',
+                        help = "Skip preprocessing and start running from variant calling. Implies --skip_alignment.",
+                        action = 'store_true')
 
     # add bucket args
     parser.add_argument('-3', '--s3_bucket', required = True,
@@ -191,12 +194,23 @@ def build_parser():
                         help = '1000G_omni.5.b37.vcf URL')
     parser.add_argument('-H', '--hapmap', required = True,
                         help = 'hapmap_3.3.b37.vcf URL')
-    
+
     # return built parser
     return parser
 
 
-def sample_loop(job, bucket_region, s3_bucket, uuid_list, bwa_inputs, adam_inputs, gatk_preprocess_inputs, gatk_adam_call_inputs, gatk_gatk_call_inputs, pipeline_to_run):
+def sample_loop(job,
+                bucket_region,
+                s3_bucket,
+                uuid_list,
+                bwa_inputs,
+                adam_inputs,
+                gatk_preprocess_inputs,
+                gatk_adam_call_inputs,
+                gatk_gatk_call_inputs,
+                pipeline_to_run,
+                skip_alignment,
+                skip_preprocessing):
   """
   Loops over the sample_ids (uuids) in the manifest, creating child jobs to process each
   """
@@ -212,17 +226,38 @@ def sample_loop(job, bucket_region, s3_bucket, uuid_list, bwa_inputs, adam_input
     ## set uuid inputs
     uuid_bwa_inputs['lb'] = uuid
     uuid_bwa_inputs['uuid'] = uuid
-    uuid_adam_inputs['outDir'] = "s3://%s/analysis/%s" % (s3_bucket, uuid)
-    uuid_adam_inputs['bamName'] = "s3://%s/alignment/%s.bam" % (s3_bucket, uuid)
-    uuid_gatk_preprocess_inputs['s3_dir'] =  "%s/analysis/%s" % (s3_bucket, uuid)
-    uuid_gatk_adam_call_inputs['s3_dir'] = "%s/analysis/%s" % (s3_bucket, uuid)
-    uuid_gatk_gatk_call_inputs['s3_dir'] = "%s/analysis/%s" % (s3_bucket, uuid)
+    uuid_adam_inputs['outDir'] = 's3://{s3_bucket}/analysis/{uuid}'.format(**locals())
+    uuid_adam_inputs['bamName'] = 's3://{s3_bucket}/alignment/{uuid}.bam'.format(**locals())
+    uuid_gatk_preprocess_inputs['s3_dir'] = '{s3_bucket}/analysis/{uuid}'.format(**locals())
+    uuid_gatk_adam_call_inputs['s3_dir'] = '{s3_bucket}/analysis/{uuid}'.format(**locals())
+    uuid_gatk_gatk_call_inputs['s3_dir'] = '{s3_bucket}/analysis/{uuid}'.format(**locals())
 
-    job.addChildJobFn(static_dag, bucket_region, s3_bucket, uuid, uuid_bwa_inputs, uuid_adam_inputs, uuid_gatk_preprocess_inputs, uuid_gatk_adam_call_inputs, uuid_gatk_gatk_call_inputs, pipeline_to_run )
-    
-  
+    job.addChildJobFn(static_dag,
+                      bucket_region,
+                      s3_bucket,
+                      uuid,
+                      uuid_bwa_inputs,
+                      uuid_adam_inputs,
+                      uuid_gatk_preprocess_inputs,
+                      uuid_gatk_adam_call_inputs,
+                      uuid_gatk_gatk_call_inputs,
+                      pipeline_to_run,
+                      skip_alignment,
+                      skip_preprocessing)
 
-def static_dag(job, bucket_region, s3_bucket, uuid, bwa_inputs, adam_inputs, gatk_preprocess_inputs, gatk_adam_call_inputs, gatk_gatk_call_inputs, pipeline_to_run):
+
+def static_dag(job,
+               bucket_region,
+               s3_bucket,
+               uuid,
+               bwa_inputs,
+               adam_inputs,
+               gatk_preprocess_inputs,
+               gatk_adam_call_inputs,
+               gatk_gatk_call_inputs,
+               pipeline_to_run,
+               skip_alignment,
+               skip_preprocessing):
     """
     Prefer this here as it allows us to pull the job functions from other jobs
     without rewrapping the job functions back together.
@@ -243,38 +278,36 @@ def static_dag(job, bucket_region, s3_bucket, uuid, bwa_inputs, adam_inputs, gat
     else:
         bucket_region = "-%s" % bucket_region
 
-    # does the work directory exist?
-    if not os.path.exists(work_dir):
-        os.mkdirs(work_dir)
-
     # write config for bwa
-    bwa_config_path = os.path.join(work_dir, "%s_bwa_config.csv" % uuid)
+    bwa_config_path = os.path.join(work_dir, '{uuid}_bwa_config.csv'.format(**locals()))
     bwafp = open(bwa_config_path, "w")
-    print >> bwafp, "%s,https://s3%s.amazonaws.com/%s/sequence/%s_1.fastq.gz,https://s3%s.amazonaws.com/%s/sequence/%s_2.fastq.gz" % (uuid, bucket_region, s3_bucket, uuid, bucket_region, s3_bucket, uuid)
+    print >> bwafp, ('{uuid}'
+                     ',s3://{s3_bucket}/sequence/{uuid}_1.fastq.gz'
+                     ',s3://{s3_bucket}/sequence/{uuid}_2.fastq.gz'.format(**locals()))
     bwafp.flush()
     bwafp.close()
     bwa_inputs['config'] = job.fileStore.writeGlobalFile(bwa_config_path)
 
     # write config for GATK preprocessing
-    gatk_preprocess_config_path = os.path.join(work_dir, "%s_gatk_preprocess_config.csv" % uuid)
+    gatk_preprocess_config_path = os.path.join(work_dir, '{uuid}_gatk_preprocess_config.csv'.format(**locals()))
     gatk_preprocess_fp = open(gatk_preprocess_config_path, "w")
-    print >> gatk_preprocess_fp, "%s,https://s3%s.amazonaws.com/%s/alignment/%s.bam" % (uuid, bucket_region, s3_bucket, uuid)
+    print >> gatk_preprocess_fp, '{uuid},s3://{s3_bucket}/alignment/{uuid}.bam'.format(**locals())
     gatk_preprocess_fp.flush()
     gatk_preprocess_fp.close()
     gatk_preprocess_inputs['config'] = job.fileStore.writeGlobalFile(gatk_preprocess_config_path)
 
     # write config for GATK haplotype caller for the result of ADAM preprocessing
-    gatk_adam_call_config_path = os.path.join(work_dir, "%s_gatk_adam_call_config.csv" % uuid)
+    gatk_adam_call_config_path = os.path.join(work_dir, '{uuid}_gatk_adam_call_config.csv'.format(**locals()))
     gatk_adam_call_fp = open(gatk_adam_call_config_path, "w")
-    print >> gatk_adam_call_fp, "%s,https://s3%s.amazonaws.com/%s/analysis/%s/%s.adam.bam" % (uuid, bucket_region, s3_bucket, uuid, uuid)
+    print >> gatk_adam_call_fp, '{uuid},s3://{s3_bucket}/analysis/{uuid}/{uuid}.adam.bam'.format(**locals())
     gatk_adam_call_fp.flush()
     gatk_adam_call_fp.close()
     gatk_adam_call_inputs['config'] = job.fileStore.writeGlobalFile(gatk_adam_call_config_path)
 
     # write config for GATK haplotype caller for the result of GATK preprocessing
-    gatk_gatk_call_config_path = os.path.join(work_dir, "%s_gatk_gatk_call_config.csv" % uuid)
+    gatk_gatk_call_config_path = os.path.join(work_dir, '{uuid}_gatk_gatk_call_config.csv'.format(**locals()))
     gatk_gatk_call_fp = open(gatk_gatk_call_config_path, "w")
-    print >> gatk_gatk_call_fp, "%s,https://s3%s.amazonaws.com/%s/analysis/%s/%s.gatk.bam" % (uuid, bucket_region, s3_bucket, uuid, uuid)
+    print >> gatk_gatk_call_fp, '{uuid},s3://{s3_bucket}/analysis/{uuid}/{uuid}.gatk.bam'.format(**locals())
     gatk_gatk_call_fp.flush()
     gatk_gatk_call_fp.close()
     gatk_gatk_call_inputs['config'] = job.fileStore.writeGlobalFile(gatk_gatk_call_config_path)
@@ -299,24 +332,39 @@ def static_dag(job, bucket_region, s3_bucket, uuid, bwa_inputs, adam_inputs, gat
     gatk_gatk_call = job.wrapJobFn(batch_start,
                                    gatk_gatk_call_inputs).encapsulate()
 
-    
-
     # wire up dag
-    job.addChild(bwa)
+    if not skip_alignment:
+        job.addChild(bwa)
    
     if (pipeline_to_run == "adam" or
         pipeline_to_run == "both"):
-        bwa.addChild(adam_preprocess)
-        adam_preprocess.addChild(gatk_adam_call)
+
+        if skip_preprocessing:
+            job.addChild(gatk_adam_call)
+        else:
+            if skip_alignment:
+                job.addChild(adam_preprocess)
+            else:
+                bwa.addChild(adam_preprocess)
+
+            adam_preprocess.addChild(gatk_adam_call)
 
     if (pipeline_to_run == "gatk" or
         pipeline_to_run == "both"):
-        bwa.addChild(gatk_preprocess)
-        gatk_preprocess.addChild(gatk_gatk_call)
+
+        if skip_preprocessing:
+            job.addChild(gatk_gatk_call)
+        else:
+            if skip_alignment:
+                job.addChild(gatk_preprocess)
+            else:
+                bwa.addChild(gatk_preprocess)
+
+            gatk_preprocess.addChild(gatk_gatk_call)
    
 
 if __name__ == '__main__':
-    
+
     args_parser = build_parser()
     Job.Runner.addToilOptions(args_parser)
     args = args_parser.parse_args()
@@ -327,7 +375,7 @@ if __name__ == '__main__':
       for uuid in f_manifest:
         uuid_list.append(uuid.strip())
 
-    
+
     bwa_inputs = {'ref.fa': args.ref,
                   'ref.fa.amb': args.amb,
                   'ref.fa.ann': args.ann,
@@ -343,7 +391,7 @@ if __name__ == '__main__':
                   'cpu_count': None,
                   'file_size': args.file_size,
                   'use_bwakit': args.use_bwakit}
-    
+
     if args.num_nodes <= 1:
         raise ValueError("--num_nodes allocates one Spark/HDFS master and n-1 workers, and thus must be greater than 1. %d was passed." % args.num_nodes)
 
@@ -363,7 +411,7 @@ if __name__ == '__main__':
                               'ssec': None,
                               'cpu_count': str(multiprocessing.cpu_count()),
                               'suffix': '.gatk' }
-    
+
     gatk_adam_call_inputs = {'ref.fa': args.ref,
                              'phase.vcf': args.phase,
                              'mills.vcf': args.mills,
@@ -406,4 +454,6 @@ if __name__ == '__main__':
                                        gatk_preprocess_inputs,
                                        gatk_adam_call_inputs,
                                        gatk_gatk_call_inputs,
-                                       args.pipeline_to_run), args)
+                                       args.pipeline_to_run,
+                                       args.skip_alignment,
+                                       args.skip_preprocessing), args)
