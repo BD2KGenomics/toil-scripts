@@ -234,14 +234,22 @@ def grow_cluster(nodes, instance_type, cluster_name):
     while nodes_left > 0:
         log.info('Attempting to grow cluster by %i node(s) of type: %s', nodes_left, instance_type)
 
-        output = subprocess.check_output(['cgcloud',
-                                          'grow-cluster',
-                                          '--list',
-                                          '--instance-type', instance_type,
-                                          '--num-workers', str(nodes_left),
-                                          '--cluster-name', cluster_name,
-                                          '--quick',  # don't wait for instances to finish booting up
-                                          'toil'])
+        output = ""
+        cmd = ['cgcloud',
+               'grow-cluster',
+               '--list',
+               '--instance-type', instance_type,
+               '--num-workers', str(nodes_left),
+               '--cluster-name', cluster_name,
+               'toil']
+        try:
+            output = subprocess.check_output(cmd)
+        except subprocess.CalledProcessError as cpe:
+            log.warn("Running command %s returned with error code %d.",
+                     " ".join(cmd),
+                     cpe.returncode)
+            output = cpe.output
+
         added_nodes = len(parse_cgcloud_list_output(output))
         if added_nodes == 0:
             log.warn("Wasn't able to add any nodes. Wating 5 min.")
@@ -274,7 +282,7 @@ def monitor_cluster_size(params, conn, dom):
         size_check_time = time.time()
         # If cluster is too small, grow it
         cluster_size = get_cluster_size(params.cluster_name)
-        desired_cluster_size = get_desired_cluster_size(conn, dom)
+        desired_cluster_size = get_desired_cluster_size(conn, dom) + 1
         if cluster_size < desired_cluster_size:
             with cluster_size_lock:
                 grow_cluster(desired_cluster_size - cluster_size, params.instance_type, params.cluster_name)
