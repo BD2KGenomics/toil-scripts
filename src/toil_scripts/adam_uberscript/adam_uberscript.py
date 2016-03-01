@@ -5,17 +5,23 @@ Date: 2/12/16
 
 Modified from John Vivian's automated_scaling_tests.py script
 """
+
 import logging
+
+# Initialize logging before the remaining imports to prevent those imported modules from snatching that one shot at 
+# basicConfig.
+
 log = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO,
                     format='%(asctime)-15s:%(levelname)s:%(name)s:%(message)s',
                     datefmt='%m-%d %H:%M:%S')
 
+from StringIO import StringIO
+import operator
 import argparse
 from collections import namedtuple
 import csv
 import os
-import random
 import subprocess
 import boto
 from boto.exception import BotoServerError, EC2ResponseError
@@ -29,9 +35,8 @@ from datetime import datetime, timedelta
 import threading
 import boto.sdb
 from boto.ec2 import connect_to_region
-from datetime import datetime
-from itertools import groupby
-from automated_scaling import *
+
+from automated_scaling import ClusterSize, Samples
 from toil_scripts.adam_uberscript.input_files import inputs
 
 metric_endtime_margin = timedelta(hours=1)
@@ -196,10 +201,20 @@ def get_cluster_size(cluster_name):
     """
     Returns the number of running toil-worker nodes
     """
-    numlines = subprocess.check_output(["cgcloud",
-                                        "list",
-                                        "-c", cluster_name, "toil-worker"]).count("\n")
-    return numlines - 1 # Subtract 1 for header
+    return len(list_workers(cluster_name))
+
+
+def list_workers(cluster_name):
+    """
+    Returns list of dictionaries, each dictionary representing a worker node. Each dictinoary has the following keys:
+    cluster_name, role_name, ordinal, cluster_ordinal, private_ip_address, ip_address, instance_id, instance_type,
+    launch_time, state and zone
+    """
+    return parse_cgcloud_list_output(subprocess.check_output(["cgcloud", "list", "-c", cluster_name, "toil-worker"]))
+
+
+def parse_cgcloud_list_output(output):
+    return [row for row in csv.DictReader(StringIO(output), delimiter='\t')]
 
 
 def get_desired_cluster_size(conn, dom):
@@ -212,41 +227,54 @@ def update_cluster_size(conn, dom, n):
     ClusterSize.change_size(conn, dom, n)
 
 
-def grow_cluster(n, instance_type, cluster_name, spot_bid):
+def grow_cluster(nodes, instance_type, cluster_name, spot_bid):
     """
-    grow the cluster by n nodes
+    Grow the cluster by n nodes
     """
+    nodes_left = nodes
+    while nodes_left > 0:
+        log.info('Attempting to grow cluster by %i node(s) of type: %s', nodes_left, instance_type)
+        zone = get_cheapest_spot_zone(instance_type, spot_bid)
+        if zone is None:
+            log.warn("It currently doesn't make sense to bid on spot instances. Wating 5 min.")
+            time.sleep(5 * 60)
+        else:
+            output = subprocess.check_output(['cgcloud',
+                                              'grow-cluster',
+                                              '--list',
+                                              '--instance-type', instance_type,
+                                              '--num-workers', str(nodes_left),
+                                              '--cluster-name', cluster_name,
+                                              '--quick',  # don't wait for instances to finish booting up
+                                              '--spot-bid', str(spot_bid),
+                                              '--spot-tentative',  # give up on spot requests not fulfilled immediately
+                                              '--zone', zone,
+                                              'toil'])
+            added_nodes = len(parse_cgcloud_list_output(output))
+            if added_nodes == 0:
+                log.warn("Wasn't able to add any nodes. Wating 5 min.")
+                time.sleep(5 * 60)
+            assert added_nodes <= nodes_left
+            nodes_left -= added_nodes
+            log.info('Added {} node(s), {} node(s) left.', added_nodes, nodes_left)
+    log.info('Successfully grew cluster by %i node(s) of type %s.', nodes, instance_type)
 
-    old_size = get_cluster_size(cluster_name)
-    target_size = old_size + n
-    diff = n
 
-    # loop until we've grown the cluster by our target size
-    while diff > 0:
-        log.info('Growing cluster by {} nodes of type: {}'.format(diff, instance_type))
-
-        # call to cgcloud to increase the cluster size
-        subprocess.check_call(['cgcloud',
-                               'grow-cluster',
-                               '--list',
-                               '--instance-type', str(instance_type),
-                               '--num-workers', str(diff),
-                               '--cluster-name', str(cluster_name),
-                               '--spot-bid', str(spot_bid),
-                               '--zone', ("%sa" % aws_region),
-                               '--spot-tentative',
-                               'toil'])
-
-        # how much did we grow by?
-        new_size = get_cluster_size(cluster_name)
-        diff = target_size - new_size
-
-        # log
-        log.info('Successfully grew cluster by {} nodes of type: {}.'.format(new_size - old_size,
-                                                                             instance_type))
-
-        # update our cluster size
-        old_size = new_size
+def get_cheapest_spot_zone(instance_type, spot_bid):
+    ec2 = connect_to_region(aws_region)
+    try:
+        cheapest_zone, price = min(((zone, ec2.get_spot_price_history(instance_type=instance_type,
+                                                                      availability_zone=zone,
+                                                                      product_description='Linux/UNIX',
+                                                                      start_time=datetime.utcnow().isoformat()))
+                                    for zone in (aws_region + z for z in 'abc')), key=operator.itemgetter(1))
+        if price <= spot_bid:
+            return cheapest_zone
+        else:
+            log.warn('Current spot price (%f) is greater than configured bid (%f)', price, spot_bid)
+            return None
+    finally:
+        ec2.close()
     
 
 def manage_metrics_and_cluster_scaling(params):
@@ -284,6 +312,7 @@ def monitor_cluster_size(params, conn, dom):
         if wait_time > 0:
             time.sleep(wait_time)
 
+# FIXME: unused parameters conn and dom
 
 def collect_realtime_metrics(params, conn, dom, threshold=0.5, region='us-west-2'):
     """
