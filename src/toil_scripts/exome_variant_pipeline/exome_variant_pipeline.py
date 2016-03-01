@@ -402,14 +402,14 @@ def pipeline_launchpoint(job, job_vars):
     """
     pre_processing = job.wrapJobFn(index_bams, job_vars).encapsulate()
     run_mutect = job.wrapJobFn(mutect, job_vars, pre_processing.rv())
-    run_pindel = job.wrapJobFn(pindel, job_vars, pre_processing.rv())
-    run_muse = job.wrapJobFn(muse, job_vars, pre_processing.rv())
-    consolidate = job.wrapJobFn(consolidate_output, job_vars, run_mutect.rv(), run_pindel.rv(), run_muse.rv())
+    # run_pindel = job.wrapJobFn(pindel, job_vars, pre_processing.rv())
+    # run_muse = job.wrapJobFn(muse, job_vars, pre_processing.rv())
+    consolidate = job.wrapJobFn(consolidate_output, job_vars, run_mutect.rv())#, run_pindel.rv(), run_muse.rv())
     # Wire up DAG
     job.addChild(pre_processing)
     pre_processing.addChild(run_mutect)
-    pre_processing.addChild(run_pindel)
-    pre_processing.addChild(run_muse)
+    # pre_processing.addChild(run_pindel)
+    # pre_processing.addChild(run_muse)
     pre_processing.addFollowOn(consolidate)
 
 
@@ -706,7 +706,7 @@ def muse(job, job_vars, bam_ids):
     return job.fileStore.writeGlobalFile(os.path.join(work_dir, 'pindel.tar.gz'))
 
 
-def consolidate_output(job, job_vars, mutect_id, pindel_id, muse_id):
+def consolidate_output(job, job_vars, mutect_id):#, pindel_id, muse_id):
     """
     Combine the contents of separate zipped outputs into one via streaming
 
@@ -718,22 +718,23 @@ def consolidate_output(job, job_vars, mutect_id, pindel_id, muse_id):
     uuid = input_args['uuid']
     # Retrieve output file paths to consolidate
     mutect_tar = job.fileStore.readGlobalFile(mutect_id, os.path.join(work_dir, 'mutect.tar.gz'))
-    pindel_tar = job.fileStore.readGlobalFile(pindel_id, os.path.join(work_dir, 'pindel.tar.gz'))
-    muse_tar = job.fileStore.readGlobalFile(muse_id, os.path.join(work_dir, 'muse.tar.gz'))
+    # pindel_tar = job.fileStore.readGlobalFile(pindel_id, os.path.join(work_dir, 'pindel.tar.gz'))
+    # muse_tar = job.fileStore.readGlobalFile(muse_id, os.path.join(work_dir, 'muse.tar.gz'))
     # I/O
     out_tar = os.path.join(work_dir, uuid + '.tar.gz')
     # Consolidate separate tarballs into one as streams (avoids unnecessary untaring)
     with tarfile.open(os.path.join(work_dir, out_tar), 'w:gz') as f_out:
-        for tar in [mutect_tar, pindel_tar, muse_tar]:
+        # for tar in [mutect_tar, pindel_tar, muse_tar]:
+        for tar in [mutect_tar]:
             with tarfile.open(tar, 'r') as f_in:
                 for tarinfo in f_in:
                     with closing(f_in.extractfile(tarinfo)) as f_in_file:
                         if tar == mutect_tar:
                             tarinfo.name = os.path.join(uuid, 'MuTect', os.path.basename(tarinfo.name))
-                        elif tar == pindel_tar:
-                            tarinfo.name = os.path.join(uuid, 'Kallisto', os.path.basename(tarinfo.name))
-                        else:
-                            tarinfo.name = os.path.join(uuid, 'MuSe', os.path.basename(tarinfo.name))
+                        # elif tar == pindel_tar:
+                        #     tarinfo.name = os.path.join(uuid, 'Kallisto', os.path.basename(tarinfo.name))
+                        # else:
+                        #     tarinfo.name = os.path.join(uuid, 'MuSe', os.path.basename(tarinfo.name))
                         f_out.addfile(tarinfo, fileobj=f_in_file)
     # Move to output directory of selected
     if input_args['output_dir']:
