@@ -53,7 +53,7 @@ aws_region = 'us-west-2'
 
 def launch_cluster(params):
     """
-    Launches a toil cluster with 1 worker, with shared dir S, of instance type I, at a spot bid of B
+    Launches a toil cluster with 1 worker, with shared dir S, of instance type I
 
     params: argparse.Namespace      Input arguments
     """
@@ -65,7 +65,6 @@ def launch_cluster(params):
                            '--instance-type', params.instance_type,
                            '--num-workers', "1",
                            '--cluster-name', params.cluster_name,
-                           '--spot-bid', str(params.spot_bid),
                            '--leader-on-demand',
                            '--ssh-opts',
                            '"UserKnownHostsFile=/dev/null StrictHostKeyChecking=no"',
@@ -227,55 +226,31 @@ def update_cluster_size(conn, dom, n):
     ClusterSize.change_size(conn, dom, n)
 
 
-def grow_cluster(nodes, instance_type, cluster_name, spot_bid):
+def grow_cluster(nodes, instance_type, cluster_name):
     """
     Grow the cluster by n nodes
     """
     nodes_left = nodes
     while nodes_left > 0:
         log.info('Attempting to grow cluster by %i node(s) of type: %s', nodes_left, instance_type)
-        zone = get_cheapest_spot_zone(instance_type, spot_bid)
-        if zone is None:
-            log.warn("It currently doesn't make sense to bid on spot instances. Wating 5 min.")
+
+        output = subprocess.check_output(['cgcloud',
+                                          'grow-cluster',
+                                          '--list',
+                                          '--instance-type', instance_type,
+                                          '--num-workers', str(nodes_left),
+                                          '--cluster-name', cluster_name,
+                                          '--quick',  # don't wait for instances to finish booting up
+                                          'toil'])
+        added_nodes = len(parse_cgcloud_list_output(output))
+        if added_nodes == 0:
+            log.warn("Wasn't able to add any nodes. Wating 5 min.")
             time.sleep(5 * 60)
-        else:
-            output = subprocess.check_output(['cgcloud',
-                                              'grow-cluster',
-                                              '--list',
-                                              '--instance-type', instance_type,
-                                              '--num-workers', str(nodes_left),
-                                              '--cluster-name', cluster_name,
-                                              '--quick',  # don't wait for instances to finish booting up
-                                              '--spot-bid', str(spot_bid),
-                                              '--spot-tentative',  # give up on spot requests not fulfilled immediately
-                                              '--zone', zone,
-                                              'toil'])
-            added_nodes = len(parse_cgcloud_list_output(output))
-            if added_nodes == 0:
-                log.warn("Wasn't able to add any nodes. Wating 5 min.")
-                time.sleep(5 * 60)
-            assert added_nodes <= nodes_left
-            nodes_left -= added_nodes
-            log.info('Added {} node(s), {} node(s) left.', added_nodes, nodes_left)
+        assert added_nodes <= nodes_left
+        nodes_left -= added_nodes
+        log.info('Added {} node(s), {} node(s) left.', added_nodes, nodes_left)
     log.info('Successfully grew cluster by %i node(s) of type %s.', nodes, instance_type)
 
-
-def get_cheapest_spot_zone(instance_type, spot_bid):
-    ec2 = connect_to_region(aws_region)
-    try:
-        cheapest_zone, price = min(((zone, ec2.get_spot_price_history(instance_type=instance_type,
-                                                                      availability_zone=zone,
-                                                                      product_description='Linux/UNIX',
-                                                                      start_time=datetime.utcnow().isoformat()))
-                                    for zone in (aws_region + z for z in 'abc')), key=operator.itemgetter(1))
-        if price <= spot_bid:
-            return cheapest_zone
-        else:
-            log.warn('Current spot price (%f) is greater than configured bid (%f)', price, spot_bid)
-            return None
-    finally:
-        ec2.close()
-    
 
 def manage_metrics_and_cluster_scaling(params):
     conn = boto.sdb.connect_to_region(aws_region)
@@ -302,7 +277,7 @@ def monitor_cluster_size(params, conn, dom):
         desired_cluster_size = get_desired_cluster_size(conn, dom)
         if cluster_size < desired_cluster_size:
             with cluster_size_lock:
-                grow_cluster(desired_cluster_size - cluster_size, params.instance_type, params.cluster_name, params.spot_bid)
+                grow_cluster(desired_cluster_size - cluster_size, params.instance_type, params.cluster_name)
                 update_cluster_size(conn, dom, desired_cluster_size)
 
         # Sleep
@@ -441,7 +416,6 @@ def main():
     parser_cluster.add_argument('-c', '--cluster-name', required=True, help='Name of cluster.')
     parser_cluster.add_argument('-S', '--share', required=True,
                                 help='Full path to directory: pipeline script, launch script, and master key.')
-    parser_cluster.add_argument('--spot-bid', default=1.00, help='Change spot price of instances')
     parser_cluster.add_argument('-t', '--instance-type', default='r3.8xlarge',
                                 help='Worker instance type. e.g.  m4.large or c3.8xlarge.')
     parser_cluster.add_argument('-T', '--leader-type', default='m3.medium', help='Sets leader instance type.')
@@ -468,7 +442,6 @@ def main():
     parser_metric.add_argument('--namespace', default='jtvivian', help='CGCloud NameSpace')
     parser_metric.add_argument('-t', '--instance-type', default='r3.8xlarge',
                                help='Worker instance type. e.g.  m4.large or c3.8xlarge.')
-    parser_metric.add_argument('--spot-bid', default=1.00, help='Change spot price of instances')
 
     # Parse args
     params = parser.parse_args()
