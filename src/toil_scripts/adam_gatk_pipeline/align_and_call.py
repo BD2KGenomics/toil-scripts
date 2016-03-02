@@ -114,6 +114,9 @@ S3AM            - pip install --s3am (requires ~/.boto config file)
 # import from python system libraries
 import copy
 
+# import boto sdb connection for autoscaling
+import boto.sdb
+
 # import toil features
 from toil.job import Job
 
@@ -122,6 +125,9 @@ from toil_scripts.adam_pipeline.spark_toil_script import *
 from toil_scripts.batch_alignment.bwa_alignment import *
 from toil_scripts.gatk_germline.germline import *
 from toil_scripts.gatk_processing.gatk_preprocessing import *
+
+# import autoscaling tools
+from toil_scripts.adam_uberscript.automated_scaling import Samples
 
 def build_parser():
 
@@ -141,6 +147,9 @@ def build_parser():
     parser.add_argument('-SP', '--skip_preprocessing',
                         help = "Skip preprocessing and start running from variant calling. Implies --skip_alignment.",
                         action = 'store_true')
+
+    # are we automatically scaling the cluster?
+    parser.add_argument('--autoscale_cluster', action='store_true', help = "Scales cluster during pipeline run")
 
     # add bucket args
     parser.add_argument('-3', '--s3_bucket', required = True,
@@ -210,7 +219,8 @@ def sample_loop(job,
                 gatk_gatk_call_inputs,
                 pipeline_to_run,
                 skip_alignment,
-                skip_preprocessing):
+                skip_preprocessing,
+                autoscale_cluster):
   """
   Loops over the sample_ids (uuids) in the manifest, creating child jobs to process each
   """
@@ -232,6 +242,10 @@ def sample_loop(job,
     uuid_gatk_adam_call_inputs['s3_dir'] = '{s3_bucket}/analysis/{uuid}'.format(**locals())
     uuid_gatk_gatk_call_inputs['s3_dir'] = '{s3_bucket}/analysis/{uuid}'.format(**locals())
 
+    # are we autoscaling? if so, bump the cluster size by one now
+    if autoscale_cluster:
+        Samples.increase_nodes(uuid, 1)
+
     job.addChildJobFn(static_dag,
                       bucket_region,
                       s3_bucket,
@@ -243,7 +257,8 @@ def sample_loop(job,
                       uuid_gatk_gatk_call_inputs,
                       pipeline_to_run,
                       skip_alignment,
-                      skip_preprocessing)
+                      skip_preprocessing,
+                      autoscale_cluster)
 
 
 def static_dag(job,
@@ -257,7 +272,8 @@ def static_dag(job,
                gatk_gatk_call_inputs,
                pipeline_to_run,
                skip_alignment,
-               skip_preprocessing):
+               skip_preprocessing,
+               autoscale_cluster):
     """
     Prefer this here as it allows us to pull the job functions from other jobs
     without rewrapping the job functions back together.
@@ -332,36 +348,99 @@ def static_dag(job,
     gatk_gatk_call = job.wrapJobFn(batch_start,
                                    gatk_gatk_call_inputs).encapsulate()
 
+    # add code to bump the number of jobs after alignment
+    # start with -1 since we already have a single node for our sample
+    nodes_needed_after_alignment = -1 
+
+    # adam needs:
+    # - a spark driver
+    # - a spark master/hdfs namenode
+    # - _n_ spark workers/hdfs datanodes
+    if (pipeline_to_run == "adam" or
+        pipeline_to_run == "both"):
+        nodes_needed_after_alignment += (adam_inputs['numWorkers'] + 2)
+        
+    # gatk needs one node
+    if (pipeline_to_run == "gatk" or
+        pipeline_to_run == "both"):
+        nodes_needed_after_alignment += 1
+
+    # create a job that runs after alignment and increases the number of nodes in the system
+    increase_nodes_after_alignment = job.wrapJobFn(increase_node_count,
+                                                   nodes_needed_after_alignment - 1,
+                                                   uuid)
+
+    # since we evaluate this conditional repeatedly, just calculate it once
+    # we should only schedule the job that increases the node count if we
+    # are using autoscaling _and_ we are increasing the node count
+    autoscale_after_alignment = (nodes_needed_after_alignment > 1) and autoscale_cluster
+
+    # create a job that runs after ADAM's preprocessing to decrease the number of nodes
+    decrease_nodes_after_adam_preprocess = job.wrapJobFn(decrease_node_count,
+                                                         adam_inputs['numWorkers'] + 1,
+                                                         uuid)
+
     # wire up dag
     if not skip_alignment:
         job.addChild(bwa)
+
+        if autoscale_after_alignment:
+            bwa.addChild(increase_nodes_after_alignment)
+    elif autoscale_after_alignment:
+        job.addChild(increase_nodes_after_alignment)
    
     if (pipeline_to_run == "adam" or
         pipeline_to_run == "both"):
 
         if skip_preprocessing:
+
+            # TODO: currently, we don't support autoscaling if you're just
+            # running variant calling
             job.addChild(gatk_adam_call)
         else:
-            if skip_alignment:
+            if autoscale_after_alignment:
+                increase_nodes_after_alignment.addChild(adam_preprocess)
+            elif skip_alignment:
                 job.addChild(adam_preprocess)
             else:
                 bwa.addChild(adam_preprocess)
 
-            adam_preprocess.addChild(gatk_adam_call)
+            # if we are running autoscaling, then we should decrease the cluster
+            # size after adam completes
+            if autoscale_cluster:
+                adam_preprocess.addChild(decrease_nodes_after_adam_preprocess)
+                decrease_nodes_after_adam_preprocess.addChild(gatk_adam_call)
+            else:
+                adam_preprocess.addChild(gatk_adam_call)
 
     if (pipeline_to_run == "gatk" or
         pipeline_to_run == "both"):
 
         if skip_preprocessing:
+
+            # TODO: currently, we don't support autoscaling if you're just
+            # running variant calling
             job.addChild(gatk_gatk_call)
         else:
-            if skip_alignment:
+            if autoscale_after_alignment:
+                increase_nodes_after_alignment.addChild(gatk_preprocess)
+            elif skip_alignment:
                 job.addChild(gatk_preprocess)
             else:
                 bwa.addChild(gatk_preprocess)
 
             gatk_preprocess.addChild(gatk_gatk_call)
-   
+
+
+def increase_node_count(job, nodes_to_add, uuid):
+
+    Samples.increase_nodes(uuid, nodes_to_add)
+
+
+def decrease_node_count(job, nodes_to_add, uuid):
+
+    Samples.decrease_nodes(uuid, nodes_to_add)
+    
 
 if __name__ == '__main__':
 
@@ -374,7 +453,6 @@ if __name__ == '__main__':
     with open(args.uuid_manifest) as f_manifest:
       for uuid in f_manifest:
         uuid_list.append(uuid.strip())
-
 
     bwa_inputs = {'ref.fa': args.ref,
                   'ref.fa.amb': args.amb,
@@ -456,4 +534,5 @@ if __name__ == '__main__':
                                        gatk_gatk_call_inputs,
                                        args.pipeline_to_run,
                                        args.skip_alignment,
-                                       args.skip_preprocessing), args)
+                                       args.skip_preprocessing,
+                                       args.autoscale_cluster), args)

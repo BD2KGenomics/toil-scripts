@@ -48,6 +48,7 @@ def start_master(job, inputs):
     """
     Starts the master service.
     """
+
     log.write("master job\n")
     log.flush()
     masterIP = job.addService(MasterService(inputs['sudo'], "%s G" % inputs['executorMemory']))
@@ -228,6 +229,7 @@ def upload_data(job, masterIP, hdfsName, inputs):
         uploadName = uploadName.replace('.bam', '%s.bam' % inputs['suffix'])
 
     call_conductor(masterIP, inputs, hdfsName, uploadName)
+    
     
 # SERVICE CLASSES
 
@@ -431,6 +433,8 @@ def build_parser():
                         help = 'Amount of memory to allocate for Spark Driver.')
     parser.add_argument('-q', '--executor_memory', required = True,
                         help = 'Amount of memory to allocate per Spark Executor.')
+    parser.add_argument('-j', '--jobstore', required = True,
+                        help = 'Name of the jobstore')
     parser.add_argument('-u', '--sudo',
                         dest='sudo', action='store_true',
                         help='Docker usually needs sudo to execute '
