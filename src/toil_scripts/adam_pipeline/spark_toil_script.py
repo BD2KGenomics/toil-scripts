@@ -27,8 +27,9 @@ toil            - pip install --pre toil
 """
 
 import argparse
-import os
+import logging
 import multiprocessing
+import os
 from subprocess import call, check_call, check_output
 import sys
 import time
@@ -37,7 +38,7 @@ from toil_scripts.batch_alignment.bwa_alignment import docker_call
 
 SPARK_MASTER_PORT = "7077"
 HDFS_MASTER_PORT = "8020"
-log = open("python.log", 'a')
+log = logging.getLogger(__name__)
 
 # JOB FUNCTIONS
 
@@ -46,9 +47,12 @@ def start_master(job, inputs):
     Starts the master service.
     """
 
-    log.write("master job\n")
-    log.flush()
+    log.info("Starting Spark master and HDFS namenode.")
+
     masterIP = job.addService(MasterService(inputs['sudo'], "%s G" % inputs['executorMemory']))
+
+    log.info("Spark Master and HDFS Namenode started at %s.", masterIP)
+
     job.addChildJobFn(start_workers, masterIP, inputs)
 
 
@@ -56,8 +60,8 @@ def start_workers(job, masterIP, inputs):
     """
     Starts the worker services.
     """
-    log.write("workers job\n")
-    log.flush()
+    log.info("Starting %d Spark workers and HDFS Datanodes.", inputs['numWorkers'])
+
     for i in range(inputs['numWorkers']):
         job.addService(WorkerService(masterIP, inputs['sudo'], "%s G" % inputs['executorMemory']))
     job.addFollowOnJobFn(download_run_and_upload, masterIP, inputs, memory = "%s G" % inputs['driverMemory'])
@@ -123,19 +127,20 @@ def download_data(masterIP, inputs):
     """
     Downloads input data files from s3.
     """
-    log.write("download data\n")
-    log.flush()
+
     
     snpFileSystem, snpPath = inputs['knownSNPs'].split('://')
     snpName = snpPath.split('/')[-1]
     hdfsSNPs = "hdfs://"+masterIP+":"+HDFS_MASTER_PORT+"/"+snpName
     
+    log.info("Downloading known sites file %s to %s.", inputs['knownSNPs'], hdfsSNPs)
     call_conductor(masterIP, inputs, inputs['knownSNPs'], hdfsSNPs)
         
     bamFileSystem, bamPath = inputs['bamName'].split('://')
     bamName = bamPath.split('/')[-1]
     hdfsBAM = "hdfs://"+masterIP+":"+HDFS_MASTER_PORT+"/"+bamName
 
+    log.info("Downloading input BAM %s to %s.", inputs['bamName'], hdfsBAM)
     call_conductor(masterIP, inputs, inputs['bamName'], hdfsBAM)
      
     return (hdfsBAM, hdfsSNPs)
@@ -145,9 +150,8 @@ def adam_convert(masterIP, inFile, snpFile, inputs):
     """
     Convert input sam/bam file and known SNPs file into ADAM format
     """
-    log.write("adam convert\n")
-    log.flush()
 
+    log.info("Converting input BAM to ADAM.")
     adamFile = ".".join(os.path.splitext(inFile)[:-1])+".adam"
     
     call_adam(masterIP,
@@ -158,6 +162,7 @@ def adam_convert(masterIP, inFile, snpFile, inputs):
     inFileName = inFile.split("/")[-1]
     remove_file(masterIP, inFileName)
 
+    log.info("Converting known sites VCF to ADAM.")
     adamSnpFile = ".".join(os.path.splitext(snpFile)[:-1])+".var.adam"
 
     call_adam(masterIP,
@@ -177,11 +182,10 @@ def adam_transform(masterIP, inFile, snpFile, inputs):
         - realign indels
         - recalibrate base quality scores
     """
-    log.write("adam transform\n")
-    log.flush()
 
     outFile = ".".join(os.path.splitext(inFile)[:-1])+".processed.bam"
 
+    log.info("Marking duplicate reads.")
     call_adam(masterIP,
               inputs,
               ["transform", 
@@ -193,6 +197,7 @@ def adam_transform(masterIP, inFile, snpFile, inputs):
     inFileName = inFile.split("/")[-1]
     remove_file(masterIP, inFileName+"*")
 
+    log.info("Realigning INDELs.")
     call_adam(masterIP,
               inputs,
               ["transform", 
@@ -202,6 +207,7 @@ def adam_transform(masterIP, inFile, snpFile, inputs):
 
     remove_file(masterIP, "mkdups.adam*")
 
+    log.info("Recalibrating base quality scores.")
     call_adam(masterIP,
               inputs,
               ["transform", 
@@ -212,6 +218,7 @@ def adam_transform(masterIP, inFile, snpFile, inputs):
               
     remove_file(masterIP, "ri.adam*")
 
+    log.info("Sorting reads and saving a single BAM file.")
     call_adam(masterIP,
               inputs,
               ["transform", 
@@ -228,8 +235,6 @@ def upload_data(masterIP, hdfsName, inputs):
     """
     Upload file hdfsName from hdfs to s3
     """
-    log.write("write data\n")
-    log.flush()
 
     fileSystem, path = hdfsName.split('://')
     nameOnly = path.split('/')[-1]
@@ -238,6 +243,7 @@ def upload_data(masterIP, hdfsName, inputs):
     if inputs['suffix']:
         uploadName = uploadName.replace('.bam', '%s.bam' % inputs['suffix'])
 
+    log.info("Uploading output BAM %s to %s.", hdfsName, uploadName)
     call_conductor(masterIP, inputs, hdfsName, uploadName)
     
     
@@ -256,8 +262,6 @@ class MasterService(Job.Service):
         """
         Start spark and hdfs master containers
         """
-        log.write("start masters\n")
-        log.flush()
         
         if (os.uname()[0] == "Darwin"):
             machine = check_output(["docker-machine", "ls"]).split("\n")[1].split()[0]
@@ -291,8 +295,6 @@ class MasterService(Job.Service):
         """
         Stop and remove spark and hdfs master containers
         """
-        log.write("stop masters\n")
-        log.flush()
         
         sudo = []
         if self.sudo:
@@ -320,8 +322,6 @@ class WorkerService(Job.Service):
         """
         Start spark and hdfs worker containers
         """
-        log.write("start workers\n")
-        log.flush()
 
         self.sparkContainerID = docker_call(no_rm = True,
                                             work_dir = os.getcwd(),
@@ -410,8 +410,6 @@ class WorkerService(Job.Service):
         """
         Stop spark and hdfs worker containers
         """
-        log.write("stop workers\n")
-        log.flush()
 
         sudo = []
         if self.sudo:
