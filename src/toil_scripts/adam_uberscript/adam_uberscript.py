@@ -58,6 +58,12 @@ def launch_cluster(params):
     params: argparse.Namespace      Input arguments
     """
     log.info('Launching cluster of size: {} and type: {}'.format(1, params.instance_type))
+
+    # if user provides a string to add to /etc/hosts, let's pass that through
+    etc = []
+    if params.add_to_etc_hosts:
+        etc = ["-O", "etc_hosts_entries=%s" % params.add_to_etc_hosts]
+
     subprocess.check_call(['cgcloud',
                            'create-cluster',
                            '--zone', "{0}a".format(aws_region),
@@ -67,8 +73,9 @@ def launch_cluster(params):
                            '--cluster-name', params.cluster_name,
                            '--leader-on-demand',
                            '--ssh-opts',
-                           '"UserKnownHostsFile=/dev/null StrictHostKeyChecking=no"',
-                           'toil'])
+                           '"UserKnownHostsFile=/dev/null StrictHostKeyChecking=no"']
+                          etc +
+                          ['toil'])
     subprocess.check_call(['cgcloud',
                            'rsync',
                            '--zone', "{0}a".format(aws_region),
@@ -119,39 +126,46 @@ def launch_pipeline(params):
                                '-o', 'UserKnownHostsFile=/dev/null',
                                '-o', 'StrictHostKeyChecking=no',
                                'screen', '-dmS', params.cluster_name])
-        # Run command on screen session
-        
-        pipeline_command = "PYTHONPATH=$PYTHONPATH:~/toil-scripts/src python -m toil_scripts.adam_gatk_pipeline.align_and_call " + \
-                           "aws:{region}:{j} " + \
-                           "--autoscale_cluster " + \
-                           "--retryCount 1 " + \
-                           "--s3_bucket {b} " + \
-                           "--sequence_dir {sequence_dir} " + \
-                           "--bucket_region {region} " + \
-                           "--uuid_manifest ~/manifest " + \
-                           "--ref {ref} " + \
-                           "--amb {amb} " + \
-                           "--ann {ann} " + \
-                           "--bwt {bwt} " + \
-                           "--pac {pac} " + \
-                           "--sa {sa} " + \
-                           "--fai {fai} " + \
-                           "--alt {alt} " + \
-                           "--use_bwakit " + \
-                           "--num_nodes {s} " + \
-                           "--driver_memory {m} " + \
-                           "--executor_memory {m} " + \
-                           "--phase {phase} " + \
-                           "--mills {mills} " + \
-                           "--dbsnp {dbsnp} " + \
-                           "--omni {omni} " + \
-                           "--hapmap {hapmap} " + \
-                           "--batchSystem mesos " + \
-                           "--mesosMaster $(hostname -i):5050 " + \
-                           "--workDir /var/lib/toil " + \
-                           "--file_size {fs} " + \
-                           "--logInfo " + \
-                           "{r} \n"
+
+        # do we have a defined master ip?
+        masterIP_arg = ""
+        if params.master_ip:
+            masterIP_arg = "--master_ip %s" % params.master_ip
+
+        # Run command on screen session        
+        pipeline_command = ("PYTHONPATH=$PYTHONPATH:~/toil-scripts/src python -m toil_scripts.adam_gatk_pipeline.align_and_call " +
+                            "aws:{region}:{j} " +
+                            "--autoscale_cluster " +
+                            "--sequence_dir {sequence_dir} " +
+                            "--retryCount 1 " +
+                            "--s3_bucket {b} " +
+                            "--bucket_region {region} " +
+                            "--uuid_manifest ~/manifest " +
+                            "--ref {ref} " +
+                            "--amb {amb} " +
+                            "--ann {ann} " +
+                            "--bwt {bwt} " +
+                            "--pac {pac} " +
+                            "--sa {sa} " +
+                            "--fai {fai} " +
+                            "--alt {alt} " +
+                            "--use_bwakit " +
+                            "--num_nodes {s} " +
+                            "--driver_memory {m} " +
+                            "--executor_memory {m} " +
+                            "--phase {phase} " +
+                            "--mills {mills} " +
+                            "--dbsnp {dbsnp} " +
+                            "--omni {omni} " +
+                            "--hapmap {hapmap} " +
+                            "--batchSystem mesos " +
+                            "--mesosMaster $(hostname -i):5050 " +
+                            "--workDir /var/lib/toil " +
+                            "--file_size {fs} " +
+                            "--logInfo " +
+                            masterIP_arg +
+                            "{r} 2>&1 | tee toil_output\n")
+
         pipeline_command = pipeline_command.format(j=jobstore,
                                                    b=params.bucket,
                                                    region=aws_region,
@@ -228,7 +242,7 @@ def update_cluster_size(conn, dom, n):
     ClusterSize.change_size(conn, dom, n)
 
 
-def grow_cluster(nodes, instance_type, cluster_name):
+def grow_cluster(nodes, instance_type, cluster_name, etc):
     """
     Grow the cluster by n nodes
     """
@@ -237,13 +251,14 @@ def grow_cluster(nodes, instance_type, cluster_name):
         log.info('Attempting to grow cluster by %i node(s) of type: %s', nodes_left, instance_type)
 
         output = ""
-        cmd = ['cgcloud',
-               'grow-cluster',
-               '--list',
-               '--instance-type', instance_type,
-               '--num-workers', str(nodes_left),
-               '--cluster-name', cluster_name,
-               'toil']
+        cmd = (['cgcloud',
+                'grow-cluster',
+                '--list',
+                '--instance-type', instance_type,
+                '--num-workers', str(nodes_left),
+                '--cluster-name', cluster_name] +
+               etc +
+               ['toil'])
         try:
             output = subprocess.check_output(cmd)
         except subprocess.CalledProcessError as cpe:
@@ -276,7 +291,11 @@ def monitor_cluster_size(params, conn, dom):
     """
     Monitors cluster size and grows it if the desired size is larger than the current size
     """
-    print params
+    
+    # if user provides a string to add to /etc/hosts, let's pass that through
+    etc = []
+    if params.add_to_etc_hosts:
+        etc = ["-O", "etc_hosts_entries=%s" % params.add_to_etc_hosts]
 
     log.info('Cluster size monitor has started.')
     time.sleep(scaling_initial_wait_period_in_seconds)
@@ -287,7 +306,7 @@ def monitor_cluster_size(params, conn, dom):
         desired_cluster_size = get_desired_cluster_size(conn, dom) + 1
         if cluster_size < desired_cluster_size:
             with cluster_size_lock:
-                grow_cluster(desired_cluster_size - cluster_size, params.instance_type, params.cluster_name)
+                grow_cluster(desired_cluster_size - cluster_size, params.instance_type, params.cluster_name, etc)
                 update_cluster_size(conn, dom, desired_cluster_size)
 
         # Sleep
@@ -432,6 +451,8 @@ def main():
     parser_cluster.add_argument('-b', '--boto-path', default='/home/mesosbox/.boto', type=str,
                                 help='Path to local .boto file to be placed on leader.')
     parser_cluster.add_argument('-M', '--manifest-path', required=True, help='Path to manifest file.')
+    parser_cluster.add_argument('-etc', '--add-to-etc-hosts', default=None,
+                                required=False, help="Optional entry to add to /etc/hosts")
 
     # Launch Pipeline
     parser_pipeline = subparsers.add_parser('launch-pipeline', help='Launches pipeline')
@@ -440,6 +461,7 @@ def main():
                                  help='Name of jobstore. Defaults to UUID-Date if not set')
     parser_pipeline.add_argument('--restart', default=None, action='store_true',
                                  help='Attempts to restart pipeline, requires existing jobstore.')
+    parser_pipeline.add_argument('--master_ip', default=None, help = 'Spark Master IP.')
     parser_pipeline.add_argument('-B', '--bucket', help='Set destination bucket.')
     parser_pipeline.add_argument('-m', '--memory', default='200g', help='The memory per worker node in GB') 
     parser_pipeline.add_argument('-f', '--file_size', default='100G', help='Approximate size of the BAM files')
@@ -455,7 +477,9 @@ def main():
     parser_metric.add_argument('--namespace', default='jtvivian', help='CGCloud NameSpace')
     parser_metric.add_argument('-t', '--instance-type', default='r3.8xlarge',
                                help='Worker instance type. e.g.  m4.large or c3.8xlarge.')
-
+    parser_metric.add_argument('-etc', '--add-to-etc-hosts', default=None,
+                               required=False, help="Optional entry to add to /etc/hosts")
+    
     # Parse args
     params = parser.parse_args()
 
