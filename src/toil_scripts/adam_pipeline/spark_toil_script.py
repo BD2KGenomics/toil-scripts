@@ -18,10 +18,7 @@ Toil pipeline for ADAM preprocessing
 1 = Master Service
 2 = Start Workers
 3 = Worker Service
-4 = Download Data
-5 = ADAM Convert
-6 = ADAM Transform
-7 = Upload Data
+4 = Do All The Things (Download from S3, convert to ADAM, preprocess, upload to S3)
 
 ================================================================================
 :Dependencies
@@ -63,7 +60,7 @@ def start_workers(job, masterIP, inputs):
     log.flush()
     for i in range(inputs['numWorkers']):
         job.addService(WorkerService(masterIP, inputs['sudo'], "%s G" % inputs['executorMemory']))
-    job.addFollowOnJobFn(download_data, masterIP, inputs, memory = "%s G" % inputs['driverMemory'])
+    job.addFollowOnJobFn(download_run_and_upload, masterIP, inputs, memory = "%s G" % inputs['driverMemory'])
 
 
 def call_conductor(masterIP, inputs, src, dst):
@@ -107,7 +104,22 @@ def remove_file(masterIP, filename):
                 "/opt/apache-hadoop/bin/hdfs", "dfs", "-rm", "-r", "/"+filename])
 
 
-def download_data(job, masterIP, inputs):
+def download_run_and_upload(job, masterIP, inputs):
+    """
+    Monolithic job that calls data download, conversion, transform, upload.
+    Previously, this was not monolithic; change came in due to #126/#134.
+    """
+    try:
+        bam, snps = download_data(masterIP, inputs)
+        adam_convert(masterIP, bam, snps, inputs)
+        adamFile = adam_transform(masterIP, bam, snps, inputs)
+        upload_data(masterIP, adamFile, inputs)
+    except:
+        # if a stage failed, we must clean up HDFS for the pipeline to succeed on retry
+        remove_file(masterIP, '*')
+
+
+def download_data(masterIP, inputs):
     """
     Downloads input data files from s3.
     """
@@ -126,10 +138,10 @@ def download_data(job, masterIP, inputs):
 
     call_conductor(masterIP, inputs, inputs['bamName'], hdfsBAM)
      
-    job.addFollowOnJobFn(adam_convert, masterIP, hdfsBAM, hdfsSNPs, inputs, memory = "%s G" % inputs['driverMemory'])
+    return (hdfsBAM, hdfsSNPs)
 
 
-def adam_convert(job, masterIP, inFile, snpFile, inputs):
+def adam_convert(masterIP, inFile, snpFile, inputs):
     """
     Convert input sam/bam file and known SNPs file into ADAM format
     """
@@ -157,10 +169,8 @@ def adam_convert(job, masterIP, inFile, snpFile, inputs):
     snpFileName = snpFile.split("/")[-1]
     remove_file(masterIP, snpFileName)
  
-    job.addFollowOnJobFn(adam_transform, masterIP, adamFile, adamSnpFile, inputs, memory = "%s G" % inputs['driverMemory'])
 
-
-def adam_transform(job, masterIP, inFile, snpFile, inputs):
+def adam_transform(masterIP, inFile, snpFile, inputs):
     """
     Preprocess inFile with known SNPs snpFile:
         - mark duplicates
@@ -211,10 +221,10 @@ def adam_transform(job, masterIP, inFile, snpFile, inputs):
 
     remove_file(masterIP, "bqsr.adam*")
 
-    job.addFollowOnJobFn(upload_data, masterIP, outFile, inputs, memory = '%s G' % inputs['driverMemory'])
+    return outfile
 
 
-def upload_data(job, masterIP, hdfsName, inputs):
+def upload_data(masterIP, hdfsName, inputs):
     """
     Upload file hdfsName from hdfs to s3
     """
