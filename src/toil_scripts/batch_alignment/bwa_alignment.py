@@ -536,6 +536,9 @@ def upload_to_s3(work_dir, input_args, output_file):
     # what is the path we are uploading to?
     s3_path = os.path.join('s3://', bucket_name, bucket_dir, output_file)
 
+    # how many cores should we use?
+    cores = input_args['cpu_count']
+
     # does this need to be uploaded with encryption?
     if input_args['ssec']:
        key_path = input_args['ssec']
@@ -544,7 +547,7 @@ def upload_to_s3(work_dir, input_args, output_file):
        url = os.path.join(base_url, bucket_name, bucket_dir, output_file)
 
        # Generate keyfile for upload
-       # FIXME: undefined variable uuid
+       uuid = input_args['uuid']
        with open(os.path.join(work_dir, uuid + '.key'), 'wb') as f_out:
            f_out.write(generate_unique_key(key_path, url))
 
@@ -552,6 +555,9 @@ def upload_to_s3(work_dir, input_args, output_file):
        s3am_command = ['s3am',
                        'upload',
                        '--sse-key-file', os.path.join(work_dir, uuid + '.key'),
+                       '--part-size=64M',
+                       '--upload-slots={}'.format(cores),
+                       '--download-slots={}'.format(cores),
                        'file://{}'.format(os.path.join(work_dir, output_file)),
                        s3_path]
 
@@ -559,6 +565,9 @@ def upload_to_s3(work_dir, input_args, output_file):
         # Upload to S3 via S3AM
         s3am_command = ['s3am',
                         'upload',
+                        '--part-size=64M',
+                        '--upload-slots={}'.format(cores),
+                        '--download-slots={}'.format(cores),
                         'file://{}'.format(os.path.join(work_dir, output_file)),
                         s3_path]
 
