@@ -73,14 +73,14 @@ def launch_cluster(params):
                            '--cluster-name', params.cluster_name,
                            '--leader-on-demand',
                            '--ssh-opts',
-                           '"UserKnownHostsFile=/dev/null StrictHostKeyChecking=no"']
+                           '"StrictHostKeyChecking=no"'] +
                           etc +
                           ['toil'])
     subprocess.check_call(['cgcloud',
                            'rsync',
                            '--zone', "{0}a".format(aws_region),
                            '--cluster-name', params.cluster_name,
-                           '--ssh-opts="-o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no"',
+                           '--ssh-opts="-o StrictHostKeyChecking=no"',
                            'toil-leader',
                            '-a',
                            params.manifest_path, ":~/manifest"])
@@ -88,7 +88,7 @@ def launch_cluster(params):
                            'rsync',
                            '--zone', "{0}a".format(aws_region),
                            '--cluster-name', params.cluster_name,
-                           '--ssh-opts="-o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no"',
+                           '--ssh-opts="-o StrictHostKeyChecking=no"',
                            'toil-leader',
                            '-a',
                            params.share.rstrip("/"), ":"])
@@ -99,7 +99,7 @@ def place_boto_on_leader(params):
                            'rsync',
                            '--zone', "{0}a".format(aws_region),
                            '--cluster-name', params.cluster_name,
-                           '--ssh-opts="-o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no"',
+                           '--ssh-opts="-o StrictHostKeyChecking=no"',
                            'toil-leader',
                            params.boto_path, ':~/.boto'])
 
@@ -123,7 +123,6 @@ def launch_pipeline(params):
                                '--zone', "{0}a".format(aws_region),
                                '--cluster-name', params.cluster_name,
                                'toil-leader',
-                               '-o', 'UserKnownHostsFile=/dev/null',
                                '-o', 'StrictHostKeyChecking=no',
                                'screen', '-dmS', params.cluster_name])
 
@@ -182,7 +181,6 @@ def launch_pipeline(params):
                                    '--zone', "{0}a".format(aws_region),
                                    '--cluster-name', params.cluster_name,
                                    'toil-leader',
-                                   '-o', 'UserKnownHostsFile=/dev/null',
                                    '-o', 'StrictHostKeyChecking=no',
                                    'screen', '-S', params.cluster_name,
                                    '-X', 'stuff', '"{0}"'.format(chunk)])
