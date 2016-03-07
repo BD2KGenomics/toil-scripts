@@ -148,6 +148,11 @@ def build_parser():
                         help = "Skip preprocessing and start running from variant calling. Implies --skip_alignment.",
                         action = 'store_true')
 
+    # what directory are our sequence files in?
+    parser.add_argument('-SD', '--sequence_dir',
+                        help = 'Directory where raw sequences are.',
+                        default = 'sequence')
+
     # are we automatically scaling the cluster?
     parser.add_argument('--autoscale_cluster', action='store_true', help = "Scales cluster during pipeline run")
 
@@ -220,7 +225,8 @@ def sample_loop(job,
                 pipeline_to_run,
                 skip_alignment,
                 skip_preprocessing,
-                autoscale_cluster):
+                autoscale_cluster,
+                sequence_dir):
   """
   Loops over the sample_ids (uuids) in the manifest, creating child jobs to process each
   """
@@ -258,7 +264,8 @@ def sample_loop(job,
                       pipeline_to_run,
                       skip_alignment,
                       skip_preprocessing,
-                      autoscale_cluster)
+                      autoscale_cluster,
+                      sequence_dir)
 
 
 def static_dag(job,
@@ -273,7 +280,8 @@ def static_dag(job,
                pipeline_to_run,
                skip_alignment,
                skip_preprocessing,
-               autoscale_cluster):
+               autoscale_cluster,
+               sequence_dir):
     """
     Prefer this here as it allows us to pull the job functions from other jobs
     without rewrapping the job functions back together.
@@ -298,8 +306,8 @@ def static_dag(job,
     bwa_config_path = os.path.join(work_dir, '{uuid}_bwa_config.csv'.format(**locals()))
     bwafp = open(bwa_config_path, "w")
     print >> bwafp, ('{uuid}'
-                     ',s3://{s3_bucket}/sequence/{uuid}_1.fastq.gz'
-                     ',s3://{s3_bucket}/sequence/{uuid}_2.fastq.gz'.format(**locals()))
+                     ',s3://{s3_bucket}/{sequence_dir}/{uuid}_1.fastq.gz'
+                     ',s3://{s3_bucket}/{sequence_dir}/{uuid}_2.fastq.gz'.format(**locals()))
     bwafp.flush()
     bwafp.close()
     bwa_inputs['config'] = job.fileStore.writeGlobalFile(bwa_config_path)
@@ -535,4 +543,5 @@ if __name__ == '__main__':
                                        args.pipeline_to_run,
                                        args.skip_alignment,
                                        args.skip_preprocessing,
-                                       args.autoscale_cluster), args)
+                                       args.autoscale_cluster,
+                                       args.sequence_dir), args)

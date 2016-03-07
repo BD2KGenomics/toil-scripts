@@ -126,6 +126,7 @@ def launch_pipeline(params):
                            "--autoscale_cluster " + \
                            "--retryCount 1 " + \
                            "--s3_bucket {b} " + \
+                           "--sequence_dir {sequence_dir} " + \
                            "--bucket_region {region} " + \
                            "--uuid_manifest ~/manifest " + \
                            "--ref {ref} " + \
@@ -158,6 +159,7 @@ def launch_pipeline(params):
                                                    m=params.memory,
                                                    fs=params.file_size,
                                                    r=restart,
+                                                   sequence_dir=params.sequence_dir,
                                                    **inputs)
 
         for chunk in [pipeline_command[i:i+500] for i in range(0, len(pipeline_command),500)]:
@@ -442,6 +444,9 @@ def main():
     parser_pipeline.add_argument('-m', '--memory', default='200g', help='The memory per worker node in GB') 
     parser_pipeline.add_argument('-f', '--file_size', default='100G', help='Approximate size of the BAM files')
     parser_pipeline.add_argument('-s', '--spark_nodes', default='9', help='The number of nodes needed for the spark cluster')
+    parser_pipeline.add_argument('-SD', '--sequence_dir',
+                                 help = 'Directory where raw sequences are.',
+                                 default = 'sequence')
 
     # Launch Metric Collection
     parser_metric = subparsers.add_parser('launch-metrics', help='Launches metric collection thread')
