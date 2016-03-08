@@ -17,7 +17,6 @@ logging.basicConfig(level=logging.INFO,
                     datefmt='%m-%d %H:%M:%S')
 
 from StringIO import StringIO
-import operator
 import argparse
 from collections import namedtuple
 import csv
