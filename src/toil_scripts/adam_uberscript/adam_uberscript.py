@@ -37,7 +37,6 @@ import boto.sdb
 from boto.ec2 import connect_to_region
 
 from automated_scaling import ClusterSize, Samples
-from toil_scripts.adam_uberscript.input_files import inputs
 
 metric_endtime_margin = timedelta(hours=1)
 metric_initial_wait_period_in_seconds = 0
@@ -132,6 +131,13 @@ def launch_pipeline(params):
             masterIP_arg = "--master_ip %s" % params.master_ip
 
         # Run command on screen session        
+        if params.reference_genome == 'GRCh38':
+            from toil_scripts.adam_uberscript.input_files import GRCh38_inputs as inputs
+        elif params.reference_genome == 'hg19':
+            from toil_scripts.adam_uberscript.input_files import hg19_inputs as inputs
+        else:
+            assert False, "Invalid ref genome %s" % params.reference_genome
+
         pipeline_command = ("PYTHONPATH=$PYTHONPATH:~/toil-scripts/src python -m toil_scripts.adam_gatk_pipeline.align_and_call " +
                             "aws:{region}:{j} " +
                             "--autoscale_cluster " +
@@ -146,9 +152,12 @@ def launch_pipeline(params):
                             "--bwt {bwt} " +
                             "--pac {pac} " +
                             "--sa {sa} " +
-                            "--fai {fai} " +
-                            "--alt {alt} " +
-                            "--use_bwakit " +
+                            "--fai {fai} ")
+        
+        if 'alt' in inputs:
+            pipeline_command += "--alt {alt} "
+        
+        pipeline_command += ("--use_bwakit " +
                             "--num_nodes {s} " +
                             "--driver_memory {m} " +
                             "--executor_memory {m} " +
@@ -467,6 +476,8 @@ def main():
     parser_pipeline.add_argument('-SD', '--sequence_dir',
                                  help = 'Directory where raw sequences are.',
                                  default = 'sequence')
+
+    parser_pipeline.add_argument('-R', '--reference_genome', required=True, choices=['GRCh38','hg19'], help='Reference Genome to align and call against.  Choose between GRCh38 and hg19')
 
     # Launch Metric Collection
     parser_metric = subparsers.add_parser('launch-metrics', help='Launches metric collection thread')
