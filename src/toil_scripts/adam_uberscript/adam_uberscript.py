@@ -1,10 +1,4 @@
 #!/usr/bin/env python2.7
-"""
-Author: Audrey Musselman-Brown
-Date: 2/12/16
-
-Modified from John Vivian's automated_scaling_tests.py script
-"""
 
 import logging
 
