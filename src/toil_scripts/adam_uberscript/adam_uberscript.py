@@ -271,7 +271,7 @@ def grow_cluster(nodes, instance_type, cluster_name, etc):
             time.sleep(5 * 60)
         assert added_nodes <= nodes_left
         nodes_left -= added_nodes
-        log.info('Added {} node(s), {} node(s) left.', added_nodes, nodes_left)
+        log.info('Added %d node(s), %d node(s) left.', added_nodes, nodes_left)
     log.info('Successfully grew cluster by %i node(s) of type %s.', nodes, instance_type)
 
 
