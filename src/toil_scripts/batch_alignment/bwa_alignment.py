@@ -335,17 +335,13 @@ def static_dag_declaration(job, job_vars):
     input_args, ids = job_vars
     cores = input_args['cpu_count']
 
-    # if we run with bwakit, we skip conversion
+    # if we run with bwakit, we skip conversion and reheadering
     if input_args['use_bwakit']:
 
         bwa = job.wrapJobFn(run_bwa, job_vars, cores=cores, disk=input_args['file_size'])
-        header = job.wrapJobFn(fix_bam_header, job_vars, bwa.rv(), disk=input_args['file_size'])
-        rg = job.wrapJobFn(add_readgroups, job_vars, header.rv(), memory='15G', disk=input_args['file_size'])
         
         # Link
         job.addChild(bwa)
-        bwa.addChild(header)
-        header.addChild(rg)
     
     else:
 
@@ -359,6 +355,23 @@ def static_dag_declaration(job, job_vars):
         bwa.addChild(conversion)
         conversion.addChild(header)
         header.addChild(rg)
+
+
+def copy_or_upload(work_dir, input_args, output_file):
+    """
+    Looks at what input args are defined and uploads the file to it's proper location.
+    """
+
+    # Either write file to local output directory or upload to S3 cloud storage
+    if input_args['output_dir']:
+        copy_to_output_dir(work_dir=work_dir,
+                           output_dir=input_args['output_dir'],
+                           files=[output_file])
+
+    if input_args['s3_dir']:
+        upload_to_s3(work_dir,
+                     input_args,
+                     output_file)
 
 
 def run_bwa(job, job_vars):
@@ -382,10 +395,22 @@ def run_bwa(job, job_vars):
         return_input_paths(job, work_dir, ids, 'ref.fa.alt')
 
     if input_args['use_bwakit']:
+
+        # add a read group line
+        # this is an illumina only pipeline, therefore, hardcoding illumina is OK
+        # program unit is required by GATK, but we don't know it
+        # so, fake a bad value
+        uuid = input_args['uuid']
+        library = input_args['lb']
+        rg = "@RG\\tID:%s\\tLB:%s\\tPL:ILLUMINA\\tPU:12345\\tSM:%s" % (uuid,
+                                                                  library,
+                                                                  uuid)
         
         # Call: bwakit
-        parameters = ['-o', '/data/aligned',
-                      '-t', str(cores),
+        parameters = ['-t%d' % cores,
+                      '-R%s' % rg,
+                      '-s',
+                      '-o', '/data/aligned',
                       '/data/ref.fa',
                       '/data/r1.fq.gz',
                       '/data/r2.fq.gz']
@@ -394,10 +419,12 @@ def run_bwa(job, job_vars):
                     tool_parameters=parameters, work_dir=work_dir, sudo=sudo)
 
         # bwa insists on adding an `*.aln.sam` suffix, so rename the output file
+        output_file = '{}.bam'.format(uuid)
         os.rename(os.path.join(work_dir, 'aligned.aln.bam'),
-                  os.path.join(work_dir, 'aligned.bam'))
+                  os.path.join(work_dir, output_file))
         
-        return job.fileStore.writeGlobalFile(os.path.join(work_dir, 'aligned.bam'))
+        # Either write file to local output directory or upload to S3 cloud storage
+        copy_or_upload(work_dir, input_args, output_file)
         
     else:
         # Call: BWA
@@ -514,10 +541,7 @@ def add_readgroups(job, job_vars, bam_id):
                 tool_parameters=parameters, work_dir=work_dir, java_opts='-Xmx15G', sudo=sudo)
 
     # Either write file to local output directory or upload to S3 cloud storage
-    if input_args['output_dir']:
-        copy_to_output_dir(work_dir=work_dir, output_dir=input_args['output_dir'], files=[output_file])
-    if input_args['s3_dir']:
-        upload_to_s3(work_dir, input_args, output_file)
+    copy_or_upload(work_dir, input_args, output_file)
         
 
 def upload_to_s3(work_dir, input_args, output_file):
