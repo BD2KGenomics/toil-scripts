@@ -121,10 +121,13 @@ import boto.sdb
 from toil.job import Job
 
 # import job steps from other toil pipelines
-from toil_scripts.adam_pipeline.spark_toil_script import *
+from toil_scripts.adam_pipeline.adam_preprocessing import *
 from toil_scripts.batch_alignment.bwa_alignment import *
 from toil_scripts.gatk_germline.germline import *
 from toil_scripts.gatk_processing.gatk_preprocessing import *
+
+# these don't seem necessary! but, must be imported here due to a serialization issue
+from toil_scripts.spark_utils.spawn_cluster import *
 
 # import autoscaling tools
 from toil_scripts.adam_uberscript.automated_scaling import Samples
@@ -190,8 +193,10 @@ def build_parser():
     parser.set_defaults(sudo = False)
 
     # add ADAM args
-    parser.add_argument('-N', '--num_nodes', type = int, required = True,
-                        help = 'Number of nodes to use')
+    parser.add_argument('-N', '--num_nodes', type = int, required = False, default = None,
+                        help = 'Number of nodes to use. Exclusive of --master_ip.')
+    parser.add_argument('-MI', '--master_ip', required = False, default = None,
+                        help = 'Master IP for Spark/HDFS. Should be provided if pointing at static spark cluster.')
     parser.add_argument('-d', '--driver_memory', required = True,
                         help = 'Amount of memory to allocate for Spark Driver.')
     parser.add_argument('-q', '--executor_memory', required = True,
@@ -341,7 +346,7 @@ def static_dag(job,
                         bwa_inputs).encapsulate()
 
     # get head ADAM preprocessing job function and encapsulate it
-    adam_preprocess = job.wrapJobFn(start_master,
+    adam_preprocess = job.wrapJobFn(static_adam_preprocessing_dag,
                                     adam_inputs).encapsulate()
 
     # get head GATK preprocessing job function and encapsulate it
@@ -366,7 +371,10 @@ def static_dag(job,
     # - _n_ spark workers/hdfs datanodes
     if (pipeline_to_run == "adam" or
         pipeline_to_run == "both"):
-        nodes_needed_after_alignment += (adam_inputs['numWorkers'] + 2)
+        if adam_inputs['masterIP']:
+            nodes_needed_after_alignment += 1
+        else:
+            nodes_needed_after_alignment += (adam_inputs['numWorkers'] + 2)
         
     # gatk needs one node
     if (pipeline_to_run == "gatk" or
@@ -415,7 +423,7 @@ def static_dag(job,
 
             # if we are running autoscaling, then we should decrease the cluster
             # size after adam completes
-            if autoscale_cluster:
+            if autoscale_cluster and not adam_inputs['masterIP']:
                 adam_preprocess.addChild(decrease_nodes_after_adam_preprocess)
                 decrease_nodes_after_adam_preprocess.addChild(gatk_adam_call)
             else:
@@ -478,15 +486,23 @@ if __name__ == '__main__':
                   'file_size': args.file_size,
                   'use_bwakit': args.use_bwakit}
 
-    if args.num_nodes <= 1:
-        raise ValueError("--num_nodes allocates one Spark/HDFS master and n-1 workers, and thus must be greater than 1. %d was passed." % args.num_nodes)
+    if not ((args.master_ip and not args.num_nodes) or
+	    (args.master_ip and args.num_nodes == 0) or
+            (not args.master_ip and args.num_nodes)):
+        raise ValueError("Only one of --master_ip (%s) and --num_nodes (%d) can be provided." % 
+                         (args.master_ip, args.num_nodes))
+
+    if args.num_nodes <= 1 and not args.master_ip:
+        raise ValueError("--num_nodes allocates one Spark/HDFS master and n-1 workers, and thus must be greater than 1. %d was passed." %
+                         args.num_nodes)
 
     adam_inputs = {'numWorkers': args.num_nodes - 1,
                    'knownSNPs':  args.dbsnp.replace("https://s3-us-west-2.amazonaws.com/", "s3://"),
                    'driverMemory': args.driver_memory,
                    'executorMemory': args.executor_memory,
                    'sudo': args.sudo,
-                   'suffix': '.adam'}
+                   'suffix': '.adam',
+                   'masterIP': args.master_ip}
 
     gatk_preprocess_inputs = {'ref.fa': args.ref,
                               'phase.vcf': args.phase,

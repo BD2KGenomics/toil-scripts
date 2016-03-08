@@ -41,7 +41,7 @@ from toil.job import Job
 
 from toil_scripts import download_from_s3_url
 
-log = logging.getLogger(__name__)
+_log = logging.getLogger(__name__)
 
 
 def build_parser():
@@ -144,7 +144,7 @@ def download_from_url(job, url):
         else:
             try:
                 download_cmd = ['curl', '-fs', '--retry', '5', '--create-dir', url, '-o', file_path]
-                log.info("Downloading file using command %s." % " ".join(download_cmd))
+                _log.info("Downloading file using command %s." % " ".join(download_cmd))
                 subprocess.check_call(download_cmd)
             except OSError:
                 raise RuntimeError('Failed to find "curl". Install via "apt-get install curl"')
@@ -206,7 +206,7 @@ def docker_call(work_dir,
     if docker_parameters:
         base_docker_call = base_docker_call + docker_parameters
 
-    log.warn("Calling docker with %s." % " ".join(base_docker_call + [tool] + tool_parameters))
+    _log.warn("Calling docker with %s." % " ".join(base_docker_call + [tool] + tool_parameters))
 
     try:
         if outfile:
@@ -498,7 +498,7 @@ def add_readgroups(job, job_vars, bam_id):
     output_file = '{}.bam'.format(uuid)
     # Retrieve input file
     job.fileStore.readGlobalFile(bam_id, os.path.join(work_dir, 'aligned_fixpg.bam'))
-    log.warn("Read global file to %s, adding read groups and saving to %s." % (os.path.join(work_dir, 'aligned_fixpg.bam'), os.path.join(work_dir, output_file)))
+    _log.warn("Read global file to %s, adding read groups and saving to %s." % (os.path.join(work_dir, 'aligned_fixpg.bam'), os.path.join(work_dir, output_file)))
 
     # Call: Samtools
     parameters = ['AddOrReplaceReadGroups',
@@ -572,17 +572,17 @@ def upload_to_s3(work_dir, input_args, output_file):
                         s3_path]
 
     # run upload
-    log.info("Calling s3am with %s" % " ".join(s3am_command))
+    _log.info("Calling s3am with %s" % " ".join(s3am_command))
     try:
         subprocess.check_call(s3am_command)
     except:
-        log.error("Upload to %s failed. Cancelling..." % s3_path)
+        _log.error("Upload to %s failed. Cancelling..." % s3_path)
         s3am_cancel = ['s3am', 'cancel', s3_path]
         
         try:
             subprocess.check_call(s3am_cancel)
         except:
-            log.error("Cancelling upload with '%s' failed." % " ".join(s3am_cancel))
+            _log.error("Cancelling upload with '%s' failed." % " ".join(s3am_cancel))
 
         raise
 
