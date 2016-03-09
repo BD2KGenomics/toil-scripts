@@ -4,6 +4,7 @@
 # basicConfig.
 
 import logging
+
 log = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO,
                     format='%(asctime)-15s:%(levelname)s:%(name)s:%(message)s',
@@ -42,6 +43,7 @@ cluster_scaling_interval_in_seconds = 300
 cluster_size_lock = threading.Lock()
 
 aws_region = 'us-west-2'
+
 
 def launch_cluster(params):
     """
@@ -85,6 +87,7 @@ def launch_cluster(params):
                            '-a',
                            params.share.rstrip('/'), ':'])
 
+
 def place_boto_on_leader(params):
     log.info('Adding a .boto to leader to avoid credential timeouts.')
     subprocess.check_call(['cgcloud',
@@ -117,16 +120,16 @@ def launch_pipeline(params):
                                'toil-leader',
                                '-o', 'StrictHostKeyChecking=no',
                                'screen', '-dmS', params.cluster_name])
-    
+
         if params.reference_genome == 'GRCh38':
             from toil_scripts.adam_uberscript.input_files import GRCh38_inputs as inputs
         elif params.reference_genome == 'hg19':
             from toil_scripts.adam_uberscript.input_files import hg19_inputs as inputs
         else:
             assert False, 'Invalid ref genome %s' % params.reference_genome
-    
+
         # Assemble pipeline command to be stuffed into a screen session
-    
+
         pipeline_command = ['PYTHONPATH=$PYTHONPATH:~/toil-scripts/src',
                             'python -m toil_scripts.adam_gatk_pipeline.align_and_call',
                             'aws:{region}:{j}',
@@ -166,7 +169,7 @@ def launch_pipeline(params):
             pipeline_command.append('--alt {alt}')
 
         pipeline_command.append('{r} 2>&1 | tee toil_output\n')
-    
+
         pipeline_command = ' '.join(pipeline_command)
         pipeline_command = pipeline_command.format(j=jobstore,
                                                    b=params.bucket,
@@ -177,7 +180,7 @@ def launch_pipeline(params):
                                                    r=restart,
                                                    sequence_dir=params.sequence_dir,
                                                    **inputs)
-    
+
         chunk_size = 500
         for chunk in [pipeline_command[i:i + chunk_size] for i in range(0, len(pipeline_command), chunk_size)]:
             subprocess.check_call(['cgcloud',
@@ -188,7 +191,7 @@ def launch_pipeline(params):
                                    '-o', 'StrictHostKeyChecking=no',
                                    'screen', '-S', params.cluster_name,
                                    '-X', 'stuff', quote(chunk)])
-    
+
     except subprocess.CalledProcessError as e:
         log.info('Pipeline exited with non-zero status code: {}'.format(e))
 
@@ -235,7 +238,6 @@ def parse_cgcloud_list_output(output):
 
 
 def get_desired_cluster_size(conn, dom):
-    
     nodes_per_sample = Samples.load(conn, dom)
     return sum(map(lambda x: x[1], nodes_per_sample.samples.values()))
 
@@ -289,11 +291,12 @@ def manage_metrics_and_cluster_scaling(params):
     grow_cluster_thread.join()
     metric_collection_thread.join()
 
+
 def monitor_cluster_size(params, conn, dom):
     """
     Monitors cluster size and grows it if the desired size is larger than the current size
     """
-    
+
     # if user provides a string to add to /etc/hosts, let's pass that through
     etc = []
     if params.add_to_etc_hosts:
@@ -317,6 +320,7 @@ def monitor_cluster_size(params, conn, dom):
         wait_time = cluster_scaling_interval_in_seconds - resize_time
         if wait_time > 0:
             time.sleep(wait_time)
+
 
 # FIXME: unused parameters conn and dom
 
@@ -360,7 +364,7 @@ def collect_realtime_metrics(params, conn, dom, threshold=0.5, region='us-west-2
     log.info('Metric collection has started. '
              'Waiting {} seconds before initial collection.'.format(metric_initial_wait_period_in_seconds))
     time.sleep(metric_initial_wait_period_in_seconds)
-    
+
     while True:
         # FIXME: why doesn't filter_cluster=params.cluster_name work?
         ids = get_instance_ids(filter_name=params.namespace.strip('/').rstrip('/') + '_toil-worker')
