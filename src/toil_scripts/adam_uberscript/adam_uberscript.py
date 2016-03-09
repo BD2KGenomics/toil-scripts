@@ -49,7 +49,7 @@ def launch_cluster(params):
     """
     Launches a toil cluster with 1 worker, with shared dir S, of instance type I
 
-    params: argparse.Namespace      Input arguments
+    :param argparse.Namespace params: parsed command line arguments and options 
     """
     log.info('Launching cluster of size: {} and type: {}'.format(1, params.instance_type))
 
@@ -101,9 +101,9 @@ def place_boto_on_leader(params):
 
 def launch_pipeline(params):
     """
-    Launches pipeline on toil-leader in a screen named the cluster run name
+    Launches pipeline in a screen session on toil-leader. 
 
-    params: argparse.Namespace      Input arguments
+    :param argparse.Namespace params: parsed command line arguments and options 
     """
     if not params.jobstore:
         jobstore = '{}-{}'.format(uuid4(), str(datetime.utcnow().date()))
