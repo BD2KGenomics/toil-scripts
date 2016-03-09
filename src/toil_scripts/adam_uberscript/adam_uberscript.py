@@ -116,56 +116,57 @@ def launch_pipeline(params):
                                'toil-leader',
                                '-o', 'StrictHostKeyChecking=no',
                                'screen', '-dmS', params.cluster_name])
-
-        # do we have a defined master ip?
-        masterIP_arg = ''
-        if params.master_ip:
-            masterIP_arg = '--master_ip %s' % params.master_ip
-
-        # Run command on screen session        
+    
         if params.reference_genome == 'GRCh38':
             from toil_scripts.adam_uberscript.input_files import GRCh38_inputs as inputs
         elif params.reference_genome == 'hg19':
             from toil_scripts.adam_uberscript.input_files import hg19_inputs as inputs
         else:
             assert False, 'Invalid ref genome %s' % params.reference_genome
+    
+        # Assemble pipeline command to be stuffed into a screen session
+    
+        pipeline_command = ['PYTHONPATH=$PYTHONPATH:~/toil-scripts/src',
+                            'python -m toil_scripts.adam_gatk_pipeline.align_and_call',
+                            'aws:{region}:{j}',
+                            '--autoscale_cluster',
+                            '--sequence_dir {sequence_dir}',
+                            '--retryCount 1',
+                            '--s3_bucket {b}',
+                            '--bucket_region {region}',
+                            '--uuid_manifest ~/manifest',
+                            '--ref {ref}',
+                            '--amb {amb}',
+                            '--ann {ann}',
+                            '--bwt {bwt}',
+                            '--pac {pac}',
+                            '--sa {sa}',
+                            '--fai {fai}',
+                            '--use_bwakit',
+                            '--num_nodes {s}',
+                            '--driver_memory {m}',
+                            '--executor_memory {m}',
+                            '--phase {phase}',
+                            '--mills {mills}',
+                            '--dbsnp {dbsnp}',
+                            '--omni {omni}',
+                            '--hapmap {hapmap}',
+                            '--batchSystem mesos',
+                            '--mesosMaster $(hostname -i):5050',
+                            '--workDir /var/lib/toil',
+                            '--file_size {fs}',
+                            '--logInfo']
 
-        pipeline_command = ('PYTHONPATH=$PYTHONPATH:~/toil-scripts/src python -m toil_scripts.adam_gatk_pipeline.align_and_call ' +
-                            'aws:{region}:{j} ' +
-                            '--autoscale_cluster ' +
-                            '--sequence_dir {sequence_dir} ' +
-                            '--retryCount 1 ' +
-                            '--s3_bucket {b} ' +
-                            '--bucket_region {region} ' +
-                            '--uuid_manifest ~/manifest ' +
-                            '--ref {ref} ' +
-                            '--amb {amb} ' +
-                            '--ann {ann} ' +
-                            '--bwt {bwt} ' +
-                            '--pac {pac} ' +
-                            '--sa {sa} ' +
-                            '--fai {fai} ')
-        
+        # Do we have a defined master IP?
+        if params.master_ip:
+            pipeline_command.append('--master_ip %s' % params.master_ip)
+
         if 'alt' in inputs:
-            pipeline_command += '--alt {alt} '
-        
-        pipeline_command += ('--use_bwakit ' +
-                            '--num_nodes {s} ' +
-                            '--driver_memory {m} ' +
-                            '--executor_memory {m} ' +
-                            '--phase {phase} ' +
-                            '--mills {mills} ' +
-                            '--dbsnp {dbsnp} ' +
-                            '--omni {omni} ' +
-                            '--hapmap {hapmap} ' +
-                            '--batchSystem mesos ' +
-                            '--mesosMaster $(hostname -i):5050 ' +
-                            '--workDir /var/lib/toil ' +
-                            '--file_size {fs} ' +
-                            '--logInfo ' +
-                            masterIP_arg +
-                            '{r} 2>&1 | tee toil_output\n')
+            pipeline_command.append('--alt {alt}')
 
+        pipeline_command.append('{r} 2>&1 | tee toil_output\n')
+    
+        pipeline_command = ' '.join(pipeline_command)
         pipeline_command = pipeline_command.format(j=jobstore,
                                                    b=params.bucket,
                                                    region=aws_region,
