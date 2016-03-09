@@ -61,11 +61,10 @@ def launch_cluster(params):
     subprocess.check_call(['cgcloud',
                            'create-cluster',
                            '--zone', aws_region + 'a',
+                           '--cluster-name', params.cluster_name,
                            '--leader-instance-type', params.leader_type,
                            '--instance-type', params.instance_type,
                            '--num-workers', '1',
-                           '--cluster-name', params.cluster_name,
-                           '--leader-on-demand',
                            '--ssh-opts',
                            '"StrictHostKeyChecking=no"'] +
                           etc +
