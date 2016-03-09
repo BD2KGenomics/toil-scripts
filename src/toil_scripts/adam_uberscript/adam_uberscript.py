@@ -1,42 +1,36 @@
 #!/usr/bin/env python2.7
-"""
-Author: Audrey Musselman-Brown
-Date: 2/12/16
-
-Modified from John Vivian's automated_scaling_tests.py script
-"""
-
-import logging
 
 # Initialize logging before the remaining imports to prevent those imported modules from snatching that one shot at 
 # basicConfig.
+
+import logging
 
 log = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO,
                     format='%(asctime)-15s:%(levelname)s:%(name)s:%(message)s',
                     datefmt='%m-%d %H:%M:%S')
 
-from StringIO import StringIO
-import operator
 import argparse
-from collections import namedtuple
 import csv
-import os
-import subprocess
-import boto
-from boto.exception import BotoServerError, EC2ResponseError
-import boto.ec2.cloudwatch
-import time
-from uuid import uuid4
-from tqdm import tqdm
 import errno
-from boto_lib import get_instance_ids
-from datetime import datetime, timedelta
+import subprocess
 import threading
-import boto.sdb
-from boto.ec2 import connect_to_region
+import time
+from StringIO import StringIO
+from collections import namedtuple
+from datetime import datetime, timedelta
+from pipes import quote
+from uuid import uuid4
 
+import boto
+import boto.ec2.cloudwatch
+import boto.sdb
+import os
 from automated_scaling import ClusterSize, Samples
+from boto.ec2 import connect_to_region
+from boto.exception import BotoServerError, EC2ResponseError
+from boto_lib import get_instance_ids
+from tqdm import tqdm
 
 metric_endtime_margin = timedelta(hours=1)
 metric_initial_wait_period_in_seconds = 0
@@ -50,53 +44,54 @@ cluster_size_lock = threading.Lock()
 
 aws_region = 'us-west-2'
 
+
 def launch_cluster(params):
     """
     Launches a toil cluster with 1 worker, with shared dir S, of instance type I
 
-    params: argparse.Namespace      Input arguments
+    :param argparse.Namespace params: parsed command line arguments and options 
     """
     log.info('Launching cluster of size: {} and type: {}'.format(1, params.instance_type))
 
     # if user provides a string to add to /etc/hosts, let's pass that through
     etc = []
     if params.add_to_etc_hosts:
-        etc = ["-O", "etc_hosts_entries=%s" % params.add_to_etc_hosts]
+        etc = ['-O', 'etc_hosts_entries=%s' % params.add_to_etc_hosts]
 
     subprocess.check_call(['cgcloud',
                            'create-cluster',
-                           '--zone', "{0}a".format(aws_region),
+                           '--zone', aws_region + 'a',
+                           '--cluster-name', params.cluster_name,
                            '--leader-instance-type', params.leader_type,
                            '--instance-type', params.instance_type,
-                           '--num-workers', "1",
-                           '--cluster-name', params.cluster_name,
-                           '--leader-on-demand',
+                           '--num-workers', '1',
                            '--ssh-opts',
                            '"StrictHostKeyChecking=no"'] +
                           etc +
                           ['toil'])
     subprocess.check_call(['cgcloud',
                            'rsync',
-                           '--zone', "{0}a".format(aws_region),
+                           '--zone', aws_region + 'a',
                            '--cluster-name', params.cluster_name,
                            '--ssh-opts="-o StrictHostKeyChecking=no"',
                            'toil-leader',
                            '-a',
-                           params.manifest_path, ":~/manifest"])
+                           params.manifest_path, ':~/manifest'])
     subprocess.check_call(['cgcloud',
                            'rsync',
-                           '--zone', "{0}a".format(aws_region),
+                           '--zone', aws_region + 'a',
                            '--cluster-name', params.cluster_name,
                            '--ssh-opts="-o StrictHostKeyChecking=no"',
                            'toil-leader',
                            '-a',
-                           params.share.rstrip("/"), ":"])
+                           params.share.rstrip('/'), ':'])
+
 
 def place_boto_on_leader(params):
     log.info('Adding a .boto to leader to avoid credential timeouts.')
     subprocess.check_call(['cgcloud',
                            'rsync',
-                           '--zone', "{0}a".format(aws_region),
+                           '--zone', aws_region + 'a',
                            '--cluster-name', params.cluster_name,
                            '--ssh-opts="-o StrictHostKeyChecking=no"',
                            'toil-leader',
@@ -105,9 +100,9 @@ def place_boto_on_leader(params):
 
 def launch_pipeline(params):
     """
-    Launches pipeline on toil-leader in a screen named the cluster run name
+    Launches pipeline in a screen session on toil-leader. 
 
-    params: argparse.Namespace      Input arguments
+    :param argparse.Namespace params: parsed command line arguments and options 
     """
     if not params.jobstore:
         jobstore = '{}-{}'.format(uuid4(), str(datetime.utcnow().date()))
@@ -119,61 +114,62 @@ def launch_pipeline(params):
         # Create screen session
         subprocess.check_call(['cgcloud',
                                'ssh',
-                               '--zone', "{0}a".format(aws_region),
+                               '--zone', aws_region + 'a',
                                '--cluster-name', params.cluster_name,
                                'toil-leader',
                                '-o', 'StrictHostKeyChecking=no',
                                'screen', '-dmS', params.cluster_name])
 
-        # do we have a defined master ip?
-        masterIP_arg = ""
-        if params.master_ip:
-            masterIP_arg = "--master_ip %s" % params.master_ip
-
-        # Run command on screen session        
         if params.reference_genome == 'GRCh38':
             from toil_scripts.adam_uberscript.input_files import GRCh38_inputs as inputs
         elif params.reference_genome == 'hg19':
             from toil_scripts.adam_uberscript.input_files import hg19_inputs as inputs
         else:
-            assert False, "Invalid ref genome %s" % params.reference_genome
+            assert False, 'Invalid ref genome %s' % params.reference_genome
 
-        pipeline_command = ("PYTHONPATH=$PYTHONPATH:~/toil-scripts/src python -m toil_scripts.adam_gatk_pipeline.align_and_call " +
-                            "aws:{region}:{j} " +
-                            "--autoscale_cluster " +
-                            "--sequence_dir {sequence_dir} " +
-                            "--retryCount 1 " +
-                            "--s3_bucket {b} " +
-                            "--bucket_region {region} " +
-                            "--uuid_manifest ~/manifest " +
-                            "--ref {ref} " +
-                            "--amb {amb} " +
-                            "--ann {ann} " +
-                            "--bwt {bwt} " +
-                            "--pac {pac} " +
-                            "--sa {sa} " +
-                            "--fai {fai} ")
-        
+        # Assemble pipeline command to be stuffed into a screen session
+
+        pipeline_command = ['PYTHONPATH=$PYTHONPATH:~/toil-scripts/src',
+                            'python -m toil_scripts.adam_gatk_pipeline.align_and_call',
+                            'aws:{region}:{j}',
+                            '--autoscale_cluster',
+                            '--sequence_dir {sequence_dir}',
+                            '--retryCount 1',
+                            '--s3_bucket {b}',
+                            '--bucket_region {region}',
+                            '--uuid_manifest ~/manifest',
+                            '--ref {ref}',
+                            '--amb {amb}',
+                            '--ann {ann}',
+                            '--bwt {bwt}',
+                            '--pac {pac}',
+                            '--sa {sa}',
+                            '--fai {fai}',
+                            '--use_bwakit',
+                            '--num_nodes {s}',
+                            '--driver_memory {m}',
+                            '--executor_memory {m}',
+                            '--phase {phase}',
+                            '--mills {mills}',
+                            '--dbsnp {dbsnp}',
+                            '--omni {omni}',
+                            '--hapmap {hapmap}',
+                            '--batchSystem mesos',
+                            '--mesosMaster $(hostname -i):5050',
+                            '--workDir /var/lib/toil',
+                            '--file_size {fs}',
+                            '--logInfo']
+
+        # Do we have a defined master IP?
+        if params.master_ip:
+            pipeline_command.append('--master_ip %s' % params.master_ip)
+
         if 'alt' in inputs:
-            pipeline_command += "--alt {alt} "
-        
-        pipeline_command += ("--use_bwakit " +
-                            "--num_nodes {s} " +
-                            "--driver_memory {m} " +
-                            "--executor_memory {m} " +
-                            "--phase {phase} " +
-                            "--mills {mills} " +
-                            "--dbsnp {dbsnp} " +
-                            "--omni {omni} " +
-                            "--hapmap {hapmap} " +
-                            "--batchSystem mesos " +
-                            "--mesosMaster $(hostname -i):5050 " +
-                            "--workDir /var/lib/toil " +
-                            "--file_size {fs} " +
-                            "--logInfo " +
-                            masterIP_arg +
-                            "{r} 2>&1 | tee toil_output\n")
+            pipeline_command.append('--alt {alt}')
 
+        pipeline_command.append('{r} 2>&1 | tee toil_output\n')
+
+        pipeline_command = ' '.join(pipeline_command)
         pipeline_command = pipeline_command.format(j=jobstore,
                                                    b=params.bucket,
                                                    region=aws_region,
@@ -184,16 +180,17 @@ def launch_pipeline(params):
                                                    sequence_dir=params.sequence_dir,
                                                    **inputs)
 
-        for chunk in [pipeline_command[i:i+500] for i in range(0, len(pipeline_command),500)]:
+        chunk_size = 500
+        for chunk in [pipeline_command[i:i + chunk_size] for i in range(0, len(pipeline_command), chunk_size)]:
             subprocess.check_call(['cgcloud',
                                    'ssh',
-                                   '--zone', "{0}a".format(aws_region),
+                                   '--zone', aws_region + 'a',
                                    '--cluster-name', params.cluster_name,
                                    'toil-leader',
                                    '-o', 'StrictHostKeyChecking=no',
                                    'screen', '-S', params.cluster_name,
-                                   '-X', 'stuff', '"{0}"'.format(chunk)])
-    
+                                   '-X', 'stuff', quote(chunk)])
+
     except subprocess.CalledProcessError as e:
         log.info('Pipeline exited with non-zero status code: {}'.format(e))
 
@@ -232,7 +229,7 @@ def list_workers(cluster_name):
     cluster_name, role_name, ordinal, cluster_ordinal, private_ip_address, ip_address, instance_id, instance_type,
     launch_time, state and zone
     """
-    return parse_cgcloud_list_output(subprocess.check_output(["cgcloud", "list", "-c", cluster_name, "toil-worker"]))
+    return parse_cgcloud_list_output(subprocess.check_output(['cgcloud', 'list', '-c', cluster_name, 'toil-worker']))
 
 
 def parse_cgcloud_list_output(output):
@@ -240,7 +237,6 @@ def parse_cgcloud_list_output(output):
 
 
 def get_desired_cluster_size(conn, dom):
-    
     nodes_per_sample = Samples.load(conn, dom)
     return sum(map(lambda x: x[1], nodes_per_sample.samples.values()))
 
@@ -257,7 +253,7 @@ def grow_cluster(nodes, instance_type, cluster_name, etc):
     while nodes_left > 0:
         log.info('Attempting to grow cluster by %i node(s) of type: %s', nodes_left, instance_type)
 
-        output = ""
+        output = ''
         cmd = (['cgcloud',
                 'grow-cluster',
                 '--list',
@@ -269,8 +265,8 @@ def grow_cluster(nodes, instance_type, cluster_name, etc):
         try:
             output = subprocess.check_output(cmd)
         except subprocess.CalledProcessError as cpe:
-            log.warn("Running command %s returned with error code %d.",
-                     " ".join(cmd),
+            log.warn('Running command %s returned with error code %d.',
+                     ' '.join(cmd),
                      cpe.returncode)
             output = cpe.output
 
@@ -286,7 +282,7 @@ def grow_cluster(nodes, instance_type, cluster_name, etc):
 
 def manage_metrics_and_cluster_scaling(params):
     conn = boto.sdb.connect_to_region(aws_region)
-    dom = conn.get_domain("{0}--files".format(params.jobstore))
+    dom = conn.get_domain('{0}--files'.format(params.jobstore))
     grow_cluster_thread = threading.Thread(target=monitor_cluster_size, args=(params, conn, dom))
     metric_collection_thread = threading.Thread(target=collect_realtime_metrics, args=(params, conn, dom))
     grow_cluster_thread.start()
@@ -294,15 +290,16 @@ def manage_metrics_and_cluster_scaling(params):
     grow_cluster_thread.join()
     metric_collection_thread.join()
 
+
 def monitor_cluster_size(params, conn, dom):
     """
     Monitors cluster size and grows it if the desired size is larger than the current size
     """
-    
+
     # if user provides a string to add to /etc/hosts, let's pass that through
     etc = []
     if params.add_to_etc_hosts:
-        etc = ["-O", "etc_hosts_entries=%s" % params.add_to_etc_hosts]
+        etc = ['-O', 'etc_hosts_entries=%s' % params.add_to_etc_hosts]
 
     log.info('Cluster size monitor has started.')
     time.sleep(scaling_initial_wait_period_in_seconds)
@@ -322,6 +319,7 @@ def monitor_cluster_size(params, conn, dom):
         wait_time = cluster_scaling_interval_in_seconds - resize_time
         if wait_time > 0:
             time.sleep(wait_time)
+
 
 # FIXME: unused parameters conn and dom
 
@@ -355,7 +353,7 @@ def collect_realtime_metrics(params, conn, dom, threshold=0.5, region='us-west-2
     conn = boto.ec2.connect_to_region(region)
     cw = boto.ec2.cloudwatch.connect_to_region(region)
     sdbconn = boto.sdb.connect_to_region(region)
-    dom = sdbconn.get_domain("{0}--files".format(params.jobstore))
+    dom = sdbconn.get_domain('{0}--files'.format(params.jobstore))
 
     # Create initial variables
     start = datetime.utcfromtimestamp(start)
@@ -365,7 +363,7 @@ def collect_realtime_metrics(params, conn, dom, threshold=0.5, region='us-west-2
     log.info('Metric collection has started. '
              'Waiting {} seconds before initial collection.'.format(metric_initial_wait_period_in_seconds))
     time.sleep(metric_initial_wait_period_in_seconds)
-    
+
     while True:
         # FIXME: why doesn't filter_cluster=params.cluster_name work?
         ids = get_instance_ids(filter_name=params.namespace.strip('/').rstrip('/') + '_toil-worker')
@@ -444,59 +442,70 @@ def main():
     """
     Modular script for running toil pipelines
     """
-    parser = argparse.ArgumentParser(description=main.__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser = argparse.ArgumentParser(description=main.__doc__,
+                                     formatter_class=argparse.RawDescriptionHelpFormatter)
     subparsers = parser.add_subparsers(dest='command')
 
     # Launch Cluster
-    parser_cluster = subparsers.add_parser('launch-cluster', help='Launches AWS cluster via CGCloud')
-    parser_cluster.add_argument('-c', '--cluster-name', required=True, help='Name of cluster.')
-    parser_cluster.add_argument('-S', '--share', required=True,
-                                help='Full path to directory: pipeline script, launch script, and master key.')
-    parser_cluster.add_argument('-t', '--instance-type', default='r3.8xlarge',
-                                help='Worker instance type. e.g.  m4.large or c3.8xlarge.')
-    parser_cluster.add_argument('-T', '--leader-type', default='m3.medium', help='Sets leader instance type.')
-    parser_cluster.add_argument('-b', '--boto-path', default='/home/mesosbox/.boto', type=str,
-                                help='Path to local .boto file to be placed on leader.')
-    parser_cluster.add_argument('-M', '--manifest-path', required=True, help='Path to manifest file.')
-    parser_cluster.add_argument('-etc', '--add-to-etc-hosts', default=None,
-                                required=False, help="Optional entry to add to /etc/hosts")
+    cluster_sp = subparsers.add_parser('launch-cluster',
+                                       help='Launches EC2 cluster via CGCloud')
+    cluster_sp.add_argument('-S', '--share', required=True,
+                            help='Full path to directory containing pipeline script, launch script, and master key.')
+    cluster_sp.add_argument('-T', '--leader-type', default='m3.medium',
+                            help='Sets leader instance type.')
+    cluster_sp.add_argument('-b', '--boto-path', default='/home/mesosbox/.boto', type=str,
+                            help='Path to local .boto file to be placed on leader.')
+    cluster_sp.add_argument('-M', '--manifest-path', required=True, help='Path to manifest file.')
 
     # Launch Pipeline
-    parser_pipeline = subparsers.add_parser('launch-pipeline', help='Launches pipeline')
-    parser_pipeline.add_argument('-c', '--cluster-name', required=True, help='Name of cluster.')
-    parser_pipeline.add_argument('-j', '--jobstore', default=None,
-                                 help='Name of jobstore. Defaults to UUID-Date if not set')
-    parser_pipeline.add_argument('--restart', default=None, action='store_true',
-                                 help='Attempts to restart pipeline, requires existing jobstore.')
-    parser_pipeline.add_argument('--master_ip', default=None, help = 'Spark Master IP.')
-    parser_pipeline.add_argument('-B', '--bucket', help='Set destination bucket.')
-    parser_pipeline.add_argument('-m', '--memory', default='200g', help='The memory per worker node in GB') 
-    parser_pipeline.add_argument('-f', '--file_size', default='100G', help='Approximate size of the BAM files')
-    parser_pipeline.add_argument('-s', '--spark_nodes', default='9', help='The number of nodes needed for the spark cluster')
-    parser_pipeline.add_argument('-SD', '--sequence_dir',
-                                 help = 'Directory where raw sequences are.',
-                                 default = 'sequence')
-
-    parser_pipeline.add_argument('-R', '--reference_genome', required=True, choices=['GRCh38','hg19'], help='Reference Genome to align and call against.  Choose between GRCh38 and hg19')
+    pipeline_sp = subparsers.add_parser('launch-pipeline',
+                                        help='Launches pipeline')
+    pipeline_sp.add_argument('-j', '--jobstore', default=None,
+                             help='Name of jobstore. Defaults to UUID-Date if not set')
+    pipeline_sp.add_argument('--restart', default=None, action='store_true',
+                             help='Attempts to restart pipeline, requires existing job store.')
+    pipeline_sp.add_argument('--master_ip', default=None,
+                             help='Spark Master IP.')
+    pipeline_sp.add_argument('-B', '--bucket',
+                             help='The name of the destination bucket.')
+    pipeline_sp.add_argument('-m', '--memory', default='200g',
+                             help='The amount of memory per worker node in GiB. Must match what EC2 provides on '
+                                  'the specified worker instance type')
+    pipeline_sp.add_argument('-f', '--file_size', default='100G',
+                             help='Approximate size of the BAM files')
+    pipeline_sp.add_argument('-s', '--spark_nodes', default='9',
+                             help='The number of nodes needed for each Spark sub-cluster')
+    pipeline_sp.add_argument('-SD', '--sequence_dir', default='sequence',
+                             help='Directory where raw sequences are.')
+    pipeline_sp.add_argument('-R', '--reference_genome', required=True,
+                             choices=['GRCh38', 'hg19'],
+                             help='Reference genome to align and call against. Choose between GRCh38 and hg19.')
 
     # Launch Metric Collection
-    parser_metric = subparsers.add_parser('launch-metrics', help='Launches metric collection thread')
-    parser_metric.add_argument('-c', '--cluster-name', required=True, help='Name of cluster')
-    parser_metric.add_argument('-j', '--jobstore', required=True, help='Name of jobstore')
-    parser_metric.add_argument('--namespace', default='jtvivian', help='CGCloud NameSpace')
-    parser_metric.add_argument('-t', '--instance-type', default='r3.8xlarge',
-                               help='Worker instance type. e.g.  m4.large or c3.8xlarge.')
-    parser_metric.add_argument('-etc', '--add-to-etc-hosts', default=None,
-                               required=False, help="Optional entry to add to /etc/hosts")
-    
-    # Parse args
+    metric_sp = subparsers.add_parser('launch-metrics',
+                                      help='Launches metric collection thread')
+    metric_sp.add_argument('-j', '--jobstore', required=True,
+                           help='Name of jobstore')
+    metric_sp.add_argument('--namespace', default=os.environ.get('CGCLOUD_NAMESPACE', '/'),
+                           help='CGCloud NameSpace')
+
+    # Common options        
+    for sp in cluster_sp, pipeline_sp, metric_sp:
+        sp.add_argument('-c', '--cluster-name', required=True,
+                        help='The CGCloud cluster name for Toil leader and workers.')
+    for sp in cluster_sp, metric_sp:
+        sp.add_argument('-t', '--instance-type', default='r3.8xlarge',
+                        help='Worker instance type, e.g. m4.large or c3.8xlarge.')
+    for sp in metric_sp, cluster_sp:
+        sp.add_argument('-etc', '--add-to-etc-hosts', default=None, required=False,
+                        help='Optional entry to add to /etc/hosts')
+
     params = parser.parse_args()
 
-    # Modular Run Sequence
     if params.command == 'launch-cluster':
         launch_cluster(params)
         place_boto_on_leader(params)
-    elif params.command == 'launch-pipeline': 
+    elif params.command == 'launch-pipeline':
         launch_pipeline(params)
     elif params.command == 'launch-metrics':
         manage_metrics_and_cluster_scaling(params)
