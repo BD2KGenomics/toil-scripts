@@ -60,7 +60,7 @@ def launch_cluster(params):
 
     subprocess.check_call(['cgcloud',
                            'create-cluster',
-                           '--zone', '{0}a'.format(aws_region),
+                           '--zone', aws_region + 'a',
                            '--leader-instance-type', params.leader_type,
                            '--instance-type', params.instance_type,
                            '--num-workers', '1',
@@ -72,7 +72,7 @@ def launch_cluster(params):
                           ['toil'])
     subprocess.check_call(['cgcloud',
                            'rsync',
-                           '--zone', '{0}a'.format(aws_region),
+                           '--zone', aws_region + 'a',
                            '--cluster-name', params.cluster_name,
                            '--ssh-opts="-o StrictHostKeyChecking=no"',
                            'toil-leader',
@@ -80,7 +80,7 @@ def launch_cluster(params):
                            params.manifest_path, ':~/manifest'])
     subprocess.check_call(['cgcloud',
                            'rsync',
-                           '--zone', '{0}a'.format(aws_region),
+                           '--zone', aws_region + 'a',
                            '--cluster-name', params.cluster_name,
                            '--ssh-opts="-o StrictHostKeyChecking=no"',
                            'toil-leader',
@@ -92,7 +92,7 @@ def place_boto_on_leader(params):
     log.info('Adding a .boto to leader to avoid credential timeouts.')
     subprocess.check_call(['cgcloud',
                            'rsync',
-                           '--zone', '{0}a'.format(aws_region),
+                           '--zone', aws_region + 'a',
                            '--cluster-name', params.cluster_name,
                            '--ssh-opts="-o StrictHostKeyChecking=no"',
                            'toil-leader',
@@ -115,7 +115,7 @@ def launch_pipeline(params):
         # Create screen session
         subprocess.check_call(['cgcloud',
                                'ssh',
-                               '--zone', '{0}a'.format(aws_region),
+                               '--zone', aws_region + 'a',
                                '--cluster-name', params.cluster_name,
                                'toil-leader',
                                '-o', 'StrictHostKeyChecking=no',
