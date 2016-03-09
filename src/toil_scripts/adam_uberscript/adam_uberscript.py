@@ -1,35 +1,34 @@
 #!/usr/bin/env python2.7
 
-import logging
-
 # Initialize logging before the remaining imports to prevent those imported modules from snatching that one shot at 
 # basicConfig.
 
+import logging
 log = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO,
                     format='%(asctime)-15s:%(levelname)s:%(name)s:%(message)s',
                     datefmt='%m-%d %H:%M:%S')
 
-from StringIO import StringIO
 import argparse
-from collections import namedtuple
 import csv
-import os
-import subprocess
-import boto
-from boto.exception import BotoServerError, EC2ResponseError
-import boto.ec2.cloudwatch
-import time
-from uuid import uuid4
-from tqdm import tqdm
 import errno
-from boto_lib import get_instance_ids
-from datetime import datetime, timedelta
+import subprocess
 import threading
-import boto.sdb
-from boto.ec2 import connect_to_region
+import time
+from StringIO import StringIO
+from collections import namedtuple
+from datetime import datetime, timedelta
+from uuid import uuid4
 
+import boto
+import boto.ec2.cloudwatch
+import boto.sdb
+import os
 from automated_scaling import ClusterSize, Samples
+from boto.ec2 import connect_to_region
+from boto.exception import BotoServerError, EC2ResponseError
+from boto_lib import get_instance_ids
+from tqdm import tqdm
 
 metric_endtime_margin = timedelta(hours=1)
 metric_initial_wait_period_in_seconds = 0
