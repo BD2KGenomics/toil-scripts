@@ -442,60 +442,63 @@ def main():
     """
     Modular script for running toil pipelines
     """
-    parser = argparse.ArgumentParser(description=main.__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser = argparse.ArgumentParser(description=main.__doc__,
+                                     formatter_class=argparse.RawDescriptionHelpFormatter)
     subparsers = parser.add_subparsers(dest='command')
 
     # Launch Cluster
-    parser_cluster = subparsers.add_parser('launch-cluster',
-                                           help='Launches AWS cluster via CGCloud')
-    parser_cluster.add_argument('-c', '--cluster-name', required=True,
-                                help='The CGCloud cluster name for Toil leader and workers.')
-    parser_cluster.add_argument('-S', '--share', required=True,
-                                help='Full path to directory: pipeline script, launch script, and master key.')
-    parser_cluster.add_argument('-t', '--instance-type', default='r3.8xlarge',
-                                help='Worker instance type. e.g.  m4.large or c3.8xlarge.')
-    parser_cluster.add_argument('-T', '--leader-type', default='m3.medium',
-                                help='Sets leader instance type.')
-    parser_cluster.add_argument('-b', '--boto-path', default='/home/mesosbox/.boto', type=str,
-                                help='Path to local .boto file to be placed on leader.')
-    parser_cluster.add_argument('-M', '--manifest-path', required=True, help='Path to manifest file.')
-    parser_cluster.add_argument('-etc', '--add-to-etc-hosts', default=None, required=False,
-                                help='Optional entry to add to /etc/hosts')
+    cluster_sp = subparsers.add_parser('launch-cluster',
+                                       help='Launches EC2 cluster via CGCloud')
+    cluster_sp.add_argument('-S', '--share', required=True,
+                            help='Full path to directory containing pipeline script, launch script, and master key.')
+    cluster_sp.add_argument('-T', '--leader-type', default='m3.medium',
+                            help='Sets leader instance type.')
+    cluster_sp.add_argument('-b', '--boto-path', default='/home/mesosbox/.boto', type=str,
+                            help='Path to local .boto file to be placed on leader.')
+    cluster_sp.add_argument('-M', '--manifest-path', required=True, help='Path to manifest file.')
 
     # Launch Pipeline
-    parser_pipeline = subparsers.add_parser('launch-pipeline', help='Launches pipeline')
-    parser_cluster.add_argument('-c', '--cluster-name', required=True,
-                                help='The CGCloud cluster name for Toil leader and workers.')
-    parser_pipeline.add_argument('-j', '--jobstore', default=None,
-                                 help='Name of jobstore. Defaults to UUID-Date if not set')
-    parser_pipeline.add_argument('--restart', default=None, action='store_true',
-                                 help='Attempts to restart pipeline, requires existing jobstore.')
-    parser_pipeline.add_argument('--master_ip', default=None,
-                                 help='Spark Master IP.')
-    parser_pipeline.add_argument('-B', '--bucket', help='Set destination bucket.')
-    parser_pipeline.add_argument('-m', '--memory', default='200g',
-                                 help='The memory per worker node in GB')
-    parser_pipeline.add_argument('-f', '--file_size', default='100G',
-                                 help='Approximate size of the BAM files')
-    parser_pipeline.add_argument('-s', '--spark_nodes', default='9',
-                                 help='The number of nodes needed for the spark cluster')
-    parser_pipeline.add_argument('-SD', '--sequence_dir', default='sequence',
-                                 help='Directory where raw sequences are.')
-    parser_pipeline.add_argument('-R', '--reference_genome', required=True, choices=['GRCh38', 'hg19'],
-                                 help='Reference Genome to align and call against.  Choose between GRCh38 and hg19')
+    pipeline_sp = subparsers.add_parser('launch-pipeline',
+                                        help='Launches pipeline')
+    pipeline_sp.add_argument('-j', '--jobstore', default=None,
+                             help='Name of jobstore. Defaults to UUID-Date if not set')
+    pipeline_sp.add_argument('--restart', default=None, action='store_true',
+                             help='Attempts to restart pipeline, requires existing job store.')
+    pipeline_sp.add_argument('--master_ip', default=None,
+                             help='Spark Master IP.')
+    pipeline_sp.add_argument('-B', '--bucket',
+                             help='The name of the destination bucket.')
+    pipeline_sp.add_argument('-m', '--memory', default='200g',
+                             help='The amount of memory per worker node in GiB. Must match what EC2 provides on '
+                                  'the specified worker instance type')
+    pipeline_sp.add_argument('-f', '--file_size', default='100G',
+                             help='Approximate size of the BAM files')
+    pipeline_sp.add_argument('-s', '--spark_nodes', default='9',
+                             help='The number of nodes needed for each Spark sub-cluster')
+    pipeline_sp.add_argument('-SD', '--sequence_dir', default='sequence',
+                             help='Directory where raw sequences are.')
+    pipeline_sp.add_argument('-R', '--reference_genome', required=True,
+                             choices=['GRCh38', 'hg19'],
+                             help='Reference genome to align and call against. Choose between GRCh38 and hg19.')
 
     # Launch Metric Collection
-    parser_metric = subparsers.add_parser('launch-metrics', help='Launches metric collection thread')
-    parser_cluster.add_argument('-c', '--cluster-name', required=True,
-                                help='The CGCloud cluster name for Toil leader and workers.')
-    parser_metric.add_argument('-j', '--jobstore', required=True,
-                               help='Name of jobstore')
-    parser_metric.add_argument('--namespace', default='/',
-                               help='CGCloud NameSpace')
-    parser_metric.add_argument('-t', '--instance-type', default='r3.8xlarge',
-                               help='Worker instance type. e.g.  m4.large or c3.8xlarge.')
-    parser_metric.add_argument('-etc', '--add-to-etc-hosts', default=None, required=False,
-                               help='Optional entry to add to /etc/hosts')
+    metric_sp = subparsers.add_parser('launch-metrics',
+                                      help='Launches metric collection thread')
+    metric_sp.add_argument('-j', '--jobstore', required=True,
+                           help='Name of jobstore')
+    metric_sp.add_argument('--namespace', default=os.environ.get('CGCLOUD_NAMESPACE', '/'),
+                           help='CGCloud NameSpace')
+
+    # Common options        
+    for sp in cluster_sp, pipeline_sp, metric_sp:
+        sp.add_argument('-c', '--cluster-name', required=True,
+                        help='The CGCloud cluster name for Toil leader and workers.')
+    for sp in cluster_sp, metric_sp:
+        sp.add_argument('-t', '--instance-type', default='r3.8xlarge',
+                        help='Worker instance type, e.g. m4.large or c3.8xlarge.')
+    for sp in metric_sp, cluster_sp:
+        sp.add_argument('-etc', '--add-to-etc-hosts', default=None, required=False,
+                        help='Optional entry to add to /etc/hosts')
 
     params = parser.parse_args()
 
