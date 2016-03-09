@@ -18,6 +18,7 @@ import time
 from StringIO import StringIO
 from collections import namedtuple
 from datetime import datetime, timedelta
+from pipes import quote
 from uuid import uuid4
 
 import boto
@@ -176,16 +177,17 @@ def launch_pipeline(params):
                                                    r=restart,
                                                    sequence_dir=params.sequence_dir,
                                                    **inputs)
-
-        for chunk in [pipeline_command[i:i+500] for i in range(0, len(pipeline_command),500)]:
+    
+        chunk_size = 500
+        for chunk in [pipeline_command[i:i + chunk_size] for i in range(0, len(pipeline_command), chunk_size)]:
             subprocess.check_call(['cgcloud',
                                    'ssh',
-                                   '--zone', '{0}a'.format(aws_region),
+                                   '--zone', aws_region + 'a',
                                    '--cluster-name', params.cluster_name,
                                    'toil-leader',
                                    '-o', 'StrictHostKeyChecking=no',
                                    'screen', '-S', params.cluster_name,
-                                   '-X', 'stuff', '"{0}"'.format(chunk)])
+                                   '-X', 'stuff', quote(chunk)])
     
     except subprocess.CalledProcessError as e:
         log.info('Pipeline exited with non-zero status code: {}'.format(e))
