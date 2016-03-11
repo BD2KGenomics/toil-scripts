@@ -83,10 +83,13 @@ def remove_file(masterIP, filename, sparkOnToil):
     Remove the given file from hdfs with master at the given IP address
     """
     if sparkOnToil:
-        containerID = check_output(["ssh", "-o", "StrictHostKeyChecking=no", masterIP, "docker", "ps", \
-                                "|", "grep", "apache-hadoop-master", "|", "awk", "'{print $1}'"])[:-1]
-        check_call(["ssh", "-o", "StrictHostKeyChecking=no", masterIP, "docker", "exec", containerID, \
-                "/opt/apache-hadoop/bin/hdfs", "dfs", "-rm", "-r", "/"+filename])
+        try:
+            containerID = check_output(["ssh", "-o", "StrictHostKeyChecking=no", masterIP, "docker", "ps", \
+                                        "|", "grep", "apache-hadoop-master", "|", "awk", "'{print $1}'"])[:-1]
+            check_call(["ssh", "-o", "StrictHostKeyChecking=no", masterIP, "docker", "exec", containerID, \
+                        "/opt/apache-hadoop/bin/hdfs", "dfs", "-rm", "-r", "/"+filename])
+        except:
+            pass
     else:
         log.warning("Cannot remove file %s. Can only remove files when running Spark-on-Toil", filename)
 
@@ -96,9 +99,9 @@ def download_data(masterIP, inputs, sparkOnToil):
     Downloads input data files from s3.
     """
 
-    
     snpFileSystem, snpPath = inputs['knownSNPs'].split('://')
     snpName = snpPath.split('/')[-1]
+    log.info("SNPS at %s:%s:%s", masterIP, HDFS_MASTER_PORT, snpName)
     hdfsSNPs = "hdfs://"+masterIP+":"+HDFS_MASTER_PORT+"/"+snpName
     
     log.info("Downloading known sites file %s to %s.", inputs['knownSNPs'], hdfsSNPs)
@@ -243,28 +246,24 @@ def static_adam_preprocessing_dag(job, inputs):
     followJob = job
     sparkOnToil = not masterIP
 
+    cores = multiprocessing.cpu_count()
+
     # if the master IP string was not passed in, then we need to start a spark cluster
     if sparkOnToil:
-        startMaster = job.wrapJobFn(start_spark_hdfs_master,
-                                    inputs['numWorkers'],
-                                    inputs['executorMemory'],
-                                    inputs['sudo'])
-        job.addChild(startMaster)
-        masterIP = startMaster.rv
-        
-        startWorkers = job.wrapJobFn(start_spark_hdfs_workers,
-                                     masterIP,
+        startCluster = job.wrapJobFn(start_spark_hdfs_cluster,
                                      inputs['numWorkers'],
                                      inputs['executorMemory'],
-                                     inputs['sudo'])
-        startMaster.addChild(startWorkers)
+                                     inputs['sudo'],
+                                     download_run_and_upload,
+                                     jArgs = (inputs, sparkOnToil),
+                                     jCores = cores,
+                                     jMemory = "%s G" % inputs['driverMemory']).encapsulate()
+        job.addChild(startCluster)
 
-        followJob = startWorkers
-
-    # transformations should follow spark cluster creation if spark cluster created,
-    # otherwise, should run first
-    sparkWork = job.wrapJobFn(download_run_and_upload, masterIP, inputs, sparkOnToil)
-    followJob.addChild(sparkWork)
+    else:
+        # otherwise, should run first
+        sparkWork = job.wrapJobFn(download_run_and_upload, masterIP, inputs, sparkOnToil)
+        job.addChild(sparkWork)
 
 def build_parser():
 
