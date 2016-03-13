@@ -65,6 +65,8 @@ def build_parser():
                                                              'cgl-driver-projects/ckcc/rna-seq-samples/')
     parser.add_argument('-k', '--use_bwakit', action='store_true', help='Use bwakit instead of the binary build of bwa')
     parser.add_argument('-se', '--file_size', default='100G', help='Approximate input file size. Should be given as %d[TGMK], e.g., for a 100 gigabyte file, use --file_size 100G')
+    parser.add_argument('--trim', action='store_true', help='Trim adapters. Ony works with --use_bwakit.')
+    parser.add_argument('--skip_sort', action='store_true', help='Skip sorting. Only works with --use_bwakit.')
     parser.set_defaults(sudo=False)
     return parser
 
@@ -406,14 +408,23 @@ def run_bwa(job, job_vars):
                                                                   library,
                                                                   uuid)
         
+        # do we want to use bwakit to sort?
+        opt_args = []
+        if input_args['sort']:
+            opt_args.append('-s')
+
+        # do we want to use bwakit to trim adapters?
+        if input_args['trim']:
+            opt_args.append('-a')
+
         # Call: bwakit
-        parameters = ['-t%d' % cores,
-                      '-R%s' % rg,
-                      '-s',
-                      '-o', '/data/aligned',
-                      '/data/ref.fa',
-                      '/data/r1.fq.gz',
-                      '/data/r2.fq.gz']
+        parameters = (['-t%d' % cores,
+                       '-R%s' % rg] +
+                      opt_args +
+                      ['-o', '/data/aligned',
+                       '/data/ref.fa',
+                       '/data/r1.fq.gz',
+                       '/data/r2.fq.gz'])
 
         docker_call(tool='quay.io/ucsc_cgl/bwakit:0.7.12--528bb9bf73099a31e74a7f5e6e3f2e0a41da486e',
                     tool_parameters=parameters, work_dir=work_dir, sudo=sudo)
@@ -626,6 +637,18 @@ def main():
     Job.Runner.addToilOptions(parser)
     args = parser.parse_args()
 
+    # validate bwakit specific args
+    arg_errors = ["Argument validation failed:"]
+    if not args.use_bwakit:
+        if args.alt:
+            arg_errors.append('Alternate haplotype build supplied, but not using bwakit.')
+        if args.skip_sort:
+            arg_errors.append('--skip_sort can only be used with --use_bwakit.')
+        if args.trim:
+            arg_errors.append('--trim can only be used with --use_bwakit.')
+    if len(arg_errors) > 1:
+        raise ValueError("\n".join(arg_errors))
+
     # Store input parameters in a dictionary
     inputs = {'config': args.config,
               'ref.fa': args.ref,
@@ -644,7 +667,9 @@ def main():
               'uuid': None,
               'cpu_count': None,
               'file_size': args.file_size,
-              'use_bwakit': args.use_bwakit}
+              'use_bwakit': args.use_bwakit,
+              'sort': not args.skip_sort,
+              'trim': args.trim}
 
     # Launch Pipeline
     Job.Runner.startToil(Job.wrapJobFn(download_shared_files, inputs), args)
