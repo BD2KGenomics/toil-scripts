@@ -195,9 +195,12 @@ def build_parser():
 
     # add ADAM args
     parser.add_argument('-N', '--num_nodes', type = int, required = False, default = None,
-                        help = 'Number of nodes to use. Exclusive of --master_ip.')
+                        help = 'Number of Toil nodes to allocate per Spark subcluster. Exclusive of --master_ip.')
     parser.add_argument('-MI', '--master_ip', required = False, default = None,
-                        help = 'Master IP for Spark/HDFS. Should be provided if pointing at static spark cluster.')
+                        help ="IP or hostname of host running for Spark master and HDFS namenode. Should be provided "
+                              "if pointing at a static (external or standalone) Spark cluster. The special value "
+                              "'auto' indicates the master of standalone cluster, i.e. one that is managed by the "
+                              "uberscript.")
     parser.add_argument('-d', '--driver_memory', required = True,
                         help = 'Amount of memory to allocate for Spark Driver.')
     parser.add_argument('-q', '--executor_memory', required = True,
@@ -364,7 +367,7 @@ def static_dag(job,
 
     # add code to bump the number of jobs after alignment
     # start with -1 since we already have a single node for our sample
-    nodes_needed_after_alignment = -1 
+    nodes_needed_after_alignment = -1
 
     # adam needs:
     # - a spark driver
@@ -376,7 +379,7 @@ def static_dag(job,
             nodes_needed_after_alignment += 1
         else:
             nodes_needed_after_alignment += (adam_inputs['numWorkers'] + 2)
-        
+
     # gatk needs one node
     if (pipeline_to_run == "gatk" or
         pipeline_to_run == "both"):
@@ -405,7 +408,7 @@ def static_dag(job,
             bwa.addChild(increase_nodes_after_alignment)
     elif autoscale_after_alignment:
         job.addChild(increase_nodes_after_alignment)
-   
+
     if (pipeline_to_run == "adam" or
         pipeline_to_run == "both"):
 
@@ -457,7 +460,7 @@ def increase_node_count(job, nodes_to_add, uuid):
 def decrease_node_count(job, nodes_to_add, uuid):
 
     Samples.decrease_nodes(uuid, nodes_to_add)
-    
+
 
 if __name__ == '__main__':
 
@@ -489,10 +492,8 @@ if __name__ == '__main__':
                   'sort': True, # TODO: #169 will code this to false
                   'trim': args.trim}
 
-    if not ((args.master_ip and not args.num_nodes) or
-	    (args.master_ip and args.num_nodes == 0) or
-            (not args.master_ip and args.num_nodes)):
-        raise ValueError("Only one of --master_ip (%s) and --num_nodes (%d) can be provided." % 
+    if bool(args.master_ip) != bool(args.num_nodes):
+        raise ValueError("Only one of --master_ip (%s) and --num_nodes (%d) can be provided." %
                          (args.master_ip, args.num_nodes))
 
     if args.num_nodes <= 1 and not args.master_ip:
