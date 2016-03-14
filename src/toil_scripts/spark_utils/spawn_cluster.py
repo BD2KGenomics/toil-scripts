@@ -6,44 +6,68 @@ Spawns a Spark cluster backed by HDFS.
 """
 
 import logging
+import multiprocessing
+import os
+from subprocess import call, check_call, check_output
+import time
 
 from toil.job import Job
 from toil_scripts.batch_alignment.bwa_alignment import docker_call
 
-log = logging.getLogger(__name__)
+_log = logging.getLogger(__name__)
 
-def start_spark_hdfs_master(job, numWorkers, executorMemory, sudo):
+def start_spark_hdfs_cluster(job,
+                             numWorkers,
+                             executorMemory,
+                             sudo,
+                             jFn,
+                             jArgs = [],
+                             jCores = None,
+                             jMemory = None,
+                             jDisk = None):
+
+    # build job requirement dictionary
+    jReqs = {}
+    if jCores:
+        jReqs['cores'] = jCores
+    if jMemory:
+        jReqs['memory'] = jMemory
+    if jDisk:
+        jReqs['disk'] = jDisk
+
+    masterIP = start_spark_hdfs_master(job, executorMemory, sudo)
+    job.addChildJobFn(start_spark_hdfs_workers,
+                      masterIP,
+                      numWorkers,
+                      executorMemory,
+                      sudo,
+                      jFn,
+                      jArgs,
+                      jReqs)
+
+def start_spark_hdfs_master(job, executorMemory, sudo):
     """
     Starts the master service.
     """
 
-    log.info("Starting Spark master and HDFS namenode.")
+    _log.info("Starting Spark master and HDFS namenode.")
 
     masterIP = job.addService(MasterService(sudo, "%s G" % executorMemory))
 
-    log.info("Spark Master and HDFS Namenode started at %s.", masterIP)
+    _log.info("Spark Master and HDFS Namenode started.")
 
+    return masterIP
 
-def start_spark_hdfs_workers(job, masterIP, numWorkers, executorMemory, sudo):
+def start_spark_hdfs_workers(job, masterIP, numWorkers, executorMemory, sudo, jFn, jArgs, jReqs):
     """
     Starts the worker services.
     """
-    log.info("Starting %d Spark workers and HDFS Datanodes.", numWorkers)
+    _log.info("Starting %d Spark workers and HDFS Datanodes.", numWorkers)
 
     for i in range(numWorkers):
         job.addService(WorkerService(masterIP, sudo, "%s G" % executorMemory))
 
-
-"""
-Master service job for a Spark/HDFS cluster.
-
-Starts up a Spark master and HDFS namenode. Return value of the service
-job is the instance IP.
-
-@author Audrey Musselman-Brown, almussel@ucsc.edu
-@author Frank Austin Nothaft, fnothaft@berkeley.edu
-"""
-
+    job.addChildJobFn(jFn, masterIP, *jArgs, **jReqs)
 
 class MasterService(Job.Service):
 
@@ -52,7 +76,6 @@ class MasterService(Job.Service):
         self.sudo = sudo
         self.memory = memory
         self.cores = multiprocessing.cpu_count()
-        self._log = logging.getLogger(__name__)
         Job.Service.__init__(self, memory = self.memory, cores = self.cores)
 
     def start(self):
@@ -62,7 +85,7 @@ class MasterService(Job.Service):
         
         self.IP = check_output(["hostname", "-f",])[:-1]
 
-        self._log.info("Started Spark master container.")
+        _log.info("Started Spark master container.")
         self.sparkContainerID = docker_call(no_rm = True,
                                             work_dir = os.getcwd(),
                                             tool = "quay.io/ucsc_cgl/apache-spark-master:1.5.2",
@@ -75,7 +98,7 @@ class MasterService(Job.Service):
                                             tool_parameters = [],
                                             sudo = self.sudo,
                                             check_output = True)[:-1]
-        self._log.info("Started HDFS Datanode.")
+        _log.info("Started HDFS Datanode.")
         self.hdfsContainerID = docker_call(no_rm = True,
                                            work_dir = os.getcwd(),
                                            tool = "quay.io/ucsc_cgl/apache-hadoop-master:2.6.2",
@@ -98,23 +121,13 @@ class MasterService(Job.Service):
         call(sudo + ["docker", "exec", self.sparkContainerID, "rm", "-r", "/ephemeral/spark"])
         call(sudo + ["docker", "stop", self.sparkContainerID])
         call(sudo + ["docker", "rm", self.sparkContainerID])
-        self._log.info("Stopped Spark master.")
+        _log.info("Stopped Spark master.")
 
         call(sudo + ["docker", "stop", self.hdfsContainerID])
         call(sudo + ["docker", "rm", self.hdfsContainerID])
-        self._log.info("Stopped HDFS datanode.")
+        _log.info("Stopped HDFS datanode.")
 
         return
-"""
-Worker service job for a Spark/HDFS cluster.
-
-Starts up a Spark worker and HDFS datanode. Associates with a provided Spark
-master and HDFS namenode, which are presumed to be running at the same master
-IP, and on the default Spark (7077) and HDFS (8020) master ports.
-
-@author Audrey Musselman-Brown, almussel@ucsc.edu
-@author Frank Austin Nothaft, fnothaft@berkeley.edu
-"""
 
 
 SPARK_MASTER_PORT = "7077"
@@ -126,7 +139,6 @@ class WorkerService(Job.Service):
         self.sudo = sudo
         self.memory = memory
         self.cores = multiprocessing.cpu_count()
-        self._log = logging.getLogger(__name__)
         Job.Service.__init__(self, memory = self.memory, cores = self.cores)
 
     def start(self):
@@ -147,14 +159,14 @@ class WorkerService(Job.Service):
                                             tool_parameters = [self.masterIP+":"+SPARK_MASTER_PORT],
                                             sudo = self.sudo,
                                             check_output = True)[:-1]
-        __start_datanode()
+        self.__start_datanode()
         
         # fake do/while to check if HDFS is up
         hdfs_down = True
         retries = 0
         while hdfs_down and (retries < 5):
 
-            self._log.info("Sleeping 30 seconds before checking HDFS startup.")
+            _log.info("Sleeping 30 seconds before checking HDFS startup.")
             time.sleep(30)
             clusterID = ""
             try:
@@ -171,11 +183,11 @@ class WorkerService(Job.Service):
                 pass
 
             if "Incompatible" in clusterID:
-                self._log.warning("Hadoop Datanode failed to start with: %s", clusterID)
-                self._log.warning("Retrying container startup, retry #%d.", retries)
+                _log.warning("Hadoop Datanode failed to start with: %s", clusterID)
+                _log.warning("Retrying container startup, retry #%d.", retries)
                 retries += 1
 
-                self._log.warning("Removing ephemeral hdfs directory.")
+                _log.warning("Removing ephemeral hdfs directory.")
                 check_call(["docker",
                             "exec",
                             self.hdfsContainerID,
@@ -183,17 +195,17 @@ class WorkerService(Job.Service):
                             "-rf",
                             "/ephemeral/hdfs"])
 
-                self._log.warning("Killing container %s.", self.hdfsContainerID)
+                _log.warning("Killing container %s.", self.hdfsContainerID)
                 check_call(["docker",
                             "kill",
                             self.hdfsContainerID])
 
                 # todo: this is copied code. clean up!
-                self._log.info("Restarting datanode.")
-                __start_datanode()
+                _log.info("Restarting datanode.")
+                self.__start_datanode()
 
             else:
-                self._log.info("HDFS datanode started up OK!")
+                _log.info("HDFS datanode started up OK!")
                 hdfs_down = False
 
         if retries >= 5:
@@ -228,11 +240,11 @@ class WorkerService(Job.Service):
         call(sudo + ["docker", "exec", self.sparkContainerID, "rm", "-r", "/ephemeral/spark"])
         call(sudo + ["docker", "stop", self.sparkContainerID])
         call(sudo + ["docker", "rm", self.sparkContainerID])
-        self._log.info("Stopped Spark worker.")
+        _log.info("Stopped Spark worker.")
 
         call(sudo + ["docker", "exec", self.hdfsContainerID, "rm", "-r", "/ephemeral/hdfs"])
         call(sudo + ["docker", "stop", self.hdfsContainerID])
         call(sudo + ["docker", "rm", self.hdfsContainerID])
-        self._log.info("Stopped HDFS namenode.")
+        _log.info("Stopped HDFS namenode.")
 
         return
