@@ -38,8 +38,8 @@ metric_initial_wait_period_in_seconds = 0
 metric_collection_interval_in_seconds = 3600
 metric_start_time_margin = 1800
 
-scaling_initial_wait_period_in_seconds = 300
-cluster_scaling_interval_in_seconds = 300
+scaling_initial_wait_period_in_seconds = 60
+cluster_scaling_interval_in_seconds = 150
 
 # Protects against concurrent changes to the size of the Toil cluster, by both the metric thread terminating idle
 # nodes and the cluster-growing thread adding nodes.
@@ -234,7 +234,14 @@ def parse_cgcloud_list_output(output):
 
 def get_desired_cluster_size(domain):
     nodes_per_sample = Samples.load(domain)
-    return sum(map(lambda x: x[1], nodes_per_sample.samples.values()))
+
+    sample_request = sum(map(lambda x: x[1].nodes, nodes_per_sample.value.iteritems()))
+    log.info("Samples are currently requesting %d nodes: %s",
+             sample_request,
+             nodes_per_sample.value)
+
+    # add one because there needs to be a single communal worker, else deadlock is upon us
+    return sample_request + 1
 
 
 def update_cluster_size(domain, n):
@@ -286,7 +293,7 @@ def grow_cluster(num_nodes, instance_type, cluster_name, cluster_type='toil', *o
 def manage_metrics_and_cluster_scaling(params):
     conn = boto.sdb.connect_to_region(region_of_zone(params.zone))
     dom = conn.get_domain('{0}--files'.format(params.jobstore))
-    grow_cluster_thread = threading.Thread(target=manage_toil_cluster, args=(params, conn, dom))
+    grow_cluster_thread = threading.Thread(target=manage_toil_cluster, args=(params, dom))
     metric_collection_thread = threading.Thread(target=collect_realtime_metrics, args=(params,))
     grow_cluster_thread.start()
     metric_collection_thread.start()
@@ -323,10 +330,13 @@ def manage_toil_cluster(params, domain):
     time.sleep(scaling_initial_wait_period_in_seconds)
     while True:
         with throttle(cluster_scaling_interval_in_seconds):
-            cluster_size = len(list_nodes(params.cluster_name))
-            desired_cluster_size = get_desired_cluster_size(domain) + 1
-            if cluster_size < desired_cluster_size:
-                with cluster_size_lock:
+            with cluster_size_lock:
+                cluster_size = len(list_nodes(params.cluster_name))
+                desired_cluster_size = get_desired_cluster_size(domain)
+                if cluster_size < desired_cluster_size:
+                    log.info("Cluster size (%d) is smaller than requested (%d).",
+                             cluster_size,
+                             desired_cluster_size)
                     num_nodes = desired_cluster_size - cluster_size
                     grow_cluster(num_nodes, params.instance_type, params.cluster_name, *role_options(params))
                     update_cluster_size(domain, desired_cluster_size)
@@ -460,15 +470,37 @@ def collect_realtime_metrics(params, threshold=0.5):
                                 idle = True
                                 log.info('Flagging {} to be killed. '
                                          'Max CPU {} for last 30 minutes.'.format(instance_id, max(averages)))
+                            else:
+                                log.info('Max CPU for {} was {} for last 30 minutes.'.format(instance_id, max(averages)))
+
                 # Kill instance if idle and cluster is too large
                 if idle:
                     try:
                         with cluster_size_lock:
                             cluster_size = get_cluster_size(params.cluster_name)
-                            if cluster_size > get_desired_cluster_size(domain):
-                                log.info('Terminating Instance: {}'.format(instance_id))
-                                log.info('Killing instance {0}\n'.format(instance_id))
-                                conn.terminate_instances(instance_ids=[instance_id])
+                            desired_cluster_size = get_desired_cluster_size(domain)
+                            if cluster_size > desired_cluster_size:
+                                log.info('Cluster size (%d) is larger than requested (%d).'
+                                         'Terminating idle instance %s.',
+                                         cluster_size,
+                                         desired_cluster_size,
+                                         instance_id)
+                                
+                                cmd = ['cgcloud',
+                                       'terminate',
+                                       '--instance-id', instance_id,
+                                       '--cluster-name', params.cluster_name,
+                                       'toil']
+
+                                try:
+                                    check_call(cmd)
+                                    log.info("Successfully terminated instance via %s.",
+                                             " ".join(cmd))
+                                except:
+                                    log.error("Terminating instance with %s failed.",
+                                              " ".join(cmd))
+                                    raise
+
                                 update_cluster_size(domain, cluster_size - 1)
                     except (EC2ResponseError, BotoServerError) as e:
                         log.info('Error terminating instance: {}\n{}'.format(instance_id, e))
