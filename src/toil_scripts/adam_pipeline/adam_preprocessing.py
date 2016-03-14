@@ -129,14 +129,19 @@ def remove_file(masterIP, filename, sparkOnToil):
     masterIP = masterIP.actual
     if sparkOnToil:
         try:
-            containerID = check_output(["ssh", "-o", "StrictHostKeyChecking=no", masterIP, "docker", "ps", \
-                                        "|", "grep", "apache-hadoop-master", "|", "awk", "'{print $1}'"])[:-1]
-            check_call(["ssh", "-o", "StrictHostKeyChecking=no", masterIP, "docker", "exec", containerID, \
-                        "/opt/apache-hadoop/bin/hdfs", "dfs", "-rm", "-r", "/"+filename])
+            output = check_output(['ssh',
+                                   '-o', 'StrictHostKeyChecking=no',
+                                   masterIP, 'docker', 'ps'])
+            containerID = next(line.split()[0] for line in output.splitlines() if 'apache-hadoop-master' in line)
+            check_call(['ssh',
+                        '-o', 'StrictHostKeyChecking=no',
+                        masterIP,
+                        'docker', 'exec', containerID,
+                        'hdfs', 'dfs', '-rm', '-r', '/' + filename])
         except:
             pass
     else:
-        log.warning("Cannot remove file %s. Can only remove files when running Spark-on-Toil", filename)
+        log.warning('Cannot remove file %s. Can only remove files when running Spark-on-Toil', filename)
 
 # FIXME: unused parameter sparkOnToil
 
