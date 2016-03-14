@@ -191,6 +191,7 @@ def build_parser():
     parser.add_argument('-k', '--use_bwakit', action='store_true', help='Use bwakit instead of the binary build of bwa')
     parser.add_argument('-t', '--alt', required=False, help='Alternate file for reference build (alt). Necessary for alt aware alignment.')
     parser.set_defaults(sudo = False)
+    parser.add_argument('--trim', action='store_true', help='Trim adapters during alignment.')
 
     # add ADAM args
     parser.add_argument('-N', '--num_nodes', type = int, required = False, default = None,
@@ -484,7 +485,9 @@ if __name__ == '__main__':
                   's3_dir': "%s/alignment" % args.s3_bucket,
                   'cpu_count': None,
                   'file_size': args.file_size,
-                  'use_bwakit': args.use_bwakit}
+                  'use_bwakit': args.use_bwakit,
+                  'sort': True, # TODO: #169 will code this to false
+                  'trim': args.trim}
 
     if not ((args.master_ip and not args.num_nodes) or
 	    (args.master_ip and args.num_nodes == 0) or

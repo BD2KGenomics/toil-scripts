@@ -65,6 +65,8 @@ def build_parser():
                                                              'cgl-driver-projects/ckcc/rna-seq-samples/')
     parser.add_argument('-k', '--use_bwakit', action='store_true', help='Use bwakit instead of the binary build of bwa')
     parser.add_argument('-se', '--file_size', default='100G', help='Approximate input file size. Should be given as %d[TGMK], e.g., for a 100 gigabyte file, use --file_size 100G')
+    parser.add_argument('--trim', action='store_true', help='Trim adapters. Ony works with --use_bwakit.')
+    parser.add_argument('--skip_sort', action='store_true', help='Skip sorting. Only works with --use_bwakit.')
     parser.set_defaults(sudo=False)
     return parser
 
@@ -335,17 +337,13 @@ def static_dag_declaration(job, job_vars):
     input_args, ids = job_vars
     cores = input_args['cpu_count']
 
-    # if we run with bwakit, we skip conversion
+    # if we run with bwakit, we skip conversion and reheadering
     if input_args['use_bwakit']:
 
         bwa = job.wrapJobFn(run_bwa, job_vars, cores=cores, disk=input_args['file_size'])
-        header = job.wrapJobFn(fix_bam_header, job_vars, bwa.rv(), disk=input_args['file_size'])
-        rg = job.wrapJobFn(add_readgroups, job_vars, header.rv(), memory='15G', disk=input_args['file_size'])
         
         # Link
         job.addChild(bwa)
-        bwa.addChild(header)
-        header.addChild(rg)
     
     else:
 
@@ -359,6 +357,23 @@ def static_dag_declaration(job, job_vars):
         bwa.addChild(conversion)
         conversion.addChild(header)
         header.addChild(rg)
+
+
+def copy_or_upload(work_dir, input_args, output_file):
+    """
+    Looks at what input args are defined and uploads the file to it's proper location.
+    """
+
+    # Either write file to local output directory or upload to S3 cloud storage
+    if input_args['output_dir']:
+        copy_to_output_dir(work_dir=work_dir,
+                           output_dir=input_args['output_dir'],
+                           files=[output_file])
+
+    if input_args['s3_dir']:
+        upload_to_s3(work_dir,
+                     input_args,
+                     output_file)
 
 
 def run_bwa(job, job_vars):
@@ -382,22 +397,45 @@ def run_bwa(job, job_vars):
         return_input_paths(job, work_dir, ids, 'ref.fa.alt')
 
     if input_args['use_bwakit']:
+
+        # add a read group line
+        # this is an illumina only pipeline, therefore, hardcoding illumina is OK
+        # program unit is required by GATK, but we don't know it
+        # so, fake a bad value
+        uuid = input_args['uuid']
+        library = input_args['lb']
+        rg = "@RG\\tID:%s\\tLB:%s\\tPL:ILLUMINA\\tPU:12345\\tSM:%s" % (uuid,
+                                                                  library,
+                                                                  uuid)
         
+        # do we want to use bwakit to sort?
+        opt_args = []
+        if input_args['sort']:
+            opt_args.append('-s')
+
+        # do we want to use bwakit to trim adapters?
+        if input_args['trim']:
+            opt_args.append('-a')
+
         # Call: bwakit
-        parameters = ['-o', '/data/aligned',
-                      '-t', str(cores),
-                      '/data/ref.fa',
-                      '/data/r1.fq.gz',
-                      '/data/r2.fq.gz']
+        parameters = (['-t%d' % cores,
+                       '-R%s' % rg] +
+                      opt_args +
+                      ['-o', '/data/aligned',
+                       '/data/ref.fa',
+                       '/data/r1.fq.gz',
+                       '/data/r2.fq.gz'])
 
         docker_call(tool='quay.io/ucsc_cgl/bwakit:0.7.12--528bb9bf73099a31e74a7f5e6e3f2e0a41da486e',
                     tool_parameters=parameters, work_dir=work_dir, sudo=sudo)
 
         # bwa insists on adding an `*.aln.sam` suffix, so rename the output file
+        output_file = '{}.bam'.format(uuid)
         os.rename(os.path.join(work_dir, 'aligned.aln.bam'),
-                  os.path.join(work_dir, 'aligned.bam'))
+                  os.path.join(work_dir, output_file))
         
-        return job.fileStore.writeGlobalFile(os.path.join(work_dir, 'aligned.bam'))
+        # Either write file to local output directory or upload to S3 cloud storage
+        copy_or_upload(work_dir, input_args, output_file)
         
     else:
         # Call: BWA
@@ -514,10 +552,7 @@ def add_readgroups(job, job_vars, bam_id):
                 tool_parameters=parameters, work_dir=work_dir, java_opts='-Xmx15G', sudo=sudo)
 
     # Either write file to local output directory or upload to S3 cloud storage
-    if input_args['output_dir']:
-        copy_to_output_dir(work_dir=work_dir, output_dir=input_args['output_dir'], files=[output_file])
-    if input_args['s3_dir']:
-        upload_to_s3(work_dir, input_args, output_file)
+    copy_or_upload(work_dir, input_args, output_file)
         
 
 def upload_to_s3(work_dir, input_args, output_file):
@@ -602,6 +637,18 @@ def main():
     Job.Runner.addToilOptions(parser)
     args = parser.parse_args()
 
+    # validate bwakit specific args
+    arg_errors = ["Argument validation failed:"]
+    if not args.use_bwakit:
+        if args.alt:
+            arg_errors.append('Alternate haplotype build supplied, but not using bwakit.')
+        if args.skip_sort:
+            arg_errors.append('--skip_sort can only be used with --use_bwakit.')
+        if args.trim:
+            arg_errors.append('--trim can only be used with --use_bwakit.')
+    if len(arg_errors) > 1:
+        raise ValueError("\n".join(arg_errors))
+
     # Store input parameters in a dictionary
     inputs = {'config': args.config,
               'ref.fa': args.ref,
@@ -620,7 +667,9 @@ def main():
               'uuid': None,
               'cpu_count': None,
               'file_size': args.file_size,
-              'use_bwakit': args.use_bwakit}
+              'use_bwakit': args.use_bwakit,
+              'sort': not args.skip_sort,
+              'trim': args.trim}
 
     # Launch Pipeline
     Job.Runner.startToil(Job.wrapJobFn(download_shared_files, inputs), args)
