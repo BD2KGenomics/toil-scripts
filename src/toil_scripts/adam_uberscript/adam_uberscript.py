@@ -45,8 +45,6 @@ cluster_scaling_interval_in_seconds = 300
 # nodes and the cluster-growing thread adding nodes.
 cluster_size_lock = threading.RLock()
 
-aws_region = 'us-west-2'
-
 
 def launch_cluster(params):
     """
@@ -58,7 +56,7 @@ def launch_cluster(params):
 
     check_call(['cgcloud',
                 'create-cluster',
-                '--zone', aws_region + 'a',
+                '--zone', params.zone,
                 '--cluster-name', params.cluster_name,
                 '--leader-instance-type', params.leader_type,
                 '--instance-type', params.instance_type,
@@ -69,7 +67,7 @@ def launch_cluster(params):
                ['toil'])
     check_call(['cgcloud',
                 'rsync',
-                '--zone', aws_region + 'a',
+                '--zone', params.zone,
                 '--cluster-name', params.cluster_name,
                 '--ssh-opts="-o StrictHostKeyChecking=no"',
                 'toil-leader',
@@ -77,7 +75,7 @@ def launch_cluster(params):
                 params.manifest_path, ':~/manifest'])
     check_call(['cgcloud',
                 'rsync',
-                '--zone', aws_region + 'a',
+                '--zone', params.zone,
                 '--cluster-name', params.cluster_name,
                 '--ssh-opts="-o StrictHostKeyChecking=no"',
                 'toil-leader',
@@ -89,7 +87,7 @@ def place_boto_on_leader(params):
     log.info('Adding a .boto to leader to avoid credential timeouts.')
     check_call(['cgcloud',
                 'rsync',
-                '--zone', aws_region + 'a',
+                '--zone', params.zone,
                 '--cluster-name', params.cluster_name,
                 '--ssh-opts="-o StrictHostKeyChecking=no"',
                 'toil-leader',
@@ -112,7 +110,7 @@ def launch_pipeline(params):
         # Create screen session
         check_call(['cgcloud',
                     'ssh',
-                    '--zone', aws_region + 'a',
+                    '--zone', params.zone,
                     '--cluster-name', params.cluster_name,
                     'toil-leader',
                     '-o', 'StrictHostKeyChecking=no',
@@ -170,7 +168,7 @@ def launch_pipeline(params):
         pipeline_command = ' '.join(pipeline_command)
         pipeline_command = pipeline_command.format(j=jobstore,
                                                    b=params.bucket,
-                                                   region=aws_region,
+                                                   region=region_of_zone(params.zone),
                                                    s=params.spark_nodes,
                                                    m=params.memory,
                                                    fs=params.file_size,
@@ -182,7 +180,7 @@ def launch_pipeline(params):
         for chunk in [pipeline_command[i:i + chunk_size] for i in range(0, len(pipeline_command), chunk_size)]:
             check_call(['cgcloud',
                         'ssh',
-                        '--zone', aws_region + 'a',
+                        '--zone', params.zone,
                         '--cluster-name', params.cluster_name,
                         'toil-leader',
                         '-o', 'StrictHostKeyChecking=no',
@@ -286,7 +284,7 @@ def grow_cluster(num_nodes, instance_type, cluster_name, cluster_type='toil', *o
 
 
 def manage_metrics_and_cluster_scaling(params):
-    conn = boto.sdb.connect_to_region(aws_region)
+    conn = boto.sdb.connect_to_region(region_of_zone(params.zone))
     dom = conn.get_domain('{0}--files'.format(params.jobstore))
     grow_cluster_thread = threading.Thread(target=manage_toil_cluster, args=(params, conn, dom))
     metric_collection_thread = threading.Thread(target=collect_realtime_metrics, args=(params,))
@@ -361,7 +359,7 @@ def manage_standalone_spark_cluster(params, domain):
                     output = check_output(['cgcloud',
                                            'create-cluster',
                                            '--list',
-                                           '--zone', aws_region + 'a',
+                                           '--zone', params.zone,
                                            '--cluster-name', params.cluster_name,
                                            '--leader-instance-type', params.spark_master_type or params.leader_type,
                                            '--instance-type', params.spark_instance_type or params.instance_type,
@@ -390,14 +388,12 @@ def manage_standalone_spark_cluster(params, domain):
         semaphore = Semaphore.load(domain, name=standalone_spark_semaphore_name)
 
 
-def collect_realtime_metrics(params, threshold=0.5, region='us-west-2'):
+def collect_realtime_metrics(params, threshold=0.5):
     """
-    Collect metrics from AWS instances in 1 hour intervals.
-    Instances that have gone idle (below threshold CPU value) are terminated.
+    Collect metrics from AWS instances in 1 hour intervals. Instances that have gone idle (below threshold CPU value)
+    are terminated.
 
-    params: argparse.Namespace      Input arguments
-    region: str                     AWS region metrics are being collected from
-    uuid: str                       UUID of metric collection
+    :type params: argparse.Namespace
     """
     list_of_metrics = ['AWS/EC2/CPUUtilization',
                        'CGCloud/MemUsage',
@@ -417,6 +413,7 @@ def collect_realtime_metrics(params, threshold=0.5, region='us-west-2'):
     start = time.time() - metric_start_time_margin
 
     # Create connections to ec2 and cloudwatch
+    region = region_of_zone(params.zone)
     conn = boto.ec2.connect_to_region(region)
     cw = boto.ec2.cloudwatch.connect_to_region(region)
     sdbconn = boto.sdb.connect_to_region(region)
@@ -564,9 +561,15 @@ def main():
                                 'cluster.')
 
     # Common options
+    cgcloud_zone = os.environ.get('CGCLOUD_ZONE')
     for sp in cluster_sp, pipeline_sp, metric_sp:
         sp.add_argument('-c', '--cluster-name', required=True,
                         help='The CGCloud cluster name for Toil leader and workers.')
+        sp.add_argument('-z', '--zone', required=cgcloud_zone is None, default=cgcloud_zone,
+                        help="The EC2 availability zone in which to place on-demand instances like the leaders of the "
+                             "Toil and standalone Spark clusters. Also determines the region of the S3 bucket and SDB "
+                             "domain for Toil's job store. The availability zone for spot instances may be chosen "
+                             "independently from all zones in the region containing the specified zone.")
     for sp in cluster_sp, metric_sp:
         sp.add_argument('-t', '--instance-type', default='r3.8xlarge',
                         help='Worker instance type, e.g. m4.large or c3.8xlarge.')
@@ -586,6 +589,10 @@ def main():
     elif params.command == 'launch-metrics':
         manage_metrics_and_cluster_scaling(params)
 
+
+def region_of_zone(availability_zone):
+    # FIXME: cgcloud-lib's Context has something more robust for this
+    return availability_zone[:-1]
 
 if __name__ == '__main__':
     main()
