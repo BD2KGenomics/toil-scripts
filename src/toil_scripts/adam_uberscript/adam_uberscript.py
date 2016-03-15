@@ -286,7 +286,7 @@ def grow_cluster(num_nodes, instance_type, cluster_name, cluster_type='toil', *o
 def manage_metrics_and_cluster_scaling(params):
     conn = boto.sdb.connect_to_region(region_of_zone(params.zone))
     dom = conn.get_domain('{0}--files'.format(params.jobstore))
-    grow_cluster_thread = threading.Thread(target=manage_toil_cluster, args=(params, conn, dom))
+    grow_cluster_thread = threading.Thread(target=manage_toil_cluster, args=(params, dom))
     metric_collection_thread = threading.Thread(target=collect_realtime_metrics, args=(params,))
     grow_cluster_thread.start()
     metric_collection_thread.start()
