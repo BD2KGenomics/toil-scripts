@@ -362,6 +362,7 @@ def manage_standalone_spark_cluster(params, domain):
                 if num_masters == 0:
                     # Absence of master indicates absence of cluster, so create it now.
                     assert num_workers == 0, 'Orphaned Spark workers detected'
+                    assert num_desired_workers > 0
                     output = check_output(['cgcloud',
                                            'create-cluster',
                                            '--list',
@@ -374,7 +375,7 @@ def manage_standalone_spark_cluster(params, domain):
                                           role_options(params) +
                                           ['spark'])
                     output = parse_cgcloud_list_output(output)
-                    assert len(output) == 1
+                    assert len(output) == num_desired_workers + 1
                     master = output[0]
                     assert master['role_name'] == 'spark-master'
                     SparkMasterAddress.create(domain, master['private_ip_address']).save(force=True)
