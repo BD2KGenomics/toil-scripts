@@ -288,6 +288,12 @@ def manage_metrics_and_cluster_scaling(params):
     dom = conn.get_domain('{0}--files'.format(params.jobstore))
     grow_cluster_thread = threading.Thread(target=manage_toil_cluster, args=(params, dom))
     metric_collection_thread = threading.Thread(target=collect_realtime_metrics, args=(params,))
+    if params.spark_sample_slots:
+        manage_standalone_spark_cluster_thread = threading.Thread(target=manage_standalone_spark_cluster,
+                                                                  args=(params, dom))
+        # TODO: shutdown of Spark cluster
+        manage_standalone_spark_cluster_thread.daemon = True
+        manage_standalone_spark_cluster_thread.start()
     grow_cluster_thread.start()
     metric_collection_thread.start()
     grow_cluster_thread.join()
