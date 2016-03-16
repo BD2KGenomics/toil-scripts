@@ -335,6 +335,7 @@ def static_dag(job,
     print >> gatk_preprocess_fp, '{uuid},s3://{s3_bucket}/alignment{dir_suffix}/{uuid}.bam'.format(**locals())
     gatk_preprocess_fp.flush()
     gatk_preprocess_fp.close()
+    gatk_preprocess_inputs['cpu_count'] = str(multiprocessing.cpu_count())
     gatk_preprocess_inputs['config'] = job.fileStore.writeGlobalFile(gatk_preprocess_config_path)
 
     # write config for GATK haplotype caller for the result of ADAM preprocessing
@@ -343,6 +344,7 @@ def static_dag(job,
     print >> gatk_adam_call_fp, '{uuid},s3://{s3_bucket}/analysis{dir_suffix}/{uuid}/{uuid}.adam.bam'.format(**locals())
     gatk_adam_call_fp.flush()
     gatk_adam_call_fp.close()
+    gatk_adam_call_inputs['cpu_count'] = str(multiprocessing.cpu_count())
     gatk_adam_call_inputs['config'] = job.fileStore.writeGlobalFile(gatk_adam_call_config_path)
 
     # write config for GATK haplotype caller for the result of GATK preprocessing
@@ -351,6 +353,7 @@ def static_dag(job,
     print >> gatk_gatk_call_fp, '{uuid},s3://{s3_bucket}/analysis{dir_suffix}/{uuid}/{uuid}.gatk.bam'.format(**locals())
     gatk_gatk_call_fp.flush()
     gatk_gatk_call_fp.close()
+    gatk_gatk_call_inputs['cpu_count'] = str(multiprocessing.cpu_count())
     gatk_gatk_call_inputs['config'] = job.fileStore.writeGlobalFile(gatk_gatk_call_config_path)
 
     # get head BWA alignment job function and encapsulate it
@@ -523,7 +526,7 @@ if __name__ == '__main__':
                               'output_dir': None,
                               'sudo': args.sudo,
                               'ssec': None,
-                              'cpu_count': str(multiprocessing.cpu_count()),
+                              'cpu_count': None,
                               'suffix': '.gatk' }
 
     gatk_adam_call_inputs = {'ref.fa': args.ref,
@@ -534,7 +537,7 @@ if __name__ == '__main__':
                              'omni.vcf': args.omni,
                              'output_dir': None,
                              'uuid': None,
-                             'cpu_count': str(multiprocessing.cpu_count()),
+                             'cpu_count': None,
                              'ssec': None,
                              'file_size': args.file_size,
                              'suffix': '.adam',
@@ -548,7 +551,7 @@ if __name__ == '__main__':
                              'omni.vcf': args.omni,
                              'output_dir': None,
                              'uuid': None,
-                             'cpu_count': str(multiprocessing.cpu_count()),
+                             'cpu_count': None,
                              'ssec': None,
                              'file_size': args.file_size,
                              'suffix': '.gatk',
