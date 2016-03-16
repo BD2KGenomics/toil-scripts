@@ -473,7 +473,7 @@ def mark_dups_sample(job, shared_ids, input_args):
     work_dir = job.fileStore.getLocalTempDir()
     # Retrieve file path
     read_from_filestore(job, work_dir, shared_ids, 'sample.sorted.bam')
-    outpath = os.path.join(work_dir, 'sample.sorted.bam')
+    outpath = os.path.join(work_dir, 'sample.mkdups.bam')
     # Call: picardtools
     command = ['MarkDuplicates',
                'INPUT=sample.sorted.bam',
@@ -484,6 +484,7 @@ def mark_dups_sample(job, shared_ids, input_args):
                 tool='quay.io/ucsc_cgl/picardtools:1.95--dd5ac549b95eb3e5d166a5e310417ef13651994e',
                 outfiles=['sample.mkdups.bam'],
                 sudo=sudo)
+
     shared_ids['sample.mkdups.bam'] = job.fileStore.writeGlobalFile(outpath)
     job.addChildJobFn(index_mkdups, shared_ids, input_args)
 
