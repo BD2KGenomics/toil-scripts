@@ -566,6 +566,12 @@ def main():
                                 'cluster managed by this script. To be used in conjunction with the --master_ip=auto '
                                 'option of the launch-cluster command. The default of 0 disables the standalone Spark '
                                 'cluster.')
+    metric_sp.add_argument('--spark-master-type', default=None,
+                           help='The EC2 instance type of the Spark master. Only applicable with '
+                                '--spark-sample-slots. Defaults to --leader-type.')
+    metric_sp.add_argument('--spark-instance-type', default=None,
+                           help='The EC2 instance type of the Spark slave. Only applicable with '
+                                '--spark-sample-slots. Defaults to --instance-type.')
 
     # Common options
     cgcloud_zone = os.environ.get('CGCLOUD_ZONE')
@@ -594,6 +600,10 @@ def main():
     elif params.command == 'launch-pipeline':
         launch_pipeline(params)
     elif params.command == 'launch-metrics':
+        if params.spark_instance_type and not params.spark_sample_slots:
+            log.warn('--spark-instance-type will be ignored since --spark-sample-slots was not provided.')
+        if params.spark_master_type and not params.spark_sample_slots:
+            log.warn('--spark-master-type will be ignored since --spark-sample-slots was not provided.')
         manage_metrics_and_cluster_scaling(params)
 
 
