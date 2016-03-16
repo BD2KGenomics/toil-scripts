@@ -293,7 +293,12 @@ def start(job, shared_ids, input_args, sample):
         ids['toil.bam'] = job.addChildJobFn(download_url, url, 'toil.bam').rv()
     else:
         pass
-    job.addFollowOnJobFn(index, ids, input_args)
+
+    if input_args['indexed']:
+        ids['toil.bam.bai'] = job.addChildJobFn(download_url, "%s.bai" % url, 'toil.bam.bai').rv()
+        job.addFollowOnJobFn(haplotype_caller, ids, input_args, cores = input_args['cpu_count'])
+    else:
+        job.addFollowOnJobFn(index, ids, input_args)
 
 
 def index(job, shared_ids, input_args):
@@ -584,6 +589,7 @@ if __name__ == '__main__':
               'cpu_count': multiprocessing.cpu_count(), # FIXME: should not be called from toil-leader, see #186
               'file_size': args.file_size,
               'ssec': None,
-              'sudo': False}
+              'sudo': False,
+              'indexed': False } # FIXME: should be parametrized
     
     Job.Runner.startToil(Job.wrapJobFn(batch_start, inputs), args)

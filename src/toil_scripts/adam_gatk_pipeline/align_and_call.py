@@ -548,6 +548,7 @@ if __name__ == '__main__':
                              'ssec': None,
                              'file_size': args.file_size,
                              'suffix': '.adam',
+                             'indexed': False,
                              'sudo': args.sudo}
 
     gatk_gatk_call_inputs = {'ref.fa': args.ref,
@@ -562,6 +563,7 @@ if __name__ == '__main__':
                              'ssec': None,
                              'file_size': args.file_size,
                              'suffix': '.gatk',
+                             'indexed': True,
                              'sudo': args.sudo}
 
     if (args.pipeline_to_run != "adam" and
