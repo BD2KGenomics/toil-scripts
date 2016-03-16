@@ -440,32 +440,7 @@ def download_sample(job, shared_ids, input_args, sample):
         shared_ids['sample.bam'] = job.addChildJobFn(download_encrypted_file, input_args, 'sample.bam').rv()
     else:
         shared_ids['sample.bam'] = job.addChildJobFn(download_from_url_gatk, url=url, name='sample.bam').rv()
-    job.addFollowOnJobFn(index_sample, shared_ids, input_args)
-
-
-def index_sample(job, shared_ids, input_args):
-    """
-    Runs samtools index to create (.bai) files
-
-    job_vars: tuple     Contains the input_args and ids dictionaries
-    """
-    debug_log = open('index', 'w')
-    # Unpack convenience variables for job
-    work_dir = job.fileStore.getLocalTempDir()
-    sudo = input_args['sudo']
-    read_from_filestore(job, work_dir, shared_ids, 'sample.bam')
-    outpath = os.path.join(work_dir, 'sample.bam.bai')
-    debug_log.write(outpath + '\n')
-    debug_log.close()
-    # Retrieve file path
-    # Call: index the normal.bam
-    parameters = ['index', 'sample.bam']
-    docker_call_preprocess(work_dir=work_dir, tool_parameters=parameters,
-                tool='quay.io/ucsc_cgl/samtools:0.1.19--dd5ac549b95eb3e5d166a5e310417ef13651994e',
-                outfiles=['sample.bam.bai'],
-                sudo=sudo)
-    shared_ids['sample.bam.bai'] = job.fileStore.writeGlobalFile(outpath)
-    job.addChildJobFn(sort_sample, shared_ids, input_args)
+    job.addFollowOnJobFn(sort_sample, shared_ids, input_args)
 
 
 def sort_sample(job, shared_ids, input_args):
@@ -475,7 +450,7 @@ def sort_sample(job, shared_ids, input_args):
     work_dir = job.fileStore.getLocalTempDir()
 
     #Retrieve file path
-    read_from_filestore(job, work_dir, shared_ids, 'sample.bam', 'sample.bam.bai')
+    read_from_filestore(job, work_dir, shared_ids, 'sample.bam')
     outpath = os.path.join(work_dir, 'sample.sorted.bam')
     #Call: picardtools
     command = ['SortSam',

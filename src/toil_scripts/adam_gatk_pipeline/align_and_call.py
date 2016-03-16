@@ -500,7 +500,7 @@ if __name__ == '__main__':
                   'cpu_count': None,
                   'file_size': args.file_size,
                   'use_bwakit': args.use_bwakit,
-                  'sort': True, # TODO: #169 will code this to false
+                  'sort': False,
                   'trim': args.trim}
 
     if bool(args.master_ip) == bool(args.num_nodes):
