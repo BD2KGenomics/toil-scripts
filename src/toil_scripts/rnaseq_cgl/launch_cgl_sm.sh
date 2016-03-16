@@ -8,5 +8,5 @@ python -m toil_scripts.rnaseq_cgl.rnaseq_cgl_pipeline \
 --config /data/rnaseq-config.csv \
 --retryCount 1 \
 --ssec /data/master.key \
---output_dir /data \
+--output-dir /data \
 --workDir /data
