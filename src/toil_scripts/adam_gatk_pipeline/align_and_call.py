@@ -342,7 +342,7 @@ def static_dag(job,
     print >> gatk_preprocess_fp, '{uuid},s3://{s3_bucket}/alignment{dir_suffix}/{uuid}.bam'.format(**locals())
     gatk_preprocess_fp.flush()
     gatk_preprocess_fp.close()
-    gatk_preprocess_inputs['cpu_count'] = str(multiprocessing.cpu_count())
+    gatk_preprocess_inputs['cpu_count'] = multiprocessing.cpu_count()
     gatk_preprocess_inputs['config'] = job.fileStore.writeGlobalFile(gatk_preprocess_config_path)
 
     # write config for GATK haplotype caller for the result of ADAM preprocessing
@@ -351,7 +351,7 @@ def static_dag(job,
     print >> gatk_adam_call_fp, '{uuid},s3://{s3_bucket}/analysis{dir_suffix}/{uuid}/{uuid}.adam.bam'.format(**locals())
     gatk_adam_call_fp.flush()
     gatk_adam_call_fp.close()
-    gatk_adam_call_inputs['cpu_count'] = str(multiprocessing.cpu_count())
+    gatk_adam_call_inputs['cpu_count'] = multiprocessing.cpu_count()
     gatk_adam_call_inputs['config'] = job.fileStore.writeGlobalFile(gatk_adam_call_config_path)
 
     # write config for GATK haplotype caller for the result of GATK preprocessing
@@ -360,7 +360,7 @@ def static_dag(job,
     print >> gatk_gatk_call_fp, '{uuid},s3://{s3_bucket}/analysis{dir_suffix}/{uuid}/{uuid}.gatk.bam'.format(**locals())
     gatk_gatk_call_fp.flush()
     gatk_gatk_call_fp.close()
-    gatk_gatk_call_inputs['cpu_count'] = str(multiprocessing.cpu_count())
+    gatk_gatk_call_inputs['cpu_count'] = multiprocessing.cpu_count()
     gatk_gatk_call_inputs['config'] = job.fileStore.writeGlobalFile(gatk_gatk_call_config_path)
 
     # get head BWA alignment job function and encapsulate it

@@ -317,7 +317,7 @@ def index(job, shared_ids, input_args):
                 sudo = input_args['sudo'])
     # Update FileStore and call child
     shared_ids['toil.bam.bai'] = job.fileStore.writeGlobalFile(output_path)
-    job.addChildJobFn(haplotype_caller, shared_ids, input_args)
+    job.addChildJobFn(haplotype_caller, shared_ids, input_args, cores = input_args['cpu_count'])
 
 
 def haplotype_caller(job, shared_ids, input_args):
@@ -336,7 +336,7 @@ def haplotype_caller(job, shared_ids, input_args):
                                      input_args['suffix'])
     
     # Call GATK -- HaplotypeCaller
-    command = ['-nct', input_args['cpu_count'],
+    command = ['-nct', str(input_args['cpu_count']),
                '-R', 'ref.fa',
                '-T', 'HaplotypeCaller',
                '--genotyping_mode', 'Discovery',
@@ -366,7 +366,7 @@ def haplotype_caller(job, shared_ids, input_args):
     upload_or_move_hc(work_dir, input_args, output)
 
     # call variants prior to vqsr
-    job.addChildJobFn(genotype_gvcf, shared_ids, input_args)
+    job.addChildJobFn(genotype_gvcf, shared_ids, input_args, cores = input_args['cpu_count'])
 
 
 def genotype_gvcf(job, shared_ids, input_args):
@@ -386,7 +386,7 @@ def genotype_gvcf(job, shared_ids, input_args):
     read_from_filestore_hc(job, work_dir, shared_ids, *input_files)
     output = 'unified.raw.BOTH.gatk.vcf'
     
-    command = ['-nt', input_args['cpu_count'],
+    command = ['-nt', str(input_args['cpu_count']),
                '-R', 'ref.fa',
                '-T', 'GenotypeGVCFs',
                '--variant', '%s.raw.BOTH.gatk.gvcf' % input_args['uuid'],
@@ -408,8 +408,8 @@ def genotype_gvcf(job, shared_ids, input_args):
     shared_ids[output] = job.fileStore.writeGlobalFile(os.path.join(work_dir, output))
 
     # run vqsr
-    job.addChildJobFn(vqsr_snp, shared_ids, input_args)
-    job.addChildJobFn(vqsr_indel, shared_ids, input_args)
+    job.addChildJobFn(vqsr_snp, shared_ids, input_args, cores = input_args['cpu_count'])
+    job.addChildJobFn(vqsr_indel, shared_ids, input_args, cores = input_args['cpu_count'])
 
 
 def vqsr_snp(job, shared_ids, input_args):
@@ -429,7 +429,7 @@ def vqsr_snp(job, shared_ids, input_args):
     command = ['-T', 'VariantRecalibrator',
                '-R', 'ref.fa',
                '-input', 'unified.raw.BOTH.gatk.vcf',
-               '-nt', input_args['cpu_count'],
+               '-nt', str(input_args['cpu_count']),
                '-resource:hapmap,known=false,training=true,truth=true,prior=15.0', 'hapmap.vcf',
                '-resource:omni,known=false,training=true,truth=false,prior=12.0', 'omni.vcf',
                '-resource:dbsnp,known=true,training=false,truth=false,prior=2.0', 'dbsnp.vcf',
@@ -516,7 +516,7 @@ def vqsr_indel(job, shared_ids, input_args):
     command = ['-T', 'VariantRecalibrator',
                '-R', 'ref.fa',
                '-input', 'unified.raw.BOTH.gatk.vcf',
-               '-nt', input_args['cpu_count'],
+               '-nt', str(input_args['cpu_count']),
                '-resource:mills,known=true,training=true,truth=true,prior=12.0', 'mills.vcf',
                '-an', 'DP', '-an', 'FS', '-an', 'ReadPosRankSum',
                '-mode', 'INDEL',
@@ -581,7 +581,7 @@ if __name__ == '__main__':
               'output_dir': args.output_dir,
               'suffix': args.suffix,
               'uuid': None,
-              'cpu_count': str(multiprocessing.cpu_count()),
+              'cpu_count': multiprocessing.cpu_count(), # FIXME: should not be called from toil-leader, see #186
               'file_size': args.file_size,
               'ssec': None,
               'sudo': False}

@@ -432,7 +432,6 @@ def download_sample(job, shared_ids, input_args, sample):
     uuid, url = sample
     # Create a unique
     input_args['uuid'] = uuid
-    cores = multiprocessing.cpu_count()
     if input_args['output_dir']:
         input_args['output_dir'] = os.path.join(input_args['output_dir'], uuid)
     # Download sample bams and launch pipeline
@@ -511,7 +510,7 @@ def index_mkdups(job, shared_ids, input_args):
                 outfiles=['sample.mkdups.bam.bai'],
                 sudo=sudo)
     shared_ids['sample.mkdups.bam.bai'] = job.fileStore.writeGlobalFile(outpath)
-    job.addChildJobFn(realigner_target_creator, shared_ids, input_args)
+    job.addChildJobFn(realigner_target_creator, shared_ids, input_args, cores = input_args['cpu_count'])
 
 
 def realigner_target_creator(job, shared_ids, input_args):
@@ -532,7 +531,7 @@ def realigner_target_creator(job, shared_ids, input_args):
     output = os.path.join(work_dir, 'sample.intervals')
     # Call: GATK -- RealignerTargetCreator
     parameters = ['-T', 'RealignerTargetCreator',
-                  '-nt', input_args['cpu_count'],
+                  '-nt', str(input_args['cpu_count']),
                   '-R', 'ref.fa',
                   '-I', 'sample.mkdups.bam',
                   '-known', 'phase.vcf',
@@ -608,7 +607,7 @@ def index_indel(job, shared_ids, input_args):
                 outfiles=['sample.indel.bam.bai'],
                 sudo=sudo)
     shared_ids['sample.indel.bam.bai'] = job.fileStore.writeGlobalFile(outpath)
-    job.addChildJobFn(base_recalibration, shared_ids, input_args)
+    job.addChildJobFn(base_recalibration, shared_ids, input_args, cores = input_args['cpu_count'])
 
 
 def base_recalibration(job, shared_ids, input_args):
@@ -629,7 +628,7 @@ def base_recalibration(job, shared_ids, input_args):
     output = os.path.join(work_dir, 'sample.recal.table')
     # Call: GATK -- IndelRealigner
     parameters = ['-T', 'BaseRecalibrator',
-                  '-nct', input_args['cpu_count'],
+                  '-nct', str(input_args['cpu_count']),
                   '-R', 'ref.fa',
                   '-I', 'sample.indel.bam',
                   '-knownSites', 'dbsnp.vcf',
@@ -640,7 +639,7 @@ def base_recalibration(job, shared_ids, input_args):
                 outfiles=['sample.recal.table'])
     # Write to fileStore
     shared_ids['sample.recal.table'] = job.fileStore.writeGlobalFile(output)
-    job.addChildJobFn(print_reads, shared_ids, input_args)
+    job.addChildJobFn(print_reads, shared_ids, input_args, cores = input_args['cpu_count'])
 
 
 def print_reads(job, shared_ids, input_args):
@@ -663,7 +662,7 @@ def print_reads(job, shared_ids, input_args):
     outpath = os.path.join(work_dir, outfile)
     # Call: GATK -- PrintReads
     parameters = ['-T', 'PrintReads',
-                  '-nct', input_args['cpu_count'],
+                  '-nct', str(input_args['cpu_count']),
                   '-R', 'ref.fa',
                   '--emit_original_quals',
                   '-I', 'sample.indel.bam',
@@ -694,8 +693,7 @@ def main():
               'sudo': pargs.sudo,
               'ssec': pargs.ssec,
               'suffix': pargs.suffix,
-              'cpu_count': str(multiprocessing.cpu_count())}
-
+              'cpu_count': multiprocessing.cpu_count()} # FIXME: should not be called from toil-leader, see #186
 
     # Launch Pipeline
     Job.Runner.startToil(Job.wrapJobFn(download_gatk_files, inputs), pargs)
