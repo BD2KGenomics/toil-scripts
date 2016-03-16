@@ -341,7 +341,8 @@ def haplotype_caller(job, shared_ids, input_args):
                                      input_args['suffix'])
     
     # Call GATK -- HaplotypeCaller
-    command = ['-nct', str(input_args['cpu_count']),
+    command = ['-U', 'ALLOW_SEQ_DICT_INCOMPATIBILITY', # RISKY! (?) See #189
+               '-nct', str(input_args['cpu_count']),
                '-R', 'ref.fa',
                '-T', 'HaplotypeCaller',
                '--genotyping_mode', 'Discovery',
@@ -391,7 +392,8 @@ def genotype_gvcf(job, shared_ids, input_args):
     read_from_filestore_hc(job, work_dir, shared_ids, *input_files)
     output = 'unified.raw.BOTH.gatk.vcf'
     
-    command = ['-nt', str(input_args['cpu_count']),
+    command = ['-U', 'ALLOW_SEQ_DICT_INCOMPATIBILITY', # RISKY! (?) See #189
+               '-nt', str(input_args['cpu_count']),
                '-R', 'ref.fa',
                '-T', 'GenotypeGVCFs',
                '--variant', '%s.raw.BOTH.gatk.gvcf' % input_args['uuid'],
@@ -431,7 +433,8 @@ def vqsr_snp(job, shared_ids, input_args):
                    'hapmap.vcf', 'omni.vcf', 'dbsnp.vcf', 'phase.vcf']
     read_from_filestore_hc(job, work_dir, shared_ids, *input_files)
     outputs = ['HAPSNP.recal', 'HAPSNP.tranches', 'HAPSNP.plots']
-    command = ['-T', 'VariantRecalibrator',
+    command = ['-U', 'ALLOW_SEQ_DICT_INCOMPATIBILITY', # RISKY! (?) See #189
+               '-T', 'VariantRecalibrator',
                '-R', 'ref.fa',
                '-input', 'unified.raw.BOTH.gatk.vcf',
                '-nt', str(input_args['cpu_count']),
@@ -469,7 +472,8 @@ def apply_vqsr_snp(job, shared_ids, input_args):
                    'HAPSNP.tranches', 'HAPSNP.recal']
     read_from_filestore_hc(job, work_dir, shared_ids, *input_files)
     output = '{}.HAPSNP.vqsr.SNP{}.vcf'.format(uuid, suffix)
-    command = ['-T', 'ApplyRecalibration',
+    command = ['-U', 'ALLOW_SEQ_DICT_INCOMPATIBILITY', # RISKY! (?) See #189
+               '-T', 'ApplyRecalibration',
                '-input', 'unified.raw.BOTH.gatk.vcf',
                '-o', output,
                '-R', 'ref.fa',
@@ -518,7 +522,8 @@ def vqsr_indel(job, shared_ids, input_args):
     input_files = ['ref.fa', 'ref.fa.fai', 'ref.dict', 'unified.raw.BOTH.gatk.vcf', 'mills.vcf']
     read_from_filestore_hc(job, work_dir, shared_ids, *input_files)
     outputs = ['HAPINDEL.recal', 'HAPINDEL.tranches', 'HAPINDEL.plots']
-    command = ['-T', 'VariantRecalibrator',
+    command = ['-U', 'ALLOW_SEQ_DICT_INCOMPATIBILITY', # RISKY! (?) See #189
+               '-T', 'VariantRecalibrator',
                '-R', 'ref.fa',
                '-input', 'unified.raw.BOTH.gatk.vcf',
                '-nt', str(input_args['cpu_count']),
@@ -554,7 +559,8 @@ def apply_vqsr_indel(job, shared_ids, input_args):
                    'HAPINDEL.recal', 'HAPINDEL.tranches', 'HAPINDEL.plots']
     read_from_filestore_hc(job, work_dir, shared_ids, *input_files)
     output = '{}.HAPSNP.vqsr.INDEL{}.vcf'.format(uuid, suffix)
-    command = ['-T', 'ApplyRecalibration',
+    command = ['-U', 'ALLOW_SEQ_DICT_INCOMPATIBILITY', # RISKY! (?) See #189
+               '-T', 'ApplyRecalibration',
                '-input', 'unified.raw.BOTH.gatk.vcf',
                '-o', output,
                '-R', 'ref.fa',

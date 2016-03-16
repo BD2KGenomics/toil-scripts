@@ -149,7 +149,6 @@ def move_to_output_dir(work_dir, output_dir, *filenames):
             shutil.move(origin, dest)
 
 
-
 def copy_to_output_dir(work_dir, output_dir, uuid=None, files=None):
     """
     A list of files to move from work_dir to output_dir.
@@ -518,7 +517,8 @@ def realigner_target_creator(job, shared_ids, input_args):
     # Output file path
     output = os.path.join(work_dir, 'sample.intervals')
     # Call: GATK -- RealignerTargetCreator
-    parameters = ['-T', 'RealignerTargetCreator',
+    parameters = ['-U', 'ALLOW_SEQ_DICT_INCOMPATIBILITY', # RISKY! (?) See #189
+                  '-T', 'RealignerTargetCreator',
                   '-nt', str(input_args['cpu_count']),
                   '-R', 'ref.fa',
                   '-I', 'sample.mkdups.bam',
@@ -554,7 +554,8 @@ def indel_realignment(job, shared_ids, input_args):
     # Output file path
     output = os.path.join(work_dir, 'sample.indel.bam')
     # Call: GATK -- IndelRealigner
-    parameters = ['-T', 'IndelRealigner',
+    parameters = ['-U', 'ALLOW_SEQ_DICT_INCOMPATIBILITY', # RISKY! (?) See #189
+                  '-T', 'IndelRealigner',
                   '-R', 'ref.fa',
                   '-I', 'sample.mkdups.bam',
                   '-known', 'phase.vcf',
@@ -593,7 +594,8 @@ def base_recalibration(job, shared_ids, input_args):
     # Output file path
     output = os.path.join(work_dir, 'sample.recal.table')
     # Call: GATK -- IndelRealigner
-    parameters = ['-T', 'BaseRecalibrator',
+    parameters = ['-U', 'ALLOW_SEQ_DICT_INCOMPATIBILITY', # RISKY! (?) See #189
+                  '-T', 'BaseRecalibrator',
                   '-nct', str(input_args['cpu_count']),
                   '-R', 'ref.fa',
                   '-I', 'sample.indel.bam',
@@ -628,7 +630,8 @@ def print_reads(job, shared_ids, input_args):
     outfile_idx = '{}{}.bam.bai'.format(uuid, suffix)
     outpath = os.path.join(work_dir, outfile)
     # Call: GATK -- PrintReads
-    parameters = ['-T', 'PrintReads',
+    parameters = ['-U', 'ALLOW_SEQ_DICT_INCOMPATIBILITY', # RISKY! (?) See #189
+                  '-T', 'PrintReads',
                   '-nct', str(input_args['cpu_count']),
                   '-R', 'ref.fa',
                   '--emit_original_quals',
