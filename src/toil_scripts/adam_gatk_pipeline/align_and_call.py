@@ -246,7 +246,13 @@ def sample_loop(job,
   Loops over the sample_ids (uuids) in the manifest, creating child jobs to process each
   """
 
-  for uuid in uuid_list:
+  for uuid_rg in uuid_list:
+
+    uuid_items = uuid_rg.split(',')
+    uuid = uuid_items[0]
+    rg_line = None
+    if len(uuid_items) > 1:
+        rg_line = uuid_items[1]
 
     uuid_bwa_inputs = copy.deepcopy(bwa_inputs)
     uuid_adam_inputs = copy.deepcopy(adam_inputs)
@@ -257,6 +263,7 @@ def sample_loop(job,
     ## set uuid inputs
     uuid_bwa_inputs['lb'] = uuid
     uuid_bwa_inputs['uuid'] = uuid
+    uuid_bwa_inputs['rg_line'] = rg_line
     uuid_adam_inputs['outDir'] = 's3://{s3_bucket}/analysis{dir_suffix}/{uuid}'.format(**locals())
     uuid_adam_inputs['bamName'] = 's3://{s3_bucket}/alignment{dir_suffix}/{uuid}.bam'.format(**locals())
     uuid_gatk_preprocess_inputs['s3_dir'] = '{s3_bucket}/analysis{dir_suffix}/{uuid}'.format(**locals())
