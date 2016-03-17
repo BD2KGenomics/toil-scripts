@@ -30,10 +30,13 @@ import base64
 import subprocess
 import shutil
 import sys
+import logging
 from toil.job import Job
 
 from toil_scripts import download_from_s3_url
 from toil_scripts.batch_alignment.bwa_alignment import upload_to_s3
+
+_log = logging.getLogger(__name__)
 
 debug = False 
 
@@ -286,6 +289,7 @@ def docker_call_preprocess(work_dir, tool_parameters, tool, java_opts=None,
             f.close()
         return
     try:
+        _log.info("Calling %s", " ".join(base_docker_call + [tool] + tool_parameters))
         subprocess.check_call(base_docker_call + [tool] + tool_parameters)
     except subprocess.CalledProcessError, e:
         raise RuntimeError('docker command returned a non-zero exit status. {}'.format(e))
@@ -438,7 +442,27 @@ def download_sample(job, shared_ids, input_args, sample):
         shared_ids['sample.bam'] = job.addChildJobFn(download_encrypted_file, input_args, 'sample.bam').rv()
     else:
         shared_ids['sample.bam'] = job.addChildJobFn(download_from_url_gatk, url=url, name='sample.bam').rv()
-    job.addFollowOnJobFn(sort_sample, shared_ids, input_args)
+    job.addFollowOnJobFn(remove_supplementary_alignments, shared_ids, input_args)
+
+def remove_supplementary_alignments(job, shared_ids, input_args):
+    work_dir = job.fileStore.getLocalTempDir()
+
+    #Retrieve file path
+    read_from_filestore(job, work_dir, shared_ids, 'sample.bam')
+    outpath = os.path.join(work_dir, 'sample.nosuppl.bam')
+
+    command = ['view',
+               '-b', '-o', '/data/sample.nosuppl.bam',
+               '-F', '0x800',
+               '/data/sample.bam']
+               
+    sudo = input_args['sudo']
+    docker_call_preprocess(work_dir=work_dir, tool_parameters=command,
+                tool='quay.io/ucsc_cgl/samtools:1.3--256539928ea162949d8a65ca5c79a72ef557ce7c',
+                outfiles=['sample.nosuppl.bam'],
+                sudo=sudo)
+    shared_ids['sample.nosuppl.bam'] = job.fileStore.writeGlobalFile(outpath)
+    job.addChildJobFn(sort_sample, shared_ids, input_args)
 
 
 def _move_bai(outpath):
@@ -454,11 +478,11 @@ def sort_sample(job, shared_ids, input_args):
     work_dir = job.fileStore.getLocalTempDir()
 
     #Retrieve file path
-    read_from_filestore(job, work_dir, shared_ids, 'sample.bam')
+    read_from_filestore(job, work_dir, shared_ids, 'sample.nosuppl.bam')
     outpath = os.path.join(work_dir, 'sample.sorted.bam')
     #Call: picardtools
     command = ['SortSam',
-               'INPUT=sample.bam',
+               'INPUT=sample.nosuppl.bam',
                'OUTPUT=sample.sorted.bam',
                'SORT_ORDER=coordinate',
                'CREATE_INDEX=true']
