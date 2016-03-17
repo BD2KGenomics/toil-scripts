@@ -458,9 +458,9 @@ def remove_supplementary_alignments(job, shared_ids, input_args):
                
     sudo = input_args['sudo']
     docker_call_preprocess(work_dir=work_dir, tool_parameters=command,
-                tool='quay.io/ucsc_cgl/samtools:1.3--256539928ea162949d8a65ca5c79a72ef557ce7c',
-                outfiles=['sample.nosuppl.bam'],
-                sudo=sudo)
+                           tool='quay.io/ucsc_cgl/samtools:1.3--256539928ea162949d8a65ca5c79a72ef557ce7c',
+                           outfiles=['sample.nosuppl.bam'],
+                           sudo=sudo)
     shared_ids['sample.nosuppl.bam'] = job.fileStore.writeGlobalFile(outpath)
     job.addChildJobFn(sort_sample, shared_ids, input_args)
 
@@ -488,9 +488,9 @@ def sort_sample(job, shared_ids, input_args):
                'CREATE_INDEX=true']
     sudo = input_args['sudo']
     docker_call_preprocess(work_dir=work_dir, tool_parameters=command,
-                tool='quay.io/ucsc_cgl/picardtools:1.95--dd5ac549b95eb3e5d166a5e310417ef13651994e',
-                outfiles=['sample.sorted.bam'],
-                sudo=sudo)
+                           tool='quay.io/ucsc_cgl/picardtools:1.95--dd5ac549b95eb3e5d166a5e310417ef13651994e',
+                           outfiles=['sample.sorted.bam'],
+                           sudo=sudo)
     shared_ids['sample.sorted.bam'] = job.fileStore.writeGlobalFile(outpath)
     job.addChildJobFn(mark_dups_sample, shared_ids, input_args)
 
@@ -512,10 +512,10 @@ def mark_dups_sample(job, shared_ids, input_args):
                'ASSUME_SORTED=true',
                'CREATE_INDEX=true']
     docker_call_preprocess(work_dir=work_dir, tool_parameters=command,
-                tool='quay.io/ucsc_cgl/picardtools:1.95--dd5ac549b95eb3e5d166a5e310417ef13651994e',
-                outfiles=['sample.mkdups.bam'],
-                sudo=sudo)
-
+                           tool='quay.io/ucsc_cgl/picardtools:1.95--dd5ac549b95eb3e5d166a5e310417ef13651994e',
+                           outfiles=['sample.mkdups.bam'],
+                           sudo=sudo)
+    
     shared_ids['sample.mkdups.bam'] = job.fileStore.writeGlobalFile(outpath)
 
     # picard writes the index for file.bam at file.bai, not file.bam.bai
@@ -552,10 +552,10 @@ def realigner_target_creator(job, shared_ids, input_args):
                   '-o', 'sample.intervals']
 
     docker_call_preprocess(work_dir=work_dir, tool_parameters=parameters,
-		tool='quay.io/ucsc_cgl/gatk:3.4--dd5ac549b95eb3e5d166a5e310417ef13651994e',
-                java_opts='-Xmx10g',
-                outfiles=['sample.intervals'],
-		sudo=sudo)
+                           tool='quay.io/ucsc_cgl/gatk:3.5--dba6dae49156168a909c43330350c6161dc7ecc2',
+                           java_opts='-Xmx10g',
+                           outfiles=['sample.intervals'],
+                           sudo=sudo)
     shared_ids['sample.intervals'] = job.fileStore.writeGlobalFile(output)
     job.addChildJobFn(indel_realignment, shared_ids, input_args)
 
@@ -589,10 +589,11 @@ def indel_realignment(job, shared_ids, input_args):
                   '-maxReads', str(720000),
                   '-maxInMemory', str(5400000),
                   '-o', 'sample.indel.bam']
-    docker_call_preprocess(tool='quay.io/ucsc_cgl/gatk:3.4--dd5ac549b95eb3e5d166a5e310417ef13651994e',
-                work_dir=work_dir, tool_parameters=parameters,
-                java_opts='-Xmx10g', sudo=sudo,
-                outfiles=['sample.indel.bam', 'sample.indel.bam.bai'])
+
+    docker_call_preprocess(tool='quay.io/ucsc_cgl/gatk:3.5--dba6dae49156168a909c43330350c6161dc7ecc2',
+                           work_dir=work_dir, tool_parameters=parameters,
+                           java_opts='-Xmx10g', sudo=sudo,
+                           outfiles=['sample.indel.bam', 'sample.indel.bam.bai'])
 
     # Write to fileStore
     shared_ids['sample.indel.bam'] = job.fileStore.writeGlobalFile(output)
@@ -625,10 +626,10 @@ def base_recalibration(job, shared_ids, input_args):
                   '-I', 'sample.indel.bam',
                   '-knownSites', 'dbsnp.vcf',
                   '-o', 'sample.recal.table']
-    docker_call_preprocess(tool='quay.io/ucsc_cgl/gatk:3.4--dd5ac549b95eb3e5d166a5e310417ef13651994e',
-                work_dir=work_dir, tool_parameters=parameters,
-                java_opts='-Xmx15g', sudo=sudo,
-                outfiles=['sample.recal.table'])
+    docker_call_preprocess(tool='quay.io/ucsc_cgl/gatk:3.5--dba6dae49156168a909c43330350c6161dc7ecc2',
+                           work_dir=work_dir, tool_parameters=parameters,
+                           java_opts='-Xmx15g', sudo=sudo,
+                           outfiles=['sample.recal.table'])
     # Write to fileStore
     shared_ids['sample.recal.table'] = job.fileStore.writeGlobalFile(output)
     job.addChildJobFn(print_reads, shared_ids, input_args, cores = input_args['cpu_count'])
@@ -662,8 +663,8 @@ def print_reads(job, shared_ids, input_args):
                   '-I', 'sample.indel.bam',
                   '-BQSR', 'sample.recal.table',
                   '-o', outfile]
-    docker_call_preprocess(tool='quay.io/ucsc_cgl/gatk:3.4--dd5ac549b95eb3e5d166a5e310417ef13651994e',
-                work_dir=work_dir, tool_parameters=parameters,
+    docker_call_preprocess(tool='quay.io/ucsc_cgl/gatk:3.5--dba6dae49156168a909c43330350c6161dc7ecc2',
+                           work_dir=work_dir, tool_parameters=parameters,
                            java_opts='-Xmx15g', sudo=sudo, outfiles=[outfile, outfile_idx])
 
     upload_or_move(job, work_dir, input_args, outfile)

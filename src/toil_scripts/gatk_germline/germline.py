@@ -358,7 +358,7 @@ def haplotype_caller(job, shared_ids, input_args):
     try:
         docker_call(work_dir = work_dir,
                     tool_parameters = command,
-                    tool = 'quay.io/ucsc_cgl/gatk',
+                    tool = 'quay.io/ucsc_cgl/gatk:3.5--dba6dae49156168a909c43330350c6161dc7ecc2',
                     sudo = input_args['sudo'])
     except:
         sys.stderr.write("Running haplotype caller with %s in %s failed." % (
@@ -404,7 +404,7 @@ def genotype_gvcf(job, shared_ids, input_args):
     try:
         docker_call(work_dir = work_dir,
                     tool_parameters = command,
-                    tool = 'quay.io/ucsc_cgl/gatk',
+                    tool = 'quay.io/ucsc_cgl/gatk:3.5--dba6dae49156168a909c43330350c6161dc7ecc2',
                     sudo = input_args['sudo'])
     except:
         sys.stderr.write("Running GenotypeGVCFs with %s in %s failed." % (
@@ -449,7 +449,7 @@ def vqsr_snp(job, shared_ids, input_args):
                '-rscriptFile', 'HAPSNP.plots']
     docker_call(work_dir = work_dir,
                 tool_parameters = command,
-                tool ='quay.io/ucsc_cgl/gatk',
+                tool ='quay.io/ucsc_cgl/gatk:3.5--dba6dae49156168a909c43330350c6161dc7ecc2',
                 sudo = input_args['sudo'])
     shared_ids = write_to_filestore(job, work_dir, shared_ids, *outputs)
     job.addChildJobFn(apply_vqsr_snp, shared_ids, input_args)
@@ -484,7 +484,7 @@ def apply_vqsr_snp(job, shared_ids, input_args):
                '-mode', 'SNP']
     docker_call(work_dir = work_dir,
                 tool_parameters = command,
-                tool = 'quay.io/ucsc_cgl/gatk',
+                tool = 'quay.io/ucsc_cgl/gatk:3.5--dba6dae49156168a909c43330350c6161dc7ecc2',
                 sudo = input_args['sudo'])
 
     upload_or_move_hc(work_dir, input_args, output)
@@ -537,7 +537,7 @@ def vqsr_indel(job, shared_ids, input_args):
                '--maxGaussians', '4']
     docker_call(work_dir = work_dir,
                 tool_parameters = command,
-                tool ='quay.io/ucsc_cgl/gatk',
+                tool ='quay.io/ucsc_cgl/gatk:3.5--dba6dae49156168a909c43330350c6161dc7ecc2',
                 sudo = input_args['sudo'])
     shared_ids = write_to_filestore(job, work_dir, shared_ids, *outputs)
     job.addChildJobFn(apply_vqsr_indel, shared_ids, input_args)
@@ -571,7 +571,7 @@ def apply_vqsr_indel(job, shared_ids, input_args):
                '-mode', 'INDEL']
     docker_call(work_dir = work_dir,
                 tool_parameters = command,
-                tool = 'quay.io/ucsc_cgl/gatk',
+                tool = 'quay.io/ucsc_cgl/gatk:3.5--dba6dae49156168a909c43330350c6161dc7ecc2',
                 sudo = input_args['sudo'])
 
     upload_or_move_hc(work_dir, input_args, output)
