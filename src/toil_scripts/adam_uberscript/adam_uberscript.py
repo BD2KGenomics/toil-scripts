@@ -130,6 +130,7 @@ def launch_pipeline(params):
                             'aws:{region}:{j}',
                             '--autoscale_cluster',
                             '--sequence_dir {sequence_dir}',
+                            '--dir_suffix /{genome}',
                             '--retryCount 1',
                             '--s3_bucket {b}',
                             '--bucket_region {region}',
@@ -174,6 +175,7 @@ def launch_pipeline(params):
                                                    fs=params.file_size,
                                                    r=restart,
                                                    sequence_dir=params.sequence_dir,
+                                                   genome=params.reference_genome,
                                                    **inputs)
 
         chunk_size = 500
