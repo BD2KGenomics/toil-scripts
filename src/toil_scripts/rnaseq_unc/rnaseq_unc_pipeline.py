@@ -68,8 +68,6 @@ import tarfile
 from urlparse import urlparse
 from toil.job import Job
 
-from toil_scripts import download_from_s3_url
-
 
 def build_parser():
     parser = argparse.ArgumentParser(description=main.__doc__, add_help=True)
@@ -142,8 +140,8 @@ def flatten(x):
 def which(program):
     import os
 
-    def is_exe(fpath):
-        return os.path.isfile(fpath) and os.access(fpath, os.X_OK)
+    def is_exe(f):
+        return os.path.isfile(f) and os.access(f, os.X_OK)
 
     fpath, fname = os.path.split(program)
     if fpath:
@@ -313,6 +311,22 @@ def tarball_files(work_dir, tar_name, uuid=None, files=None):
                 f_out.add(os.path.join(work_dir, fname), arcname=uuid + '.' + fname)
             else:
                 f_out.add(os.path.join(work_dir, fname), arcname=fname)
+
+
+def download_from_s3_url(file_path, url):
+    from urlparse import urlparse
+    from boto.s3.connection import S3Connection
+    s3 = S3Connection()
+    try:
+        parsed_url = urlparse(url)
+        if not parsed_url.netloc or not parsed_url.path.startswith('/'):
+            raise RuntimeError("An S3 URL must be of the form s3:/BUCKET/ or "
+                               "s3://BUCKET/KEY. '%s' is not." % url)
+        bucket = s3.get_bucket(parsed_url.netloc)
+        key = bucket.get_key(parsed_url.path[1:])
+        key.get_contents_to_filename(file_path)
+    finally:
+        s3.close()
 
 
 # Job Functions

@@ -52,8 +52,6 @@ from urlparse import urlparse
 from toil.job import Job
 import logging
 
-from toil_scripts import download_from_s3_url
-
 logging.basicConfig(level=logging.INFO)
 
 
@@ -133,8 +131,9 @@ def flatten(x):
 
 def which(program):
     import os
-    def is_exe(fpath):
-        return os.path.isfile(fpath) and os.access(fpath, os.X_OK)
+
+    def is_exe(f):
+        return os.path.isfile(f) and os.access(f, os.X_OK)
 
     fpath, fname = os.path.split(program)
     if fpath:
@@ -350,6 +349,22 @@ def partitions(l, partition_size):
     """
     for i in xrange(0, len(l), partition_size):
         yield l[i:i+partition_size]
+
+
+def download_from_s3_url(file_path, url):
+    from urlparse import urlparse
+    from boto.s3.connection import S3Connection
+    s3 = S3Connection()
+    try:
+        parsed_url = urlparse(url)
+        if not parsed_url.netloc or not parsed_url.path.startswith('/'):
+            raise RuntimeError("An S3 URL must be of the form s3:/BUCKET/ or "
+                               "s3://BUCKET/KEY. '%s' is not." % url)
+        bucket = s3.get_bucket(parsed_url.netloc)
+        key = bucket.get_key(parsed_url.path[1:])
+        key.get_contents_to_filename(file_path)
+    finally:
+        s3.close()
 
 
 # Job Functions
@@ -623,7 +638,6 @@ def kallisto(job, job_vars):
                   '-o', '/data/',
                   '-b', '100']
     if ids['R_cutadapt.fastq']:
-        # TODO: Look into fragment length and SD calculations
         read_from_filestore(job, work_dir, ids, 'R_cutadapt.fastq')
         parameters.extend(['--single', '-l', '200', '-s', '15', '/data/R_cutadapt.fastq'])
     else:
@@ -800,10 +814,10 @@ def consolidate_output(job, job_vars, output_ids_and_values):
     hugo_tar = job.fileStore.readGlobalFile(hugo_id, os.path.join(work_dir, 'rsem_hugo.tar.gz'))
     # I/O
     if improper_pair:
-        uuid = 'IMPROPERLY_PAIRED.' + uuid
+        uuid = 'IMPROPERLY_PAIRED.{}'.format(uuid)
         input_args['uuid'] = uuid
     if single_end:
-        uuid = 'SINGLE-END.' + uuid
+        uuid = 'SINGLE-END.{}'.format(uuid)
         input_args['uuid'] = uuid
     out_tar = os.path.join(work_dir, uuid + '.tar.gz')
     # Consolidate separate tarballs into one as streams (avoids unnecessary untaring)
@@ -881,7 +895,7 @@ def s3am_with_retry(cores, *args):
             return
         else:
             print 'S3AM failed with status code: {}'.format(ret_code)
-    raise RuntimeError, 'S3AM failed to upload after {} retries.'.format(retry_count)
+    raise RuntimeError('S3AM failed to upload after {} retries.'.format(retry_count))
 
 
 def upload_wiggle_to_s3(job, job_vars):
