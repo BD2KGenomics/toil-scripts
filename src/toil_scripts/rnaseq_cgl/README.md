@@ -37,6 +37,7 @@ privileges you will need to build these tools from source, or bug a sysadmin abo
     1. Toil         pip install toil
     2. S3AM         pip install --pre s3am (optional, needed for uploading output to S3)
 
+A toil-box (toil-worker and toil-leader) created by cgcloud comes with these dependencies pre-installed.
 
 ## Getting Started
 #### Running a single sample locally
