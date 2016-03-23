@@ -233,6 +233,7 @@ def create_reference_dict_hc(job, shared_ids, input_args):
     picard_output = os.path.join(work_dir, 'ref.dict')
     command = ['CreateSequenceDictionary', 'R=ref.fa', 'O=ref.dict']
     docker_call(work_dir = work_dir,
+                java_opts='-Xmx%sg' % input_args['memory'],
                 tool_parameters = command,
                 tool = 'quay.io/ucsc_cgl/picardtools',
                 sudo = input_args['sudo'])
@@ -357,6 +358,7 @@ def haplotype_caller(job, shared_ids, input_args):
                '--annotation', 'ReadPosRankSumTest']
     try:
         docker_call(work_dir = work_dir,
+                    java_opts='-Xmx%sg' % input_args['memory'],
                     tool_parameters = command,
                     tool = 'quay.io/ucsc_cgl/gatk:3.5--dba6dae49156168a909c43330350c6161dc7ecc2',
                     sudo = input_args['sudo'])
@@ -403,6 +405,7 @@ def genotype_gvcf(job, shared_ids, input_args):
 
     try:
         docker_call(work_dir = work_dir,
+                    java_opts='-Xmx%sg' % input_args['memory'],
                     tool_parameters = command,
                     tool = 'quay.io/ucsc_cgl/gatk:3.5--dba6dae49156168a909c43330350c6161dc7ecc2',
                     sudo = input_args['sudo'])
@@ -448,6 +451,7 @@ def vqsr_snp(job, shared_ids, input_args):
                '-tranchesFile', 'HAPSNP.tranches',
                '-rscriptFile', 'HAPSNP.plots']
     docker_call(work_dir = work_dir,
+                java_opts='-Xmx%sg' % input_args['memory'],
                 tool_parameters = command,
                 tool ='quay.io/ucsc_cgl/gatk:3.5--dba6dae49156168a909c43330350c6161dc7ecc2',
                 sudo = input_args['sudo'])
@@ -483,6 +487,7 @@ def apply_vqsr_snp(job, shared_ids, input_args):
                '-recalFile', 'HAPSNP.recal',
                '-mode', 'SNP']
     docker_call(work_dir = work_dir,
+                java_opts='-Xmx%sg' % input_args['memory'],
                 tool_parameters = command,
                 tool = 'quay.io/ucsc_cgl/gatk:3.5--dba6dae49156168a909c43330350c6161dc7ecc2',
                 sudo = input_args['sudo'])
@@ -536,6 +541,7 @@ def vqsr_indel(job, shared_ids, input_args):
                '-rscriptFile', 'HAPINDEL.plots',
                '--maxGaussians', '4']
     docker_call(work_dir = work_dir,
+                java_opts='-Xmx%sg' % input_args['memory'],
                 tool_parameters = command,
                 tool ='quay.io/ucsc_cgl/gatk:3.5--dba6dae49156168a909c43330350c6161dc7ecc2',
                 sudo = input_args['sudo'])
@@ -570,6 +576,7 @@ def apply_vqsr_indel(job, shared_ids, input_args):
                '-recalFile', 'HAPINDEL.recal',
                '-mode', 'INDEL']
     docker_call(work_dir = work_dir,
+                java_opts='-Xmx%sg' % input_args['memory'],
                 tool_parameters = command,
                 tool = 'quay.io/ucsc_cgl/gatk:3.5--dba6dae49156168a909c43330350c6161dc7ecc2',
                 sudo = input_args['sudo'])
@@ -596,6 +603,7 @@ if __name__ == '__main__':
               'file_size': args.file_size,
               'ssec': None,
               'sudo': False,
-              'indexed': False } # FIXME: should be parametrized
+              'indexed': False, # FIXME: should be parametrized
+              'memory': '15'}
     
     Job.Runner.startToil(Job.wrapJobFn(batch_start, inputs), args)

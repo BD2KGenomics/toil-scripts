@@ -360,9 +360,10 @@ def create_reference_dict(job, ref_id, sudo):
     # Call: picardtools
     command = ['CreateSequenceDictionary', 'R=ref.fa', 'O=ref.dict']
     docker_call_preprocess(work_dir=work_dir, tool_parameters=command,
-                tool='quay.io/ucsc_cgl/picardtools:1.95--dd5ac549b95eb3e5d166a5e310417ef13651994e',
-                outfiles=['ref.dict'],
-                sudo=sudo)
+                           java_opts='-Xmx%sg' % input_args['memory'],
+                           tool='quay.io/ucsc_cgl/picardtools:1.95--dd5ac549b95eb3e5d166a5e310417ef13651994e',
+                           outfiles=['ref.dict'],
+                           sudo=sudo)
     # Write to fileStore
     return job.fileStore.writeGlobalFile(os.path.join(work_dir, 'ref.dict'))
 
@@ -488,6 +489,7 @@ def sort_sample(job, shared_ids, input_args):
                'CREATE_INDEX=true']
     sudo = input_args['sudo']
     docker_call_preprocess(work_dir=work_dir, tool_parameters=command,
+                           java_opts='-Xmx%sg' % input_args['memory'],    
                            tool='quay.io/ucsc_cgl/picardtools:1.95--dd5ac549b95eb3e5d166a5e310417ef13651994e',
                            outfiles=['sample.sorted.bam'],
                            sudo=sudo)
@@ -512,6 +514,7 @@ def mark_dups_sample(job, shared_ids, input_args):
                'ASSUME_SORTED=true',
                'CREATE_INDEX=true']
     docker_call_preprocess(work_dir=work_dir, tool_parameters=command,
+                           java_opts='-Xmx%sg' % input_args['memory'],
                            tool='quay.io/ucsc_cgl/picardtools:1.95--dd5ac549b95eb3e5d166a5e310417ef13651994e',
                            outfiles=['sample.mkdups.bam'],
                            sudo=sudo)
@@ -553,7 +556,7 @@ def realigner_target_creator(job, shared_ids, input_args):
 
     docker_call_preprocess(work_dir=work_dir, tool_parameters=parameters,
                            tool='quay.io/ucsc_cgl/gatk:3.5--dba6dae49156168a909c43330350c6161dc7ecc2',
-                           java_opts='-Xmx10g',
+                           java_opts='-Xmx%sg' % input_args['memory'],
                            outfiles=['sample.intervals'],
                            sudo=sudo)
     shared_ids['sample.intervals'] = job.fileStore.writeGlobalFile(output)
@@ -592,7 +595,7 @@ def indel_realignment(job, shared_ids, input_args):
 
     docker_call_preprocess(tool='quay.io/ucsc_cgl/gatk:3.5--dba6dae49156168a909c43330350c6161dc7ecc2',
                            work_dir=work_dir, tool_parameters=parameters,
-                           java_opts='-Xmx10g', sudo=sudo,
+                           java_opts='-Xmx%sg' % input_args['memory'], sudo=sudo,
                            outfiles=['sample.indel.bam', 'sample.indel.bam.bai'])
 
     # Write to fileStore
@@ -628,7 +631,7 @@ def base_recalibration(job, shared_ids, input_args):
                   '-o', 'sample.recal.table']
     docker_call_preprocess(tool='quay.io/ucsc_cgl/gatk:3.5--dba6dae49156168a909c43330350c6161dc7ecc2',
                            work_dir=work_dir, tool_parameters=parameters,
-                           java_opts='-Xmx15g', sudo=sudo,
+                           java_opts='-Xmx%sg' % input_args['memory'], sudo=sudo,
                            outfiles=['sample.recal.table'])
     # Write to fileStore
     shared_ids['sample.recal.table'] = job.fileStore.writeGlobalFile(output)
@@ -665,7 +668,7 @@ def print_reads(job, shared_ids, input_args):
                   '-o', outfile]
     docker_call_preprocess(tool='quay.io/ucsc_cgl/gatk:3.5--dba6dae49156168a909c43330350c6161dc7ecc2',
                            work_dir=work_dir, tool_parameters=parameters,
-                           java_opts='-Xmx15g', sudo=sudo, outfiles=[outfile, outfile_idx])
+                           java_opts='-Xmx%sg' % input_args['memory'], sudo=sudo, outfiles=[outfile, outfile_idx])
 
     upload_or_move(job, work_dir, input_args, outfile)
     _move_bai(outpath)
@@ -690,7 +693,8 @@ def main():
               'sudo': pargs.sudo,
               'ssec': pargs.ssec,
               'suffix': pargs.suffix,
-              'cpu_count': multiprocessing.cpu_count()} # FIXME: should not be called from toil-leader, see #186
+              'cpu_count': multiprocessing.cpu_count(), # FIXME: should not be called from toil-leader, see #186
+              'memory': '15'}
 
     # Launch Pipeline
     Job.Runner.startToil(Job.wrapJobFn(download_gatk_files, inputs), pargs)

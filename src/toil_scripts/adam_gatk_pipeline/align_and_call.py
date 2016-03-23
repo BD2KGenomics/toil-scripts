@@ -534,7 +534,8 @@ if __name__ == '__main__':
                               'sudo': args.sudo,
                               'ssec': None,
                               'cpu_count': None,
-                              'suffix': '.gatk' }
+                              'suffix': '.gatk',
+                              'memory': args.executor_memory}
 
     gatk_adam_call_inputs = {'ref.fa': args.ref,
                              'phase.vcf': args.phase,
@@ -549,7 +550,8 @@ if __name__ == '__main__':
                              'file_size': args.file_size,
                              'suffix': '.adam',
                              'indexed': False,
-                             'sudo': args.sudo}
+                             'sudo': args.sudo,
+                             'memory': args.executor_memory}
 
     gatk_gatk_call_inputs = {'ref.fa': args.ref,
                              'phase.vcf': args.phase,
@@ -564,7 +566,8 @@ if __name__ == '__main__':
                              'file_size': args.file_size,
                              'suffix': '.gatk',
                              'indexed': True,
-                             'sudo': args.sudo}
+                             'sudo': args.sudo,
+                             'memory': args.executor_memory}
 
     if (args.pipeline_to_run != "adam" and
         args.pipeline_to_run != "gatk" and
