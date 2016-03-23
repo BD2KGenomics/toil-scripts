@@ -145,38 +145,26 @@ def remove_file(masterIP, filename, sparkOnToil):
 
 # FIXME: unused parameter sparkOnToil
 
-def download_data(masterIP, inputs, sparkOnToil):
+def download_data(masterIP, inputs, knownSNPs, bam, hdfsSNPs, hdfsBAM):
     """
     Downloads input data files from S3.
 
     :type masterIP: MasterAddress
     """
-    snpFileSystem, snpPath = inputs['knownSNPs'].split('://')
-    snpName = snpPath.split('/')[-1]
-    log.info("SNPS at %s:%s:%s", masterIP, HDFS_MASTER_PORT, snpName)
-    hdfsSNPs = "hdfs://"+masterIP+":"+HDFS_MASTER_PORT+"/"+snpName
-    
-    log.info("Downloading known sites file %s to %s.", inputs['knownSNPs'], hdfsSNPs)
-    call_conductor(masterIP, inputs, inputs['knownSNPs'], hdfsSNPs)
 
-    bamFileSystem, bamPath = inputs['bamName'].split('://')
-    bamName = bamPath.split('/')[-1]
-    hdfsBAM = "hdfs://"+masterIP+":"+HDFS_MASTER_PORT+"/"+bamName
+    log.info("Downloading known sites file %s to %s.", knownSNPs, hdfsSNPs)
+    call_conductor(masterIP, inputs, knownSNPs, hdfsSNPs)
 
-    log.info("Downloading input BAM %s to %s.", inputs['bamName'], hdfsBAM)
-    call_conductor(masterIP, inputs, inputs['bamName'], hdfsBAM)
-
-    return (hdfsBAM, hdfsSNPs)
+    log.info("Downloading input BAM %s to %s.", bam, hdfsBAM)
+    call_conductor(masterIP, inputs, bam, hdfsBAM)
 
 
-def adam_convert(masterIP, inFile, snpFile, inputs, sparkOnToil):
+def adam_convert(masterIP, inputs, inFile, inSnps, adamFile, adamSnps, sparkOnToil):
     """
     Convert input sam/bam file and known SNPs file into ADAM format
     """
 
     log.info("Converting input BAM to ADAM.")
-    adamFile = ".".join(os.path.splitext(inFile)[:-1])+".adam"
-
     call_adam(masterIP,
               inputs,
               ["transform",
@@ -186,20 +174,18 @@ def adam_convert(masterIP, inFile, snpFile, inputs, sparkOnToil):
     remove_file(masterIP, inFileName, sparkOnToil)
 
     log.info("Converting known sites VCF to ADAM.")
-    adamSnpFile = ".".join(os.path.splitext(snpFile)[:-1])+".var.adam"
 
     call_adam(masterIP,
               inputs,
               ["vcf2adam",
                "-only_variants",
-               snpFile, adamSnpFile])
+               inSnps, adamSnps])
 
-    snpFileName = snpFile.split("/")[-1]
+    inSnpsName = inSnps.split("/")[-1]
     remove_file(masterIP, snpFileName, sparkOnToil)
 
-    return (adamFile, adamSnpFile)
 
-def adam_transform(masterIP, inFile, snpFile, inputs, sparkOnToil):
+def adam_transform(masterIP, inputs, inFile, snpFile, hdfsDir, outFile, sparkOnToil):
     """
     Preprocess inFile with known SNPs snpFile:
         - mark duplicates
@@ -207,17 +193,16 @@ def adam_transform(masterIP, inFile, snpFile, inputs, sparkOnToil):
         - recalibrate base quality scores
     """
 
-    outFile = ".".join(os.path.splitext(inFile)[:-1])+".processed.bam"
-
     log.info("Marking duplicate reads.")
     call_adam(masterIP,
               inputs,
               ["transform",
-               inFile,  "hdfs://%s:%s/mkdups.adam" % (masterIP, HDFS_MASTER_PORT),
+               inFile,  hdfsDir + "/mkdups.adam",
                "-aligned_read_predicate",
                "-limit_projection",
                "-mark_duplicate_reads"])
 
+    #FIXME
     inFileName = inFile.split("/")[-1]
     remove_file(masterIP, inFileName+"*", sparkOnToil)
 
@@ -225,18 +210,18 @@ def adam_transform(masterIP, inFile, snpFile, inputs, sparkOnToil):
     call_adam(masterIP,
               inputs,
               ["transform",
-               "hdfs://%s:%s/mkdups.adam" % (masterIP, HDFS_MASTER_PORT),
-               "hdfs://%s:%s/ri.adam" % (masterIP, HDFS_MASTER_PORT),
+               hdfsDir + "/mkdups.adam",
+               hdfsDir + "/ri.adam",
                "-realign_indels"])
 
-    remove_file(masterIP, "mkdups.adam*", sparkOnToil)
+    remove_file(masterIP, hdfsDir + "/mkdups.adam*", sparkOnToil)
 
     log.info("Recalibrating base quality scores.")
     call_adam(masterIP,
               inputs,
               ["transform",
-               "hdfs://%s:%s/ri.adam" % (masterIP, HDFS_MASTER_PORT),
-               "hdfs://%s:%s/bqsr.adam" % (masterIP, HDFS_MASTER_PORT),
+               hdfsDir + "/ri.adam",
+               hdfsDir + "/bqsr.adam",
                "-recalibrate_base_qualities",
                "-known_snps", snpFile])
 
@@ -246,7 +231,7 @@ def adam_transform(masterIP, inFile, snpFile, inputs, sparkOnToil):
     call_adam(masterIP,
               inputs,
               ["transform",
-               "hdfs://%s:%s/bqsr.adam" % (masterIP, HDFS_MASTER_PORT),
+               hdfsDir + "/bqsr.adam",
                outFile,
                "-sort_reads", "-single"])
 
@@ -255,18 +240,10 @@ def adam_transform(masterIP, inFile, snpFile, inputs, sparkOnToil):
     return outFile
 
 
-def upload_data(masterIP, hdfsName, inputs, sparkOnToil):
+def upload_data(masterIP, inputs, hdfsName, uploadName, sparkOnToil):
     """
     Upload file hdfsName from hdfs to s3
     """
-
-    fileSystem, path = hdfsName.split('://')
-    nameOnly = path.split('/')[-1]
-
-    uploadName = "%s/%s" % (inputs['outDir'], nameOnly.replace('.processed', ''))
-    if inputs['suffix']:
-        uploadName = uploadName.replace('.bam', '%s.bam' % inputs['suffix'])
-
     log.info("Uploading output BAM %s to %s.", hdfsName, uploadName)
     call_conductor(masterIP, inputs, hdfsName, uploadName)
 
@@ -277,15 +254,35 @@ def download_run_and_upload(job, masterIP, inputs, sparkOnToil):
     Previously, this was not monolithic; change came in due to #126/#134.
     """
     masterIP = MasterAddress(masterIP)
+
+    bamName = inputs['bamName'].split('://')[-1].split('/')[-1]
+    sampleName = ".".join(os.path.splitext(bamName)[:-1])
+    hdfsSubdir = sampleName + "-dir"
+    hdfsDir = "hdfs://{0}:{1}/{2}".format(masterIP, HDFS_MASTER_PORT, hdfsSubdir)
+
     try:
-        bam, snps = download_data(masterIP, inputs, sparkOnToil)
-        adamInput, adamSnps = adam_convert(masterIP, bam, snps, inputs, sparkOnToil)
-        adamFile = adam_transform(masterIP, adamInput, adamSnps, inputs, sparkOnToil)
-        upload_data(masterIP, adamFile, inputs, sparkOnToil)
+        hdfsPrefix = hdfsDir + "/" + sampleName
+        hdfsBAM = hdfsDir + "/" + bamName
+        
+        hdfsSNPs = hdfsDir + "/" + inputs['knownSNPs'].split('://')[-1].split('/')[-1]
+
+        download_data(masterIP, inputs, inputs['bamName'], inputs['knownSNPs'], hdfsSNPs, hdfsBAM, sparkOnToil)
+
+        adamInput = hdfsPrefix + ".adam"
+        adamSNPs = hdfsDir + "/snps.var.adam"
+        adam_convert(masterIP, inputs, hdfsBAM, hdfsSNPs, adamInput, adamSNPs, sparkOnToil)
+
+        adamOutput = hdfsPrefix + ".processed.adam" 
+        adam_transform(masterIP, inputs, adamInput, adamSNPs, hdfsDir, adamOutput, sparkOnToil)
+
+        suffix = '.' + inputs['suffix'] if 'suffix' in inputs else ''            
+        outFile = inputs['outDir'] + "/" + sampleName + "." + suffix + ".bam"
+        upload_data(masterIP, inputs, adamOutput, outFile, sparkOnToil)
+
     except:
         if sparkOnToil:
             # if a stage failed, we must clean up HDFS for the pipeline to succeed on retry
-            remove_file(masterIP, '*', sparkOnToil)
+            remove_file(masterIP, hdfsSubdir, sparkOnToil)
         else:
             log.warning("Jobs failed, but cannot clean up files on a non-toil cluster.")
 
