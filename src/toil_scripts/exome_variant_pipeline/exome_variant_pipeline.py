@@ -56,8 +56,6 @@ import errno
 import tarfile
 from toil.job import Job
 
-from toil_scripts import download_from_s3_url
-
 
 def build_parser():
     """
@@ -266,7 +264,7 @@ def tarball_files(work_dir, tar_name, uuid=None, files=None):
                 f_out.add(os.path.join(work_dir, fname), arcname=fname)
 
 
-def getMeanInsertSize(work_dir, bam_path):
+def get_mean_insert_size(work_dir, bam_path):
     cmd = "sudo docker run --log-driver=none --rm -v {}:/data quay.io/ucsc_cgl/samtools " \
           "view -f66 {}".format(work_dir, bam_path)
     process = subprocess.Popen(args=cmd, shell=True, stdout=subprocess.PIPE)
@@ -279,11 +277,28 @@ def getMeanInsertSize(work_dir, bam_path):
         tmp = line.split("\t")
         if abs(long(tmp[8])) < 10000:
             b_sum += abs(long(tmp[8]))
-            b_count +=1
+            b_count += 1
     process.wait()
     mean = b_sum / b_count
-    print "Using insert size: %d" % (mean)
+    print "Using insert size: %d" % mean
     return int(mean)
+
+
+def download_from_s3_url(file_path, url):
+    from urlparse import urlparse
+    from boto.s3.connection import S3Connection
+    s3 = S3Connection()
+    try:
+        parsed_url = urlparse(url)
+        if not parsed_url.netloc or not parsed_url.path.startswith('/'):
+            raise RuntimeError("An S3 URL must be of the form s3:/BUCKET/ or "
+                               "s3://BUCKET/KEY. '%s' is not." % url)
+        bucket = s3.get_bucket(parsed_url.netloc)
+        key = bucket.get_key(parsed_url.path[1:])
+        key.get_contents_to_filename(file_path)
+    finally:
+        s3.close()
+
 
 # Start of Job Functions
 def download_shared_files(job, input_args):
@@ -421,7 +436,7 @@ def index_bams(job, job_vars):
     """
     normal_ids = job.addChildJobFn(index, job_vars, 'normal', cores=1, memory='1 G', disk='8 G').rv()
     tumor_ids = job.addChildJobFn(index, job_vars, 'tumor', cores=1, memory='1 G', disk='8 G').rv()
-    return (normal_ids, tumor_ids)
+    return normal_ids, tumor_ids
 
 
 def index(job, job_vars, sample):
@@ -579,7 +594,7 @@ def print_reads(job, job_vars, sample):
     # Write to fileStore
     bam_id = job.fileStore.writeGlobalFile(output)
     bai_id = job.fileStore.writeGlobalFile(os.path.splitext(output)[0] + '.bai')
-    return (bam_id, bai_id)
+    return bam_id, bai_id
 
 
 def mutect(job, job_vars, bam_ids):
@@ -730,7 +745,7 @@ def consolidate_output(job, job_vars, mutect_id):#, pindel_id, muse_id):
                 for tarinfo in f_in:
                     with closing(f_in.extractfile(tarinfo)) as f_in_file:
                         if tar == mutect_tar:
-                            tarinfo.name = os.path.join(uuid, 'MuTect', os.path.basename(tarinfo.name))
+                            tarinfo.name = os.path.join(uuid, 'mutect', os.path.basename(tarinfo.name))
                         # elif tar == pindel_tar:
                         #     tarinfo.name = os.path.join(uuid, 'Kallisto', os.path.basename(tarinfo.name))
                         # else:
@@ -745,7 +760,7 @@ def consolidate_output(job, job_vars, mutect_id):#, pindel_id, muse_id):
     output_tar = job.fileStore.writeGlobalFile(out_tar)
     # If S3 bucket argument specified, upload to S3
     if input_args['s3_dir']:
-        job.addChildJobFn(upload_output_to_s3, job_vars, output_tar)
+        job.addChildJobFn(upload_output_to_s3, input_args, output_tar)
 
 
 def upload_output_to_s3(job, input_args, output_tar):

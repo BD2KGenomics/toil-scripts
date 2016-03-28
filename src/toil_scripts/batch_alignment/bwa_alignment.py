@@ -39,8 +39,6 @@ import tarfile
 import logging
 from toil.job import Job
 
-from toil_scripts import download_from_s3_url
-
 _log = logging.getLogger(__name__)
 
 
@@ -258,6 +256,23 @@ def tarball_files(work_dir, tar_name, uuid=None, files=None):
                 f_out.add(os.path.join(work_dir, fname), arcname=fname)
 
 
+def download_from_s3_url(file_path, url):
+    from urlparse import urlparse
+    from boto.s3.connection import S3Connection
+    s3 = S3Connection()
+    try:
+        parsed_url = urlparse(url)
+        if not parsed_url.netloc or not parsed_url.path.startswith('/'):
+            raise RuntimeError("An S3 URL must be of the form s3:/BUCKET/ or "
+                               "s3://BUCKET/KEY. '%s' is not." % url)
+        bucket = s3.get_bucket(parsed_url.netloc)
+        key = bucket.get_key(parsed_url.path[1:])
+        _log.info("From URL %s, parsed --> %s, bucket %s, key %s", url, parsed_url, bucket, key)
+        key.get_contents_to_filename(file_path)
+    finally:
+        s3.close()
+
+
 # Job Functions
 def download_shared_files(job, input_args):
     """
@@ -298,10 +313,12 @@ def parse_config(job, shared_ids, input_args):
 
     with open(config, 'r') as f_in:
         for line in f_in:
-            line = line.strip().split(',')
-            uuid = line[0]
-            urls = line[1:]
-            samples.append((uuid, urls))
+            if line.strip():
+                line = line.strip().split(',')
+                assert len(line) == 3, 'Improper formatting'
+                uuid = line[0]
+                urls = line[1:]
+                samples.append((uuid, urls))
     input_args['cpu_count'] = multiprocessing.cpu_count()
     job_vars = (input_args, shared_ids)
     for sample in samples:
@@ -576,26 +593,25 @@ def upload_to_s3(work_dir, input_args, output_file):
 
     # does this need to be uploaded with encryption?
     if input_args['ssec']:
-       key_path = input_args['ssec']
+        key_path = input_args['ssec']
 
-       base_url = 'https://s3.amazonaws.com/'
-       url = os.path.join(base_url, bucket_name, bucket_dir, output_file)
+        base_url = 'https://s3-us-west-2.amazonaws.com'
+        url = os.path.join(base_url, bucket_name, bucket_dir, output_file)
 
-       # Generate keyfile for upload
-       uuid = input_args['uuid']
-       with open(os.path.join(work_dir, uuid + '.key'), 'wb') as f_out:
-           f_out.write(generate_unique_key(key_path, url))
+        # Generate keyfile for upload
+        uuid = input_args['uuid']
+        with open(os.path.join(work_dir, uuid + '.key'), 'wb') as f_out:
+            f_out.write(generate_unique_key(key_path, url))
 
-       # Upload to S3 via S3AM
-       s3am_command = ['s3am',
-                       'upload',
-                       '--sse-key-file', os.path.join(work_dir, uuid + '.key'),
-                       '--part-size=64M',
-                       '--upload-slots={}'.format(cores),
-                       '--download-slots={}'.format(cores),
-                       'file://{}'.format(os.path.join(work_dir, output_file)),
-                       s3_path]
-
+        # Upload to S3 via S3AM
+        s3am_command = ['s3am',
+                        'upload',
+                        '--sse-key-file', os.path.join(work_dir, uuid + '.key'),
+                        '--part-size=64M',
+                        '--upload-slots={}'.format(cores),
+                        '--download-slots={}'.format(cores),
+                        'file://{}'.format(os.path.join(work_dir, output_file)),
+                        s3_path]
     else:
         # Upload to S3 via S3AM
         s3am_command = ['s3am',
@@ -620,6 +636,7 @@ def upload_to_s3(work_dir, input_args, output_file):
             _log.error("Cancelling upload with '%s' failed." % " ".join(s3am_cancel))
 
         raise
+
 
 def main():
     """
