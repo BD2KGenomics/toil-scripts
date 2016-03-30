@@ -99,8 +99,11 @@ class MasterService(Job.Service):
                                                                  "-e", "SPARK_LOCAL_DIRS=/ephemeral/spark/local",
                                                                  "-e", "SPARK_WORKER_DIR=/ephemeral/spark/work"],
                                             tool_parameters = [],
+                                            inputs=[],
+                                            outputs={},
                                             sudo = self.sudo,
-                                            check_output = True)[:-1]
+                                            check_output = True,
+                                            mock = False)[:-1]
         _log.info("Started HDFS Datanode.")
         self.hdfsContainerID = docker_call(no_rm = True,
                                            work_dir = os.getcwd(),
@@ -108,8 +111,11 @@ class MasterService(Job.Service):
                                            docker_parameters = ["--net=host",
                                                                 "-d"],
                                            tool_parameters = [self.IP],
+                                           inputs=[],
+                                           outputs={},
                                            sudo = self.sudo,
-                                           check_output = True)[:-1]
+                                           check_output = True,
+                                           mock = False)[:-1]
         return self.IP
 
 
@@ -164,7 +170,6 @@ class WorkerService(Job.Service):
 
         fileStore: Unused
         """
-
         # start spark and our datanode
         self.sparkContainerID = docker_call(no_rm = True,
                                             work_dir = os.getcwd(),
@@ -176,8 +181,11 @@ class WorkerService(Job.Service):
                                                                  "-e", "SPARK_LOCAL_DIRS=/ephemeral/spark/local",
                                                                  "-e", "SPARK_WORKER_DIR=/ephemeral/spark/work"],
                                             tool_parameters = [self.masterIP+":"+SPARK_MASTER_PORT],
+                                            inputs=[],
+                                            outputs={},
                                             sudo = self.sudo,
-                                            check_output = True)[:-1]
+                                            check_output = True,
+                                            mock = False)[:-1]
         self.__start_datanode()
         
         # fake do/while to check if HDFS is up
@@ -243,8 +251,11 @@ class WorkerService(Job.Service):
                                                                 "-d",
                                                                 "-v", "/mnt/ephemeral/:/ephemeral/:rw"],
                                            tool_parameters = [self.masterIP],
+                                           inputs=[],
+                                           outputs={},
                                            sudo = self.sudo,
-                                           check_output = True)[:-1]
+                                           check_output = True,
+                                           mock = False)[:-1]
 
 
     def stop(self, fileStore):

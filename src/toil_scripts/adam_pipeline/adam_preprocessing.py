@@ -37,8 +37,8 @@ import sys
 from toil.job import Job
 
 from toil_scripts.adam_uberscript.automated_scaling import SparkMasterAddress
-from toil_scripts.batch_alignment.bwa_alignment import docker_call
-from toil_scripts.spark_utils.spawn_cluster import *
+from toil_scripts.lib.programs import docker_call, mock_mode
+from toil_scripts.spark_utils.spawn_cluster import start_spark_hdfs_cluster
 
 SPARK_MASTER_PORT = "7077"
 HDFS_MASTER_PORT = "8020"
@@ -98,7 +98,8 @@ def call_conductor(masterIP, inputs, src, dst):
                  "--conf", "spark.driver.memory=%sg" % inputs["driverMemory"],
                  "--conf", "spark.executor.memory=%sg" % inputs["executorMemory"],
                  "--", "-C", src, dst],
-                sudo = inputs['sudo'])
+                sudo = inputs['sudo'],
+                mock=False)
 
 
 def call_adam(masterIP, inputs, arguments):
@@ -118,7 +119,8 @@ def call_adam(masterIP, inputs, arguments):
                 tool = "quay.io/ucsc_cgl/adam:962-ehf--6e7085f8cac4b9a927dc9fb06b48007957256b80",
                 docker_parameters = masterIP.docker_parameters(["--net=host"]),
                 tool_parameters = default_params + arguments,
-                sudo = inputs['sudo'])
+                sudo = inputs['sudo'],
+                mock=False)
 
 
 def remove_file(masterIP, filename, sparkOnToil):
@@ -138,6 +140,27 @@ def remove_file(masterIP, filename, sparkOnToil):
 
     try:
         check_call(ssh_call + ['hdfs', 'dfs', '-rm', '-r', '/' + filename])
+    except:
+        pass
+
+
+def truncate_file(masterIP, filename, sparkOnToil):
+    """
+    Truncate the given hdfs file to 10 bytes with master at the given IP address
+
+    :type masterIP: MasterAddress
+    """
+    masterIP = masterIP.actual
+
+    ssh_call = ['ssh', '-o', 'StrictHostKeyChecking=no', masterIP]
+
+    if sparkOnToil:
+        output = check_output(ssh_call +  ['docker', 'ps'])
+        containerID = next(line.split()[0] for line in output.splitlines() if 'apache-hadoop-master' in line)
+        ssh_call += ['docker', 'exec', containerID]
+
+    try:
+        check_call(ssh_call + ['hdfs', 'dfs', '-truncate', '-w', '10', '/' + filename])
     except:
         pass
 
@@ -241,6 +264,10 @@ def upload_data(masterIP, inputs, hdfsName, uploadName, sparkOnToil):
     """
     Upload file hdfsName from hdfs to s3
     """
+
+    if mock_mode():
+        truncate_file(masterIP, hdfsName, sparkOnToil)
+
     log.info("Uploading output BAM %s to %s.", hdfsName, uploadName)
     call_conductor(masterIP, inputs, hdfsName, uploadName)
 
@@ -350,7 +377,7 @@ def build_parser():
                         help = 'Amount of memory to allocate per Spark Executor.')
     parser.add_argument('-j', '--jobstore', required = True,
                         help = 'Name of the jobstore')
-    parser.add_argument('-m', '--master_ip', required = False, default = None,
+    parser.add_argument('-m', '--master_ip', required = False,
                         help="IP or hostname of host running for Spark master and HDFS namenode. Should be provided "
                              "if pointing at a static (external or standalone) Spark cluster. The special value "
                              "'auto' indicates the master of standalone cluster, i.e. one that is managed by the "
@@ -376,8 +403,8 @@ def main(args):
                          (options.master_ip, options.num_nodes))
 
     if options.num_nodes <= 1:
-        raise ValueError("--num_nodes allocates one Spark/HDFS master and n-1 workers, and thus must be greater than 1. %d was passed." %
-                         options.num_nodes)
+        raise ValueError("--num_nodes allocates one Spark/HDFS master and n-1 workers, and thus must be greater "
+                         "than 1. %d was passed." % options.num_nodes)
 
     inputs = {'numWorkers': options.num_nodes - 1,
               'outDir':     options.output_directory,
