@@ -1,6 +1,7 @@
 import os
 import subprocess
 import shutil
+from boto.s3.connection import S3Connection, Bucket, Key
 
 
 def test_rnaseq_cgl(tmpdir):
@@ -17,13 +18,18 @@ def test_rnaseq_cgl(tmpdir):
                                os.path.join(subdir, 'jstore'),
                                '--config', os.path.join(work_dir, 'config.txt'),
                                '--retryCount', '1',
-                               '--s3_dir', 'cgl-driver-projects/test/releases',
+                               '--s3_dir', 's3://cgl-driver-projects/test/ci',
                                '--workDir', os.path.join(subdir, 'workDir'),
                                '--starIndex', star_index,
                                '--rsemRef', rsem_ref,
                                '--ci-test'])
     finally:
         shutil.rmtree(subdir)
+        conn = S3Connection()
+        b = Bucket(conn, 'cgl-driver-projects')
+        k = Key(b)
+        k.key = 'test/ci/IMPROPERLY_PAIRED.ci_test.tar.gz'
+        k.delete()
 
 
 def create_config(path):
