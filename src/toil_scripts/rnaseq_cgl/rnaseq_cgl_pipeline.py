@@ -93,10 +93,11 @@ def build_parser():
     parser.add_argument('--output_dir', default=None, help='full path where final results will be output')
     parser.add_argument('--s3_dir', default=None, help='S3 Directory, starting with bucket name. e.g.: '
                                                        'cgl-driver-projects/ckcc/rna-seq-samples/')
-    parser.add_argument('--sudo', dest='sudo', action='store_true',
+    parser.add_argument('--sudo', dest='sudo', action='store_true', default=False,
                         help='Docker usually needs sudo to execute locally, but not when running Mesos or when '
                              'the user is a member of a Docker group.')
-    parser.set_defaults(sudo=False)
+    parser.add_argument('--ci-test', action='store_true', default=False,
+                        help='Pass flag indicating continuous integration testing for resource requirements')
     return parser
 
 
@@ -439,25 +440,25 @@ def download_sample(job, input_args, sample):
     job_vars = (sample_input, ids)
     # Download or locate local file and place in the jobStore
     if sample_input['genetorrent']:
-        ids['sample.tar'] = job.addChildJobFn(download_from_genetorrent, input_args, url, disk='40G').rv()
+        ids['sample.tar'] = job.addChildJobFn(download_from_genetorrent, input_args, url, disk='20G').rv()
     elif type(url) is list and len(url) == 2:
         if urlparse(url[0]) == 'file':
             ids['R1.fastq'] = job.fileStore.writeGlobalFile(urlparse(url[0]).path)
             ids['R2.fastq'] = job.fileStore.writeGlobalFile(urlparse(url[1]).path)
         else:
             if sample_input['ssec']:
-                ids['R1.fastq'] = job.addChildJobFn(download_encrypted_file, sample_input, 'R1.fastq', disk='40G').rv()
-                ids['R2.fastq'] = job.addChildJobFn(download_encrypted_file, sample_input, 'R1.fastq', disk='40G').rv()
+                ids['R1.fastq'] = job.addChildJobFn(download_encrypted_file, sample_input, 'R1.fastq', disk='20G').rv()
+                ids['R2.fastq'] = job.addChildJobFn(download_encrypted_file, sample_input, 'R1.fastq', disk='20G').rv()
             else:
-                ids['R1.fastq'] = job.addChildJobFn(download_from_url, sample_input['R1.fastq'], disk='40G').rv()
-                ids['R2.fastq'] = job.addChildJobFn(download_from_url, sample_input['R1.fastq'], disk='40G').rv()
+                ids['R1.fastq'] = job.addChildJobFn(download_from_url, sample_input['R1.fastq'], disk='20G').rv()
+                ids['R2.fastq'] = job.addChildJobFn(download_from_url, sample_input['R1.fastq'], disk='20G').rv()
     elif urlparse(url).scheme == 'file':
         ids['sample.tar'] = job.fileStore.writeGlobalFile(urlparse(url).path)
     else:
         if sample_input['ssec']:
-            ids['sample.tar'] = job.addChildJobFn(download_encrypted_file, sample_input, 'sample.tar', disk='40G').rv()
+            ids['sample.tar'] = job.addChildJobFn(download_encrypted_file, sample_input, 'sample.tar', disk='20G').rv()
         else:
-            ids['sample.tar'] = job.addChildJobFn(download_from_url, sample_input['sample.tar'], disk='40G').rv()
+            ids['sample.tar'] = job.addChildJobFn(download_from_url, sample_input['sample.tar'], disk='20G').rv()
     job.addFollowOnJobFn(static_dag_launchpoint, job_vars)
 
 
@@ -468,10 +469,11 @@ def static_dag_launchpoint(job, job_vars):
     job_vars: tuple     Tuple of dictionaries: input_args and ids
     """
     input_args, ids = job_vars
+    disk = '2G' if input_args['ci_test'] else '100G'
     if 'sample.tar' in ids:
-        a = job.wrapJobFn(process_sample_tar, job_vars, disk='70G').encapsulate()
+        a = job.wrapJobFn(process_sample_tar, job_vars, disk=disk).encapsulate()
     else:
-        a = job.wrapJobFn(cutadapt, job_vars, disk='100G').encapsulate()
+        a = job.wrapJobFn(cutadapt, job_vars, disk=disk).encapsulate()
     b = job.wrapJobFn(consolidate_output, job_vars, a.rv(), disk='2G')
     # Take advantage of "encapsulate" to simplify pipeline wiring
     job.addChild(a)
@@ -558,7 +560,8 @@ def process_sample_tar(job, job_vars):
             ids['R2.fastq'] = job.fileStore.writeGlobalFile(os.path.join(work_dir, 'R2.fastq'))
         job.fileStore.deleteGlobalFile(ids['sample.tar'])
         # Start cutadapt step
-        return job.addChildJobFn(cutadapt, job_vars, disk='125G').rv()
+        disk = '2G' if input_args['ci_test'] else '125G'
+        return job.addChildJobFn(cutadapt, job_vars, disk=disk).rv()
 
 
 def cutadapt(job, job_vars):
@@ -611,9 +614,11 @@ def cutadapt(job, job_vars):
         ids['R1_cutadapt.fastq'] = job.fileStore.writeGlobalFile(os.path.join(work_dir, 'R1_cutadapt.fastq'))
         ids['R2_cutadapt.fastq'] = job.fileStore.writeGlobalFile(os.path.join(work_dir, 'R2_cutadapt.fastq'))
     # start STAR and Kallisto steps
-    rsem_output = job.addChildJobFn(star, job_vars, cores=cores, disk='150G', memory='40G').rv()
+    disk = '2G' if input_args['ci_test'] else '100G'
+    memory = '6G' if input_args['ci_test'] else '40G'
+    rsem_output = job.addChildJobFn(star, job_vars, cores=cores, disk=disk, memory=memory).rv()
     cores = min(cores, 16)
-    kallisto_output = job.addChildJobFn(kallisto, job_vars, cores=cores, disk='100G').rv()
+    kallisto_output = job.addChildJobFn(kallisto, job_vars, cores=cores, disk=disk).rv()
     return rsem_output, kallisto_output, input_args['improper_pair'], input_args['single_end']
 
 
@@ -716,7 +721,8 @@ def star(job, job_vars):
         job.addChildJobFn(upload_bam_to_s3, job_vars, disk='20G', cores=cores)
     # RSEM doesn't tend to use more than 16 cores
     cores = min(cores, 16)
-    return job.addChildJobFn(rsem, job_vars, cores=cores, disk='50G').rv()
+    disk = '2G' if input_args['ci_test'] else '50G'
+    return job.addChildJobFn(rsem, job_vars, cores=cores, disk=disk).rv()
 
 
 def rsem(job, job_vars):
@@ -970,11 +976,13 @@ def main():
               'sudo': args.sudo,
               'wiggle': args.wiggle,
               'save_bam': args.save_bam,
+              'ci_test': args.ci_test,
               'uuid': None,
               'sample.tar': None,
               'cpu_count': None,
               'improper_pair': None,
               'single_end': None}
+    # Sanity Checks
     if args.ssec:
         assert os.path.isfile(args.ssec)
     if args.config:
