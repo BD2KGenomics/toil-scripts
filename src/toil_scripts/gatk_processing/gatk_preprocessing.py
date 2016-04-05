@@ -30,10 +30,13 @@ import base64
 import subprocess
 import shutil
 import sys
+import logging
 from toil.job import Job
 
 from toil_scripts import download_from_s3_url
 from toil_scripts.batch_alignment.bwa_alignment import upload_to_s3
+
+_log = logging.getLogger(__name__)
 
 debug = False 
 
@@ -147,7 +150,6 @@ def move_to_output_dir(work_dir, output_dir, *filenames):
         except IOError:
             mkdir_p(output_dir)
             shutil.move(origin, dest)
-
 
 
 def copy_to_output_dir(work_dir, output_dir, uuid=None, files=None):
@@ -287,6 +289,7 @@ def docker_call_preprocess(work_dir, tool_parameters, tool, java_opts=None,
             f.close()
         return
     try:
+        _log.info("Calling %s", " ".join(base_docker_call + [tool] + tool_parameters))
         subprocess.check_call(base_docker_call + [tool] + tool_parameters)
     except subprocess.CalledProcessError, e:
         raise RuntimeError('docker command returned a non-zero exit status. {}'.format(e))
@@ -357,9 +360,10 @@ def create_reference_dict(job, ref_id, sudo):
     # Call: picardtools
     command = ['CreateSequenceDictionary', 'R=ref.fa', 'O=ref.dict']
     docker_call_preprocess(work_dir=work_dir, tool_parameters=command,
-                tool='quay.io/ucsc_cgl/picardtools:1.95--dd5ac549b95eb3e5d166a5e310417ef13651994e',
-                outfiles=['ref.dict'],
-                sudo=sudo)
+                           java_opts='-Xmx%sg' % input_args['memory'],
+                           tool='quay.io/ucsc_cgl/picardtools:1.95--dd5ac549b95eb3e5d166a5e310417ef13651994e',
+                           outfiles=['ref.dict'],
+                           sudo=sudo)
     # Write to fileStore
     return job.fileStore.writeGlobalFile(os.path.join(work_dir, 'ref.dict'))
 
@@ -432,7 +436,6 @@ def download_sample(job, shared_ids, input_args, sample):
     uuid, url = sample
     # Create a unique
     input_args['uuid'] = uuid
-    cores = multiprocessing.cpu_count()
     if input_args['output_dir']:
         input_args['output_dir'] = os.path.join(input_args['output_dir'], uuid)
     # Download sample bams and launch pipeline
@@ -440,32 +443,33 @@ def download_sample(job, shared_ids, input_args, sample):
         shared_ids['sample.bam'] = job.addChildJobFn(download_encrypted_file, input_args, 'sample.bam').rv()
     else:
         shared_ids['sample.bam'] = job.addChildJobFn(download_from_url_gatk, url=url, name='sample.bam').rv()
-    job.addFollowOnJobFn(index_sample, shared_ids, input_args)
+    job.addFollowOnJobFn(remove_supplementary_alignments, shared_ids, input_args)
 
-
-def index_sample(job, shared_ids, input_args):
-    """
-    Runs samtools index to create (.bai) files
-
-    job_vars: tuple     Contains the input_args and ids dictionaries
-    """
-    debug_log = open('index', 'w')
-    # Unpack convenience variables for job
+def remove_supplementary_alignments(job, shared_ids, input_args):
     work_dir = job.fileStore.getLocalTempDir()
-    sudo = input_args['sudo']
+
+    #Retrieve file path
     read_from_filestore(job, work_dir, shared_ids, 'sample.bam')
-    outpath = os.path.join(work_dir, 'sample.bam.bai')
-    debug_log.write(outpath + '\n')
-    debug_log.close()
-    # Retrieve file path
-    # Call: index the normal.bam
-    parameters = ['index', 'sample.bam']
-    docker_call_preprocess(work_dir=work_dir, tool_parameters=parameters,
-                tool='quay.io/ucsc_cgl/samtools:0.1.19--dd5ac549b95eb3e5d166a5e310417ef13651994e',
-                outfiles=['sample.bam.bai'],
-                sudo=sudo)
-    shared_ids['sample.bam.bai'] = job.fileStore.writeGlobalFile(outpath)
+    outpath = os.path.join(work_dir, 'sample.nosuppl.bam')
+
+    command = ['view',
+               '-b', '-o', '/data/sample.nosuppl.bam',
+               '-F', '0x800',
+               '/data/sample.bam']
+               
+    sudo = input_args['sudo']
+    docker_call_preprocess(work_dir=work_dir, tool_parameters=command,
+                           tool='quay.io/ucsc_cgl/samtools:1.3--256539928ea162949d8a65ca5c79a72ef557ce7c',
+                           outfiles=['sample.nosuppl.bam'],
+                           sudo=sudo)
+    shared_ids['sample.nosuppl.bam'] = job.fileStore.writeGlobalFile(outpath)
     job.addChildJobFn(sort_sample, shared_ids, input_args)
+
+
+def _move_bai(outpath):
+
+    # bam index gets written without bam extension
+    os.rename(outpath.replace('bam', 'bai'), outpath + '.bai')
 
 
 def sort_sample(job, shared_ids, input_args):
@@ -475,18 +479,20 @@ def sort_sample(job, shared_ids, input_args):
     work_dir = job.fileStore.getLocalTempDir()
 
     #Retrieve file path
-    read_from_filestore(job, work_dir, shared_ids, 'sample.bam', 'sample.bam.bai')
+    read_from_filestore(job, work_dir, shared_ids, 'sample.nosuppl.bam')
     outpath = os.path.join(work_dir, 'sample.sorted.bam')
     #Call: picardtools
     command = ['SortSam',
-               'INPUT=sample.bam',
+               'INPUT=sample.nosuppl.bam',
                'OUTPUT=sample.sorted.bam',
-               'SORT_ORDER=coordinate']
+               'SORT_ORDER=coordinate',
+               'CREATE_INDEX=true']
     sudo = input_args['sudo']
     docker_call_preprocess(work_dir=work_dir, tool_parameters=command,
-                tool='quay.io/ucsc_cgl/picardtools:1.95--dd5ac549b95eb3e5d166a5e310417ef13651994e',
-                outfiles=['sample.sorted.bam'],
-                sudo=sudo)
+                           java_opts='-Xmx%sg' % input_args['memory'],    
+                           tool='quay.io/ucsc_cgl/picardtools:1.95--dd5ac549b95eb3e5d166a5e310417ef13651994e',
+                           outfiles=['sample.sorted.bam'],
+                           sudo=sudo)
     shared_ids['sample.sorted.bam'] = job.fileStore.writeGlobalFile(outpath)
     job.addChildJobFn(mark_dups_sample, shared_ids, input_args)
 
@@ -499,44 +505,26 @@ def mark_dups_sample(job, shared_ids, input_args):
     work_dir = job.fileStore.getLocalTempDir()
     # Retrieve file path
     read_from_filestore(job, work_dir, shared_ids, 'sample.sorted.bam')
-    outpath = os.path.join(work_dir, 'sample.sorted.bam')
+    outpath = os.path.join(work_dir, 'sample.mkdups.bam')
     # Call: picardtools
     command = ['MarkDuplicates',
                'INPUT=sample.sorted.bam',
                'OUTPUT=sample.mkdups.bam',
                'METRICS_FILE=metrics.txt',
-               'ASSUME_SORTED=true']
+               'ASSUME_SORTED=true',
+               'CREATE_INDEX=true']
     docker_call_preprocess(work_dir=work_dir, tool_parameters=command,
-                tool='quay.io/ucsc_cgl/picardtools:1.95--dd5ac549b95eb3e5d166a5e310417ef13651994e',
-                outfiles=['sample.mkdups.bam'],
-                sudo=sudo)
+                           java_opts='-Xmx%sg' % input_args['memory'],
+                           tool='quay.io/ucsc_cgl/picardtools:1.95--dd5ac549b95eb3e5d166a5e310417ef13651994e',
+                           outfiles=['sample.mkdups.bam'],
+                           sudo=sudo)
+    
     shared_ids['sample.mkdups.bam'] = job.fileStore.writeGlobalFile(outpath)
-    job.addChildJobFn(index_mkdups, shared_ids, input_args)
 
-
-def index_mkdups(job, shared_ids, input_args):
-    """
-    Runs samtools index to create (.bai) files
-
-    job_vars: tuple     Contains the input_args and ids dictionaries
-    """
-    debug_log = open('index', 'w')
-    # Unpack convenience variables for job
-    work_dir = job.fileStore.getLocalTempDir()
-    sudo = input_args['sudo']
-    read_from_filestore(job, work_dir, shared_ids, 'sample.mkdups.bam')
-    outpath = os.path.join(work_dir, 'sample.mkdups.bam.bai')
-    debug_log.write(outpath + '\n')
-    debug_log.close()
-    # Retrieve file path
-    # Call: index the normal.bam
-    parameters = ['index', 'sample.mkdups.bam']
-    docker_call_preprocess(work_dir=work_dir, tool_parameters=parameters,
-                tool='quay.io/ucsc_cgl/samtools:0.1.19--dd5ac549b95eb3e5d166a5e310417ef13651994e',
-                outfiles=['sample.mkdups.bam.bai'],
-                sudo=sudo)
-    shared_ids['sample.mkdups.bam.bai'] = job.fileStore.writeGlobalFile(outpath)
-    job.addChildJobFn(realigner_target_creator, shared_ids, input_args)
+    # picard writes the index for file.bam at file.bai, not file.bam.bai
+    _move_bai(outpath)
+    shared_ids['sample.mkdups.bam.bai'] = job.fileStore.writeGlobalFile(outpath + ".bai")
+    job.addChildJobFn(realigner_target_creator, shared_ids, input_args, cores = input_args['cpu_count'])
 
 
 def realigner_target_creator(job, shared_ids, input_args):
@@ -556,8 +544,9 @@ def realigner_target_creator(job, shared_ids, input_args):
     # Output file path
     output = os.path.join(work_dir, 'sample.intervals')
     # Call: GATK -- RealignerTargetCreator
-    parameters = ['-T', 'RealignerTargetCreator',
-                  '-nt', input_args['cpu_count'],
+    parameters = ['-U', 'ALLOW_SEQ_DICT_INCOMPATIBILITY', # RISKY! (?) See #189
+                  '-T', 'RealignerTargetCreator',
+                  '-nt', str(input_args['cpu_count']),
                   '-R', 'ref.fa',
                   '-I', 'sample.mkdups.bam',
                   '-known', 'phase.vcf',
@@ -566,10 +555,10 @@ def realigner_target_creator(job, shared_ids, input_args):
                   '-o', 'sample.intervals']
 
     docker_call_preprocess(work_dir=work_dir, tool_parameters=parameters,
-		tool='quay.io/ucsc_cgl/gatk:3.4--dd5ac549b95eb3e5d166a5e310417ef13651994e',
-                java_opts='-Xmx10g',
-                outfiles=['sample.intervals'],
-		sudo=sudo)
+                           tool='quay.io/ucsc_cgl/gatk:3.5--dba6dae49156168a909c43330350c6161dc7ecc2',
+                           java_opts='-Xmx%sg' % input_args['memory'],
+                           outfiles=['sample.intervals'],
+                           sudo=sudo)
     shared_ids['sample.intervals'] = job.fileStore.writeGlobalFile(output)
     job.addChildJobFn(indel_realignment, shared_ids, input_args)
 
@@ -592,7 +581,8 @@ def indel_realignment(job, shared_ids, input_args):
     # Output file path
     output = os.path.join(work_dir, 'sample.indel.bam')
     # Call: GATK -- IndelRealigner
-    parameters = ['-T', 'IndelRealigner',
+    parameters = ['-U', 'ALLOW_SEQ_DICT_INCOMPATIBILITY', # RISKY! (?) See #189
+                  '-T', 'IndelRealigner',
                   '-R', 'ref.fa',
                   '-I', 'sample.mkdups.bam',
                   '-known', 'phase.vcf',
@@ -602,38 +592,17 @@ def indel_realignment(job, shared_ids, input_args):
                   '-maxReads', str(720000),
                   '-maxInMemory', str(5400000),
                   '-o', 'sample.indel.bam']
-    docker_call_preprocess(tool='quay.io/ucsc_cgl/gatk:3.4--dd5ac549b95eb3e5d166a5e310417ef13651994e',
-                work_dir=work_dir, tool_parameters=parameters,
-                java_opts='-Xmx10g', sudo=sudo,
-                outfiles=['sample.indel.bam', 'sample.indel.bam.bai'])
+
+    docker_call_preprocess(tool='quay.io/ucsc_cgl/gatk:3.5--dba6dae49156168a909c43330350c6161dc7ecc2',
+                           work_dir=work_dir, tool_parameters=parameters,
+                           java_opts='-Xmx%sg' % input_args['memory'], sudo=sudo,
+                           outfiles=['sample.indel.bam', 'sample.indel.bam.bai'])
+
     # Write to fileStore
     shared_ids['sample.indel.bam'] = job.fileStore.writeGlobalFile(output)
-    job.addFollowOnJobFn(index_indel, shared_ids, input_args)
-
-
-def index_indel(job, shared_ids, input_args):
-    """
-    Runs samtools index to create (.bai) files
-
-    job_vars: tuple     Contains the input_args and ids dictionaries
-    """
-    debug_log = open('index', 'w')
-    # Unpack convenience variables for job
-    work_dir = job.fileStore.getLocalTempDir()
-    sudo = input_args['sudo']
-    read_from_filestore(job, work_dir, shared_ids, 'sample.indel.bam')
-    outpath = os.path.join(work_dir, 'sample.indel.bam.bai')
-    debug_log.write(outpath + '\n')
-    debug_log.close()
-    # Retrieve file path
-    # Call: index the normal.bam
-    parameters = ['index', 'sample.indel.bam']
-    docker_call_preprocess(work_dir=work_dir, tool_parameters=parameters,
-                tool='quay.io/ucsc_cgl/samtools:0.1.19--dd5ac549b95eb3e5d166a5e310417ef13651994e',
-                outfiles=['sample.indel.bam.bai'],
-                sudo=sudo)
-    shared_ids['sample.indel.bam.bai'] = job.fileStore.writeGlobalFile(outpath)
-    job.addChildJobFn(base_recalibration, shared_ids, input_args)
+    _move_bai(outpath)
+    shared_ids['sample.indel.bam.bai'] = job.fileStore.writeGlobalFile(output + ".bai")
+    job.addChildJobFn(base_recalibration, shared_ids, input_args, cores = input_args['cpu_count'])
 
 
 def base_recalibration(job, shared_ids, input_args):
@@ -653,19 +622,20 @@ def base_recalibration(job, shared_ids, input_args):
     # Output file path
     output = os.path.join(work_dir, 'sample.recal.table')
     # Call: GATK -- IndelRealigner
-    parameters = ['-T', 'BaseRecalibrator',
-                  '-nct', input_args['cpu_count'],
+    parameters = ['-U', 'ALLOW_SEQ_DICT_INCOMPATIBILITY', # RISKY! (?) See #189
+                  '-T', 'BaseRecalibrator',
+                  '-nct', str(input_args['cpu_count']),
                   '-R', 'ref.fa',
                   '-I', 'sample.indel.bam',
                   '-knownSites', 'dbsnp.vcf',
                   '-o', 'sample.recal.table']
-    docker_call_preprocess(tool='quay.io/ucsc_cgl/gatk:3.4--dd5ac549b95eb3e5d166a5e310417ef13651994e',
-                work_dir=work_dir, tool_parameters=parameters,
-                java_opts='-Xmx15g', sudo=sudo,
-                outfiles=['sample.recal.table'])
+    docker_call_preprocess(tool='quay.io/ucsc_cgl/gatk:3.5--dba6dae49156168a909c43330350c6161dc7ecc2',
+                           work_dir=work_dir, tool_parameters=parameters,
+                           java_opts='-Xmx%sg' % input_args['memory'], sudo=sudo,
+                           outfiles=['sample.recal.table'])
     # Write to fileStore
     shared_ids['sample.recal.table'] = job.fileStore.writeGlobalFile(output)
-    job.addChildJobFn(print_reads, shared_ids, input_args)
+    job.addChildJobFn(print_reads, shared_ids, input_args, cores = input_args['cpu_count'])
 
 
 def print_reads(job, shared_ids, input_args):
@@ -685,20 +655,24 @@ def print_reads(job, shared_ids, input_args):
                        'ref.fa.fai', 'ref.dict', 'sample.indel.bam.bai', 'sample.recal.table')
     # Output file
     outfile = '{}{}.bam'.format(uuid, suffix)
+    outfile_idx = '{}{}.bam.bai'.format(uuid, suffix)
     outpath = os.path.join(work_dir, outfile)
     # Call: GATK -- PrintReads
-    parameters = ['-T', 'PrintReads',
-                  '-nct', input_args['cpu_count'],
+    parameters = ['-U', 'ALLOW_SEQ_DICT_INCOMPATIBILITY', # RISKY! (?) See #189
+                  '-T', 'PrintReads',
+                  '-nct', str(input_args['cpu_count']),
                   '-R', 'ref.fa',
                   '--emit_original_quals',
                   '-I', 'sample.indel.bam',
                   '-BQSR', 'sample.recal.table',
                   '-o', outfile]
-    docker_call_preprocess(tool='quay.io/ucsc_cgl/gatk:3.4--dd5ac549b95eb3e5d166a5e310417ef13651994e',
-                work_dir=work_dir, tool_parameters=parameters,
-                java_opts='-Xmx15g', sudo=sudo, outfiles=[outfile])
+    docker_call_preprocess(tool='quay.io/ucsc_cgl/gatk:3.5--dba6dae49156168a909c43330350c6161dc7ecc2',
+                           work_dir=work_dir, tool_parameters=parameters,
+                           java_opts='-Xmx%sg' % input_args['memory'], sudo=sudo, outfiles=[outfile, outfile_idx])
 
     upload_or_move(job, work_dir, input_args, outfile)
+    _move_bai(outpath)
+    upload_or_move(job, work_dir, input_args, outfile_idx)
 
 def main():
     """
@@ -719,8 +693,8 @@ def main():
               'sudo': pargs.sudo,
               'ssec': pargs.ssec,
               'suffix': pargs.suffix,
-              'cpu_count': str(multiprocessing.cpu_count())}
-
+              'cpu_count': multiprocessing.cpu_count(), # FIXME: should not be called from toil-leader, see #186
+              'memory': '15'}
 
     # Launch Pipeline
     Job.Runner.startToil(Job.wrapJobFn(download_gatk_files, inputs), pargs)

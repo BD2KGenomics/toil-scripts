@@ -111,6 +111,7 @@ def call_adam(masterIP, inputs, arguments):
                       "--conf", ("spark.driver.memory=%sg" % inputs["driverMemory"]),
                       "--conf", ("spark.executor.memory=%sg" % inputs["executorMemory"]),
                       "--conf", ("spark.hadoop.fs.default.name=hdfs://%s:%s" % (masterIP, HDFS_MASTER_PORT)),
+                      "--conf", "spark.driver.maxResultSize=0", # set max result size to unlimited, see #177
                       "--"]
     docker_call(no_rm = True,
                 work_dir = os.getcwd(),

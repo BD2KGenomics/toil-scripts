@@ -246,7 +246,13 @@ def sample_loop(job,
   Loops over the sample_ids (uuids) in the manifest, creating child jobs to process each
   """
 
-  for uuid in uuid_list:
+  for uuid_rg in uuid_list:
+
+    uuid_items = uuid_rg.split(',')
+    uuid = uuid_items[0]
+    rg_line = None
+    if len(uuid_items) > 1:
+        rg_line = uuid_items[1]
 
     uuid_bwa_inputs = copy.deepcopy(bwa_inputs)
     uuid_adam_inputs = copy.deepcopy(adam_inputs)
@@ -257,6 +263,7 @@ def sample_loop(job,
     ## set uuid inputs
     uuid_bwa_inputs['lb'] = uuid
     uuid_bwa_inputs['uuid'] = uuid
+    uuid_bwa_inputs['rg_line'] = rg_line
     uuid_adam_inputs['outDir'] = 's3://{s3_bucket}/analysis{dir_suffix}/{uuid}'.format(**locals())
     uuid_adam_inputs['bamName'] = 's3://{s3_bucket}/alignment{dir_suffix}/{uuid}.bam'.format(**locals())
     uuid_gatk_preprocess_inputs['s3_dir'] = '{s3_bucket}/analysis{dir_suffix}/{uuid}'.format(**locals())
@@ -335,6 +342,7 @@ def static_dag(job,
     print >> gatk_preprocess_fp, '{uuid},s3://{s3_bucket}/alignment{dir_suffix}/{uuid}.bam'.format(**locals())
     gatk_preprocess_fp.flush()
     gatk_preprocess_fp.close()
+    gatk_preprocess_inputs['cpu_count'] = multiprocessing.cpu_count()
     gatk_preprocess_inputs['config'] = job.fileStore.writeGlobalFile(gatk_preprocess_config_path)
 
     # write config for GATK haplotype caller for the result of ADAM preprocessing
@@ -343,6 +351,7 @@ def static_dag(job,
     print >> gatk_adam_call_fp, '{uuid},s3://{s3_bucket}/analysis{dir_suffix}/{uuid}/{uuid}.adam.bam'.format(**locals())
     gatk_adam_call_fp.flush()
     gatk_adam_call_fp.close()
+    gatk_adam_call_inputs['cpu_count'] = multiprocessing.cpu_count()
     gatk_adam_call_inputs['config'] = job.fileStore.writeGlobalFile(gatk_adam_call_config_path)
 
     # write config for GATK haplotype caller for the result of GATK preprocessing
@@ -351,6 +360,7 @@ def static_dag(job,
     print >> gatk_gatk_call_fp, '{uuid},s3://{s3_bucket}/analysis{dir_suffix}/{uuid}/{uuid}.gatk.bam'.format(**locals())
     gatk_gatk_call_fp.flush()
     gatk_gatk_call_fp.close()
+    gatk_gatk_call_inputs['cpu_count'] = multiprocessing.cpu_count()
     gatk_gatk_call_inputs['config'] = job.fileStore.writeGlobalFile(gatk_gatk_call_config_path)
 
     # get head BWA alignment job function and encapsulate it
@@ -497,7 +507,7 @@ if __name__ == '__main__':
                   'cpu_count': None,
                   'file_size': args.file_size,
                   'use_bwakit': args.use_bwakit,
-                  'sort': True, # TODO: #169 will code this to false
+                  'sort': False,
                   'trim': args.trim}
 
     if bool(args.master_ip) == bool(args.num_nodes):
@@ -523,8 +533,9 @@ if __name__ == '__main__':
                               'output_dir': None,
                               'sudo': args.sudo,
                               'ssec': None,
-                              'cpu_count': str(multiprocessing.cpu_count()),
-                              'suffix': '.gatk' }
+                              'cpu_count': None,
+                              'suffix': '.gatk',
+                              'memory': args.executor_memory}
 
     gatk_adam_call_inputs = {'ref.fa': args.ref,
                              'phase.vcf': args.phase,
@@ -534,11 +545,13 @@ if __name__ == '__main__':
                              'omni.vcf': args.omni,
                              'output_dir': None,
                              'uuid': None,
-                             'cpu_count': str(multiprocessing.cpu_count()),
+                             'cpu_count': None,
                              'ssec': None,
                              'file_size': args.file_size,
                              'suffix': '.adam',
-                             'sudo': args.sudo}
+                             'indexed': False,
+                             'sudo': args.sudo,
+                             'memory': args.executor_memory}
 
     gatk_gatk_call_inputs = {'ref.fa': args.ref,
                              'phase.vcf': args.phase,
@@ -548,11 +561,13 @@ if __name__ == '__main__':
                              'omni.vcf': args.omni,
                              'output_dir': None,
                              'uuid': None,
-                             'cpu_count': str(multiprocessing.cpu_count()),
+                             'cpu_count': None,
                              'ssec': None,
                              'file_size': args.file_size,
                              'suffix': '.gatk',
-                             'sudo': args.sudo}
+                             'indexed': True,
+                             'sudo': args.sudo,
+                             'memory': args.executor_memory}
 
     if (args.pipeline_to_run != "adam" and
         args.pipeline_to_run != "gatk" and

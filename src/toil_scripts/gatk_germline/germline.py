@@ -233,6 +233,7 @@ def create_reference_dict_hc(job, shared_ids, input_args):
     picard_output = os.path.join(work_dir, 'ref.dict')
     command = ['CreateSequenceDictionary', 'R=ref.fa', 'O=ref.dict']
     docker_call(work_dir = work_dir,
+                java_opts='-Xmx%sg' % input_args['memory'],
                 tool_parameters = command,
                 tool = 'quay.io/ucsc_cgl/picardtools',
                 sudo = input_args['sudo'])
@@ -293,7 +294,12 @@ def start(job, shared_ids, input_args, sample):
         ids['toil.bam'] = job.addChildJobFn(download_url, url, 'toil.bam').rv()
     else:
         pass
-    job.addFollowOnJobFn(index, ids, input_args)
+
+    if input_args['indexed']:
+        ids['toil.bam.bai'] = job.addChildJobFn(download_url, "%s.bai" % url, 'toil.bam.bai').rv()
+        job.addFollowOnJobFn(haplotype_caller, ids, input_args, cores = input_args['cpu_count'])
+    else:
+        job.addFollowOnJobFn(index, ids, input_args)
 
 
 def index(job, shared_ids, input_args):
@@ -317,7 +323,7 @@ def index(job, shared_ids, input_args):
                 sudo = input_args['sudo'])
     # Update FileStore and call child
     shared_ids['toil.bam.bai'] = job.fileStore.writeGlobalFile(output_path)
-    job.addChildJobFn(haplotype_caller, shared_ids, input_args)
+    job.addChildJobFn(haplotype_caller, shared_ids, input_args, cores = input_args['cpu_count'])
 
 
 def haplotype_caller(job, shared_ids, input_args):
@@ -336,7 +342,8 @@ def haplotype_caller(job, shared_ids, input_args):
                                      input_args['suffix'])
     
     # Call GATK -- HaplotypeCaller
-    command = ['-nct', input_args['cpu_count'],
+    command = ['-U', 'ALLOW_SEQ_DICT_INCOMPATIBILITY', # RISKY! (?) See #189
+               '-nct', str(input_args['cpu_count']),
                '-R', 'ref.fa',
                '-T', 'HaplotypeCaller',
                '--genotyping_mode', 'Discovery',
@@ -351,8 +358,9 @@ def haplotype_caller(job, shared_ids, input_args):
                '--annotation', 'ReadPosRankSumTest']
     try:
         docker_call(work_dir = work_dir,
+                    java_opts='-Xmx%sg' % input_args['memory'],
                     tool_parameters = command,
-                    tool = 'quay.io/ucsc_cgl/gatk',
+                    tool = 'quay.io/ucsc_cgl/gatk:3.5--dba6dae49156168a909c43330350c6161dc7ecc2',
                     sudo = input_args['sudo'])
     except:
         sys.stderr.write("Running haplotype caller with %s in %s failed." % (
@@ -366,7 +374,7 @@ def haplotype_caller(job, shared_ids, input_args):
     upload_or_move_hc(work_dir, input_args, output)
 
     # call variants prior to vqsr
-    job.addChildJobFn(genotype_gvcf, shared_ids, input_args)
+    job.addChildJobFn(genotype_gvcf, shared_ids, input_args, cores = input_args['cpu_count'])
 
 
 def genotype_gvcf(job, shared_ids, input_args):
@@ -386,7 +394,8 @@ def genotype_gvcf(job, shared_ids, input_args):
     read_from_filestore_hc(job, work_dir, shared_ids, *input_files)
     output = 'unified.raw.BOTH.gatk.vcf'
     
-    command = ['-nt', input_args['cpu_count'],
+    command = ['-U', 'ALLOW_SEQ_DICT_INCOMPATIBILITY', # RISKY! (?) See #189
+               '-nt', str(input_args['cpu_count']),
                '-R', 'ref.fa',
                '-T', 'GenotypeGVCFs',
                '--variant', '%s.raw.BOTH.gatk.gvcf' % input_args['uuid'],
@@ -396,8 +405,9 @@ def genotype_gvcf(job, shared_ids, input_args):
 
     try:
         docker_call(work_dir = work_dir,
+                    java_opts='-Xmx%sg' % input_args['memory'],
                     tool_parameters = command,
-                    tool = 'quay.io/ucsc_cgl/gatk',
+                    tool = 'quay.io/ucsc_cgl/gatk:3.5--dba6dae49156168a909c43330350c6161dc7ecc2',
                     sudo = input_args['sudo'])
     except:
         sys.stderr.write("Running GenotypeGVCFs with %s in %s failed." % (
@@ -408,8 +418,8 @@ def genotype_gvcf(job, shared_ids, input_args):
     shared_ids[output] = job.fileStore.writeGlobalFile(os.path.join(work_dir, output))
 
     # run vqsr
-    job.addChildJobFn(vqsr_snp, shared_ids, input_args)
-    job.addChildJobFn(vqsr_indel, shared_ids, input_args)
+    job.addChildJobFn(vqsr_snp, shared_ids, input_args, cores = input_args['cpu_count'])
+    job.addChildJobFn(vqsr_indel, shared_ids, input_args, cores = input_args['cpu_count'])
 
 
 def vqsr_snp(job, shared_ids, input_args):
@@ -426,10 +436,11 @@ def vqsr_snp(job, shared_ids, input_args):
                    'hapmap.vcf', 'omni.vcf', 'dbsnp.vcf', 'phase.vcf']
     read_from_filestore_hc(job, work_dir, shared_ids, *input_files)
     outputs = ['HAPSNP.recal', 'HAPSNP.tranches', 'HAPSNP.plots']
-    command = ['-T', 'VariantRecalibrator',
+    command = ['-U', 'ALLOW_SEQ_DICT_INCOMPATIBILITY', # RISKY! (?) See #189
+               '-T', 'VariantRecalibrator',
                '-R', 'ref.fa',
                '-input', 'unified.raw.BOTH.gatk.vcf',
-               '-nt', input_args['cpu_count'],
+               '-nt', str(input_args['cpu_count']),
                '-resource:hapmap,known=false,training=true,truth=true,prior=15.0', 'hapmap.vcf',
                '-resource:omni,known=false,training=true,truth=false,prior=12.0', 'omni.vcf',
                '-resource:dbsnp,known=true,training=false,truth=false,prior=2.0', 'dbsnp.vcf',
@@ -440,8 +451,9 @@ def vqsr_snp(job, shared_ids, input_args):
                '-tranchesFile', 'HAPSNP.tranches',
                '-rscriptFile', 'HAPSNP.plots']
     docker_call(work_dir = work_dir,
+                java_opts='-Xmx%sg' % input_args['memory'],
                 tool_parameters = command,
-                tool ='quay.io/ucsc_cgl/gatk',
+                tool ='quay.io/ucsc_cgl/gatk:3.5--dba6dae49156168a909c43330350c6161dc7ecc2',
                 sudo = input_args['sudo'])
     shared_ids = write_to_filestore(job, work_dir, shared_ids, *outputs)
     job.addChildJobFn(apply_vqsr_snp, shared_ids, input_args)
@@ -464,7 +476,8 @@ def apply_vqsr_snp(job, shared_ids, input_args):
                    'HAPSNP.tranches', 'HAPSNP.recal']
     read_from_filestore_hc(job, work_dir, shared_ids, *input_files)
     output = '{}.HAPSNP.vqsr.SNP{}.vcf'.format(uuid, suffix)
-    command = ['-T', 'ApplyRecalibration',
+    command = ['-U', 'ALLOW_SEQ_DICT_INCOMPATIBILITY', # RISKY! (?) See #189
+               '-T', 'ApplyRecalibration',
                '-input', 'unified.raw.BOTH.gatk.vcf',
                '-o', output,
                '-R', 'ref.fa',
@@ -474,8 +487,9 @@ def apply_vqsr_snp(job, shared_ids, input_args):
                '-recalFile', 'HAPSNP.recal',
                '-mode', 'SNP']
     docker_call(work_dir = work_dir,
+                java_opts='-Xmx%sg' % input_args['memory'],
                 tool_parameters = command,
-                tool = 'quay.io/ucsc_cgl/gatk',
+                tool = 'quay.io/ucsc_cgl/gatk:3.5--dba6dae49156168a909c43330350c6161dc7ecc2',
                 sudo = input_args['sudo'])
 
     upload_or_move_hc(work_dir, input_args, output)
@@ -513,10 +527,11 @@ def vqsr_indel(job, shared_ids, input_args):
     input_files = ['ref.fa', 'ref.fa.fai', 'ref.dict', 'unified.raw.BOTH.gatk.vcf', 'mills.vcf']
     read_from_filestore_hc(job, work_dir, shared_ids, *input_files)
     outputs = ['HAPINDEL.recal', 'HAPINDEL.tranches', 'HAPINDEL.plots']
-    command = ['-T', 'VariantRecalibrator',
+    command = ['-U', 'ALLOW_SEQ_DICT_INCOMPATIBILITY', # RISKY! (?) See #189
+               '-T', 'VariantRecalibrator',
                '-R', 'ref.fa',
                '-input', 'unified.raw.BOTH.gatk.vcf',
-               '-nt', input_args['cpu_count'],
+               '-nt', str(input_args['cpu_count']),
                '-resource:mills,known=true,training=true,truth=true,prior=12.0', 'mills.vcf',
                '-an', 'DP', '-an', 'FS', '-an', 'ReadPosRankSum',
                '-mode', 'INDEL',
@@ -526,8 +541,9 @@ def vqsr_indel(job, shared_ids, input_args):
                '-rscriptFile', 'HAPINDEL.plots',
                '--maxGaussians', '4']
     docker_call(work_dir = work_dir,
+                java_opts='-Xmx%sg' % input_args['memory'],
                 tool_parameters = command,
-                tool ='quay.io/ucsc_cgl/gatk',
+                tool ='quay.io/ucsc_cgl/gatk:3.5--dba6dae49156168a909c43330350c6161dc7ecc2',
                 sudo = input_args['sudo'])
     shared_ids = write_to_filestore(job, work_dir, shared_ids, *outputs)
     job.addChildJobFn(apply_vqsr_indel, shared_ids, input_args)
@@ -549,7 +565,8 @@ def apply_vqsr_indel(job, shared_ids, input_args):
                    'HAPINDEL.recal', 'HAPINDEL.tranches', 'HAPINDEL.plots']
     read_from_filestore_hc(job, work_dir, shared_ids, *input_files)
     output = '{}.HAPSNP.vqsr.INDEL{}.vcf'.format(uuid, suffix)
-    command = ['-T', 'ApplyRecalibration',
+    command = ['-U', 'ALLOW_SEQ_DICT_INCOMPATIBILITY', # RISKY! (?) See #189
+               '-T', 'ApplyRecalibration',
                '-input', 'unified.raw.BOTH.gatk.vcf',
                '-o', output,
                '-R', 'ref.fa',
@@ -559,8 +576,9 @@ def apply_vqsr_indel(job, shared_ids, input_args):
                '-recalFile', 'HAPINDEL.recal',
                '-mode', 'INDEL']
     docker_call(work_dir = work_dir,
+                java_opts='-Xmx%sg' % input_args['memory'],
                 tool_parameters = command,
-                tool = 'quay.io/ucsc_cgl/gatk',
+                tool = 'quay.io/ucsc_cgl/gatk:3.5--dba6dae49156168a909c43330350c6161dc7ecc2',
                 sudo = input_args['sudo'])
 
     upload_or_move_hc(work_dir, input_args, output)
@@ -581,9 +599,11 @@ if __name__ == '__main__':
               'output_dir': args.output_dir,
               'suffix': args.suffix,
               'uuid': None,
-              'cpu_count': str(multiprocessing.cpu_count()),
+              'cpu_count': multiprocessing.cpu_count(), # FIXME: should not be called from toil-leader, see #186
               'file_size': args.file_size,
               'ssec': None,
-              'sudo': False}
+              'sudo': False,
+              'indexed': False, # FIXME: should be parametrized
+              'memory': '15'}
     
     Job.Runner.startToil(Job.wrapJobFn(batch_start, inputs), args)

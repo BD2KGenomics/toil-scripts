@@ -421,9 +421,14 @@ def run_bwa(job, job_vars):
         # so, fake a bad value
         uuid = input_args['uuid']
         library = input_args['lb']
-        rg = "@RG\\tID:%s\\tLB:%s\\tPL:ILLUMINA\\tPU:12345\\tSM:%s" % (uuid,
-                                                                  library,
-                                                                  uuid)
+
+        rg = ''
+        if input_args['rg_line']:
+            rg = input_args['rg_line']
+        else:
+            rg = "@RG\\tID:%s\\tLB:%s\\tPL:ILLUMINA\\tPU:12345\\tSM:%s" % (uuid,
+                                                                           library,
+                                                                           uuid)
         
         # do we want to use bwakit to sort?
         opt_args = []
@@ -686,7 +691,8 @@ def main():
               'file_size': args.file_size,
               'use_bwakit': args.use_bwakit,
               'sort': not args.skip_sort,
-              'trim': args.trim}
+              'trim': args.trim,
+              'rg_line': None}
 
     # Launch Pipeline
     Job.Runner.startToil(Job.wrapJobFn(download_shared_files, inputs), args)
