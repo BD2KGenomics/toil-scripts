@@ -4,6 +4,7 @@ import hashlib
 import os
 import subprocess
 from urlparse import urlparse
+import shutil
 from toil_scripts.lib.programs import docker_call
 
 
@@ -23,8 +24,10 @@ def download_url(url, work_dir='.', name=None, s3_key_path=None, cghub_key_path=
         _download_encrypted_file(url, file_path, s3_key_path)
     elif cghub_key_path:
         _download_from_genetorrent(url, file_path, cghub_key_path)
-    elif url.startswith('s3:'):
+    elif urlparse(url).scheme == 's3':
         _download_s3_url(file_path, url)
+    elif urlparse(url).scheme == 'file':
+        shutil.copy(urlparse(url).path, file_path)
     else:
         subprocess.check_call(['curl', '-fs', '--retry', '5', '--create-dir', url, '-o', file_path])
     assert os.path.exists(file_path)
