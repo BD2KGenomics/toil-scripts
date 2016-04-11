@@ -45,6 +45,7 @@ def start_spark_hdfs_cluster(job,
                       jArgs,
                       jReqs)
 
+
 def start_spark_hdfs_master(job, executorMemory, sudo):
     """
     Starts the master service.
@@ -78,9 +79,11 @@ class MasterService(Job.Service):
         self.cores = multiprocessing.cpu_count()
         Job.Service.__init__(self, memory = self.memory, cores = self.cores)
 
-    def start(self):
+    def start(self, fileStore):
         """
         Start spark and hdfs master containers
+
+        fileStore: Unused
         """
         
         self.IP = check_output(["hostname", "-f",])[:-1]
@@ -109,9 +112,12 @@ class MasterService(Job.Service):
                                            check_output = True)[:-1]
         return self.IP
 
-    def stop(self):
+
+    def stop(self, fileStore):
         """
         Stop and remove spark and hdfs master containers
+
+        fileStore: Unused
         """
         
         sudo = []
@@ -125,9 +131,20 @@ class MasterService(Job.Service):
 
         call(sudo + ["docker", "stop", self.hdfsContainerID])
         call(sudo + ["docker", "rm", self.hdfsContainerID])
-        _log.info("Stopped HDFS datanode.")
+        _log.info("Stopped HDFS namenode.")
 
         return
+
+
+    def check(self):
+        """
+        Checks to see if Spark master and HDFS namenode are still running.
+        """
+
+        containers = check_output(["docker", "ps", "-q"])
+
+        return ((self.sparkContainerID in containers) and
+                (self.hdfsContainerID in containers))
 
 
 SPARK_MASTER_PORT = "7077"
@@ -141,9 +158,11 @@ class WorkerService(Job.Service):
         self.cores = multiprocessing.cpu_count()
         Job.Service.__init__(self, memory = self.memory, cores = self.cores)
 
-    def start(self):
+    def start(self, fileStore):
         """
         Start spark and hdfs worker containers
+
+        fileStore: Unused
         """
 
         # start spark and our datanode
@@ -228,9 +247,11 @@ class WorkerService(Job.Service):
                                            check_output = True)[:-1]
 
 
-    def stop(self):
+    def stop(self, fileStore):
         """
         Stop spark and hdfs worker containers
+
+        fileStore: Unused
         """
 
         sudo = []
@@ -245,6 +266,17 @@ class WorkerService(Job.Service):
         call(sudo + ["docker", "exec", self.hdfsContainerID, "rm", "-r", "/ephemeral/hdfs"])
         call(sudo + ["docker", "stop", self.hdfsContainerID])
         call(sudo + ["docker", "rm", self.hdfsContainerID])
-        _log.info("Stopped HDFS namenode.")
+        _log.info("Stopped HDFS datanode.")
 
         return
+
+
+    def check(self):
+        """
+        Checks to see if Spark master and HDFS namenode are still running.
+        """
+
+        containers = check_output(["docker", "ps", "-q"])
+
+        return ((self.sparkContainerID in containers) and
+                (self.hdfsContainerID in containers))
