@@ -52,7 +52,7 @@ from toil_scripts.lib import copy_to_output_dir, flatten
 
 from toil_scripts.lib.programs import docker_call, which
 from toil_scripts.lib.urls import download_url_job, s3am_upload, s3am_upload_job
-from toil_scripts.lib.jobs import sample_batcher_job
+from toil_scripts.lib.jobs import map_job
 from toil_scripts.lib.files import mkdir_p
 from toil_scripts.lib.files import tarball_files
 
@@ -157,7 +157,7 @@ def parse_input_samples(job, input_args):
     elif genetorrent:
         samples = parse_genetorrent(genetorrent)
     # Pass to batcher to spawn tree of jobs
-    job.addChildJobFn(sample_batcher_job, download_sample, samples, input_args)
+    job.addChildJobFn(map_job, download_sample, samples, input_args)
 
 
 def download_sample(job, sample, input_args):
