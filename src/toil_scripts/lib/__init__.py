@@ -22,6 +22,14 @@ def flatten(x):
 def sizeof_fmt(num, suffix='B'):
     """
     Humanize input
+    >>> sizeof_fmt(1024)
+    '1.0KB'
+    >>> sizeof_fmt(1024**2)
+    '1.0MB'
+    >>> sizeof_fmt(1024**3)
+    '1.0GB'
+    >>> sizeof_fmt(1024**4)
+    '1.0TB'
 
     :param int num: number to be converted to human-readable string
     :param str suffix: Size suffix; defaults to B for byte
