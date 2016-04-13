@@ -36,16 +36,16 @@ def tarball_files(tar_name, file_paths, output_dir='.', prefix=''):
             f_out.add(file_path, arcname=arcname)
 
 
-def move_files(filepaths, output_dir):
+def move_files(file_paths, output_dir):
     """
     Moves files from the working directory to the output directory.
 
     :param str output_dir: Output directory
-    :param list[str] filepaths: File paths to move
+    :param list[str] file_paths: Absolute file paths to move
     """
-    for fpath in filepaths:
-        dest = os.path.join(output_dir, os.path.basename(fpath))
-        shutil.move(fpath, dest)
+    for file_path in file_paths:
+        dest = os.path.join(output_dir, os.path.basename(file_path))
+        shutil.move(file_path, dest)
 
 
 def consolidate_tarballs_job(job, **fname_to_id):
