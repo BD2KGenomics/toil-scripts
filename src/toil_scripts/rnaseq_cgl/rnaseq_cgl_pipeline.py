@@ -407,7 +407,7 @@ def kallisto(job, job_vars):
                 work_dir=work_dir, parameters=parameters, sudo=sudo)
     # Tar output files together and store in fileStore
     output_files = [os.path.join(work_dir, x) for x in ['run_info.json', 'abundance.tsv', 'abundance.h5']]
-    tarball_files(tar_name='kallisto.tar.gz', file_paths=output_files, work_dir=work_dir)
+    tarball_files(tar_name='kallisto.tar.gz', file_paths=output_files, output_dir=work_dir)
     return job.fileStore.writeGlobalFile(os.path.join(work_dir, 'kallisto.tar.gz'))
 
 
@@ -469,7 +469,7 @@ def star(job, job_vars):
             shutil.move(os.path.join(work_dir, wiggle),
                         os.path.join(work_dir, os.path.splitext(wiggle)[0] + '.bedGraph'))
         wiggles = [os.path.join(work_dir, x) for x in [os.path.splitext(x)[0] + '.bedGraph' for x in wiggles]]
-        tarball_files('wiggle.tar.gz', file_paths=wiggles, work_dir=work_dir)
+        tarball_files('wiggle.tar.gz', file_paths=wiggles, output_dir=work_dir)
         wiggle_id = job.fileStore.writeGlobalFile(os.path.join(work_dir, 'wiggle.tar.gz'))
         job.addChildJobFn(s3am_upload_job, file_id=wiggle_id, file_name='wiggle.tar.gz',
                           s3_dir=input_args['s3_dir'], num_cores=cores)
@@ -553,8 +553,8 @@ def rsem_postprocess(job, job_vars):
     docker_call(tool='jvivian/gencode_hugo_mapping', parameters=command, work_dir=work_dir, sudo=sudo)
     hugo_files = [os.path.splitext(x)[0] + '.hugo' + os.path.splitext(x)[1] for x in output_files]
     # Create tarballs for outputs
-    tarball_files(tar_name='rsem.tar.gz', file_paths=[os.path.join(work_dir, x) for x in output_files], work_dir=work_dir)
-    tarball_files('rsem_hugo.tar.gz', [os.path.join(work_dir, x) for x in hugo_files], work_dir=work_dir)
+    tarball_files(tar_name='rsem.tar.gz', file_paths=[os.path.join(work_dir, x) for x in output_files], output_dir=work_dir)
+    tarball_files('rsem_hugo.tar.gz', [os.path.join(work_dir, x) for x in hugo_files], output_dir=work_dir)
     rsem_id = job.fileStore.writeGlobalFile(os.path.join(work_dir, 'rsem.tar.gz'))
     hugo_id = job.fileStore.writeGlobalFile(os.path.join(work_dir, 'rsem_hugo.tar.gz'))
     return rsem_id, hugo_id

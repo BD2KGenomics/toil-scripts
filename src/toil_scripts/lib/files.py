@@ -21,19 +21,19 @@ def mkdir_p(path):
             raise
 
 
-def tarball_files(tar_name, file_paths, work_dir='.', prefix=''):
+def tarball_files(tar_name, file_paths, output_dir='.', prefix=''):
     """
     Creates a tarball from a group of files
 
     :param str tar_name: Name of tarball
-    :param list[str] file_paths: File paths to include in the tarball
-    :param str work_dir: Current working directory
+    :param list[str] file_paths: Absolute file paths to include in the tarball
+    :param str output_dir: Output destination for tarball
     :param str prefix: Optional prefix for files in tarball
     """
-    with tarfile.open(os.path.join(work_dir, tar_name), 'w:gz') as f_out:
-        for fpath in file_paths:
-            arcname = prefix + os.path.basename(fpath)
-            f_out.add(fpath, arcname=arcname)
+    with tarfile.open(os.path.join(output_dir, tar_name), 'w:gz') as f_out:
+        for file_path in file_paths:
+            arcname = prefix + os.path.basename(file_path)
+            f_out.add(file_path, arcname=arcname)
 
 
 def move_files(filepaths, output_dir):

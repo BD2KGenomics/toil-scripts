@@ -20,7 +20,7 @@ def test_tarball_files(tmpdir):
     fpath = os.path.join(work_dir, 'output_file')
     with open(fpath, 'wb') as fout:
         fout.write(os.urandom(1024))
-    tarball_files(work_dir=work_dir, tar_name='test.tar', file_paths=[fpath])
+    tarball_files(output_dir=work_dir, tar_name='test.tar', file_paths=[fpath])
     assert os.path.exists(os.path.join(work_dir, 'test.tar'))
 
 
