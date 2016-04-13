@@ -8,7 +8,6 @@ def sample_batcher_job(job, func, samples, *args):
     :param function func: Function to spawn dynamically, passes one sample as first argument
     :param list samples: Array of samples to be batched
     :param list args: any arguments to be passed to the function
-    :return:
     """
     # num_partitions isn't exposed as an argument in order to be transparent to the user.
     # The value for num_partitions is a tested value

@@ -17,7 +17,8 @@ def download_url(url, work_dir='.', name=None, s3_key_path=None, cghub_key_path=
     :param str name: Name of output file, if None, basename of URL is used
     :param str s3_key_path: Path to 32-byte encryption key if url points to S3 file that uses SSE-C
     :param str cghub_key_path: Path to cghub key used to download from CGHub.
-    :return str: Path to the downloaded file
+    :return: Path to the downloaded file
+    :rtype: str
     """
     file_path = os.path.join(work_dir, name) if name else os.path.join(work_dir, os.path.basename(url))
     if s3_key_path:
@@ -154,7 +155,8 @@ def _generate_unique_key(master_key_path, url):
 
     :param str master_key_path: Path to the master key
     :param str url: URL used to generate unique encryption key
-    :return str: The new 32-byte key
+    :return: The new 32-byte key
+    :rtype: str
     """
     with open(master_key_path, 'r') as f:
         master_key = f.read()

@@ -54,7 +54,8 @@ def consolidate_tarballs_job(job, **fname_to_id):
     Subdirs within the tarball will be named the keys in **fname_to_id
 
     :param dict[str,str] fname_to_id: Key word arguments of the form: file_name_prefix=FileStoreID
-    :return str: The file store ID of the generated tarball
+    :return: The file store ID of the generated tarball
+    :rtype: str
     """
     work_dir = job.fileStore.getLocalTempDir()
     # Retrieve output file paths to consolidate

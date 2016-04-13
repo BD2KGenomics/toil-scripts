@@ -33,7 +33,8 @@ def sizeof_fmt(num, suffix='B'):
 
     :param int num: number to be converted to human-readable string
     :param str suffix: Size suffix; defaults to B for byte
-    :return str: Human-readable string
+    :return: Human-readable string
+    :rtype: str
     """
     for unit in ['','K','M','G','T','P','E','Z']:
         if abs(num) < 1024.0:

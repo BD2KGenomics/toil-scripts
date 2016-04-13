@@ -10,7 +10,8 @@ def which(program):
     Determines if a program exists
 
     :param str program: Name of program to check
-    :return str: Path to program or None
+    :return: Path to program or None
+    :rtype: str
     """
 
     def is_exe(f):
@@ -41,7 +42,8 @@ def docker_call(tool, parameters=None, work_dir='.', rm=True, env=None, sudo=Fal
     :param dict[str,str] env: Environment variables to be added (e.g. dict(JAVA_OPTS='-Xmx15G'))
     :param bool sudo: If True, prepends `sudo` to the docker call
     :param file outfile: Pipe output of Docker call to file handle
-    :return int: Exit Code
+    :return: Exit Code
+    :rtype: int
     """
     base_docker_call = ['docker', 'run',
                         '--log-driver=none',
