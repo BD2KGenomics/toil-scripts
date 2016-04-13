@@ -36,14 +36,12 @@ def docker_call(tool, parameters=None, work_dir='.', rm=True, env=None, sudo=Fal
     Calls Docker, passing along parameters and tool.
 
     :param str tool: Name of the Docker image to be used (e.g. quay.io/ucsc_cgl/samtools)
-    :param list[str] parameters: Parameters to be passed to the tool
-    :param str work_dir: Directory to mount into the container via `-v`
+    :param list[str] parameters: Command line arguments to be passed to the tool
+    :param str work_dir: Directory to mount into the container via `-v`. Destination convention is /data
     :param bool rm: Set to True to pass `--rm` flag.
     :param dict[str,str] env: Environment variables to be added (e.g. dict(JAVA_OPTS='-Xmx15G'))
     :param bool sudo: If True, prepends `sudo` to the docker call
     :param file outfile: Pipe output of Docker call to file handle
-    :return: Exit Code
-    :rtype: int
     """
     base_docker_call = ['docker', 'run',
                         '--log-driver=none',
