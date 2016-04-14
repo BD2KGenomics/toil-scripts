@@ -3,10 +3,11 @@
 #
 # Please read the associated README.md before attempting to use.
 #
-python bwa_alignment.py \
-aws:us-west-2:alignment-wcdt-run-1 \
---retryCount 3 \
---config bwa_config.csv \
+export PYTHONPATH=$(python -c 'from os.path import abspath as a, dirname as d;import sys;print d(d(d(a(sys.argv[1]))))' $0)
+python -m toil_scripts.batch_alignment.bwa_alignment \
+aws:us-west-2:alignment-run-1 \
+--retryCount 2 \
+--config bwa-config.csv \
 --lb KapaHyper \
 --ref https://s3-us-west-2.amazonaws.com/cgl-pipeline-inputs/alignment/hg19.fa \
 --amb https://s3-us-west-2.amazonaws.com/cgl-pipeline-inputs/alignment/hg19.fa.amb \
@@ -16,10 +17,9 @@ aws:us-west-2:alignment-wcdt-run-1 \
 --sa https://s3-us-west-2.amazonaws.com/cgl-pipeline-inputs/alignment/hg19.fa.sa \
 --fai https://s3-us-west-2.amazonaws.com/cgl-pipeline-inputs/alignment/hg19.fa.fai \
 --ssec /home/mesosbox/shared/master.key \
---output_dir /home/mesosbox/shared \
 --s3_dir cgl-driver-projects/test/alignment \
 --sseKey=/home/mesosbox/shared/master.key \
 --batchSystem="mesos" \
 --mesosMaster mesos-master:5050 \
 --workDir=/var/lib/toil \
-#--restart
+--use_bwakit
