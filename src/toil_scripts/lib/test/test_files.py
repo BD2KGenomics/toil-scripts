@@ -56,4 +56,4 @@ def _consolidate_tarball_job_setup(job):
         f_out.add(fpath)
     id1 = job.fileStore.writeGlobalFile(fpath1)
     id2 = job.fileStore.writeGlobalFile(fpath2)
-    job.addChildJobFn(consolidate_tarballs_job, test1=id1, test2=id2)
+    job.addChildJobFn(consolidate_tarballs_job, dict(test1=id1, test2=id2))
