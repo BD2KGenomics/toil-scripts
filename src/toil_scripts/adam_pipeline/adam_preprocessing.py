@@ -128,23 +128,18 @@ def remove_file(masterIP, filename, sparkOnToil):
     :type masterIP: MasterAddress
     """
     masterIP = masterIP.actual
-    if sparkOnToil:
-        try:
-            output = check_output(['ssh',
-                                   '-o', 'StrictHostKeyChecking=no',
-                                   masterIP, 'docker', 'ps'])
-            containerID = next(line.split()[0] for line in output.splitlines() if 'apache-hadoop-master' in line)
-            check_call(['ssh',
-                        '-o', 'StrictHostKeyChecking=no',
-                        masterIP,
-                        'docker', 'exec', containerID,
-                        'hdfs', 'dfs', '-rm', '-r', '/' + filename])
-        except:
-            pass
-    else:
-        log.warning('Cannot remove file %s. Can only remove files when running Spark-on-Toil', filename)
+    ssh_call = ['ssh', '-o', 'StrictHostKeyChecking=no', masterIP]
 
-# FIXME: unused parameter sparkOnToil
+    if sparkOnToil:
+        output = check_output(ssh_call +  ['docker', 'ps'])
+        containerID = next(line.split()[0] for line in output.splitlines() if 'apache-hadoop-master' in line)
+        ssh_call += ['docker', 'exec', containerID]
+
+    try:
+        check_call(ssh_call + ['hdfs', 'dfs', '-rm', '-r', '/' + filename])
+    except:
+        pass
+
 
 def download_data(masterIP, inputs, knownSNPs, bam, hdfsSNPs, hdfsBAM):
     """
