@@ -32,7 +32,8 @@ def tarball_files(tar_name, file_paths, output_dir='.', prefix=''):
     """
     with tarfile.open(os.path.join(output_dir, tar_name), 'w:gz') as f_out:
         for file_path in file_paths:
-            assert file_path.startswith('/'), 'Path provided is relative not absolute.'
+            if not file_path.startswith('/'):
+                raise ValueError('Path provided is relative not absolute.')
             arcname = prefix + os.path.basename(file_path)
             f_out.add(file_path, arcname=arcname)
 
@@ -45,7 +46,8 @@ def move_files(file_paths, output_dir):
     :param list[str] file_paths: Absolute file paths to move
     """
     for file_path in file_paths:
-        assert file_path.startswith('/'), 'Path provided is relative not absolute.'
+        if not file_path.startswith('/'):
+            raise ValueError('Path provided is relative not absolute.')
         dest = os.path.join(output_dir, os.path.basename(file_path))
         shutil.move(file_path, dest)
 
