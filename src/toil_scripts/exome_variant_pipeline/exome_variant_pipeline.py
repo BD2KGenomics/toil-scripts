@@ -416,7 +416,7 @@ def pipeline_launchpoint(job, job_vars):
     job_vars: tuple     Contains the input_args and ids dictionaries
     """
     pre_processing = job.wrapJobFn(index_bams, job_vars).encapsulate()
-    run_mutect = job.wrapJobFn(mutect, job_vars, pre_processing.rv())
+    run_mutect = job.wrapJobFn(mutect, job_vars, pre_processing.rv(), disk='75G')
     # run_pindel = job.wrapJobFn(pindel, job_vars, pre_processing.rv())
     # run_muse = job.wrapJobFn(muse, job_vars, pre_processing.rv())
     consolidate = job.wrapJobFn(consolidate_output, job_vars, run_mutect.rv())#, run_pindel.rv(), run_muse.rv())

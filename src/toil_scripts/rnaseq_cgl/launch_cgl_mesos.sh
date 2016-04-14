@@ -6,13 +6,12 @@
 # Execution of pipeline
 export PYTHONPATH=$(python -c 'from os.path import abspath as a, dirname as d;import sys;print d(d(d(a(sys.argv[1]))))' $0)
 python -m toil_scripts.rnaseq_cgl.rnaseq_cgl_pipeline \
-aws:us-west-2:cgl-pipeline-run-1 \
---config /home/mesosbox/shared/config.txt \
---retryCount 1 \
+aws:us-west-2:rnaseq-run-1 \
+--config /home/mesosbox/shared/rnaseq-config.txt \
+--retryCount 2 \
 --ssec /home/mesosbox/shared/master.key \
 --s3_dir cgl-driver-projects/test/ \
 --sseKey=/home/mesosbox/shared/master.key \
 --batchSystem="mesos" \
 --mesosMaster mesos-master:5050 \
---workDir=/var/lib/toil \
-#--restart
+--workDir=/var/lib/toil
