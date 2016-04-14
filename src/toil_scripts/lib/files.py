@@ -52,12 +52,12 @@ def move_files(file_paths, output_dir):
         shutil.move(file_path, dest)
 
 
-def consolidate_tarballs_job(job, **fname_to_id):
+def consolidate_tarballs_job(job, fname_to_id):
     """
     Combine the contents of separate tarballs into one.
     Subdirs within the tarball will be named the keys in **fname_to_id
 
-    :param dict[str,str] fname_to_id: Key word arguments of the form: file_name_prefix=FileStoreID
+    :param dict[str,str] fname_to_id: Dictionary of the form: file-name-prefix=FileStoreID
     :return: The file store ID of the generated tarball
     :rtype: str
     """
