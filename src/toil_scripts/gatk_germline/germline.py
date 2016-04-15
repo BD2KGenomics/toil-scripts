@@ -40,7 +40,8 @@ from collections import OrderedDict
 from toil.job import Job
 
 from toil_scripts import download_from_s3_url
-from toil_scripts.batch_alignment.bwa_alignment import upload_to_s3, docker_call, mock_mode
+from toil_scripts.batch_alignment.bwa_alignment import upload_to_s3
+from toil_scripts.lib.programs import docker_call
 
 def build_parser():
     """
@@ -208,7 +209,7 @@ def create_reference_index_hc(job, shared_ids, input_args):
     inputs= ref_path
     outputs={'ref.fa.fai': None}
     docker_call(work_dir = work_dir,
-                tool_parameters = faidx_command,
+                parameters = faidx_command,
                 tool = 'quay.io/ucsc_cgl/samtools',
                 inputs=inputs,
                 outputs=outputs,
@@ -238,8 +239,8 @@ def create_reference_dict_hc(job, shared_ids, input_args):
     inputs=['ref.fa']
     outputs={picard_output: None}
     docker_call(work_dir = work_dir,
-                java_opts='-Xmx%sg' % input_args['memory'],
-                tool_parameters = command,
+                env={'JAVA_OPTS':'-Xmx%sg' % input_args['memory']},
+                parameters = command,
                 tool = 'quay.io/ucsc_cgl/picardtools',
                 inputs=inputs,
                 outputs=outputs,
@@ -327,7 +328,7 @@ def index(job, shared_ids, input_args):
     inputs=['toil.bam']
     outputs={'toil.bam.bai': None}
     docker_call(work_dir = work_dir,
-                tool_parameters = parameters,
+                parameters = parameters,
                 tool = 'quay.io/ucsc_cgl/samtools',
                 inputs=inputs,
                 outputs=outputs,
@@ -371,8 +372,8 @@ def haplotype_caller(job, shared_ids, input_args):
         inputs=input_files
         outputs={output: None}
         docker_call(work_dir = work_dir,
-                    java_opts='-Xmx%sg' % input_args['memory'],
-                    tool_parameters = command,
+                    env={'JAVA_OPTS':'-Xmx%sg' % input_args['memory']},
+                    parameters = command,
                     tool = 'quay.io/ucsc_cgl/gatk:3.5--dba6dae49156168a909c43330350c6161dc7ecc2',
                     inputs=inputs,
                     outputs=outputs,
@@ -422,8 +423,8 @@ def genotype_gvcf(job, shared_ids, input_args):
         inputs=input_files
         outputs={output: None}
         docker_call(work_dir = work_dir,
-                    java_opts='-Xmx%sg' % input_args['memory'],
-                    tool_parameters = command,
+                    env={'JAVA_OPTS':'-Xmx%sg' % input_args['memory']},
+                    parameters = command,
                     tool = 'quay.io/ucsc_cgl/gatk:3.5--dba6dae49156168a909c43330350c6161dc7ecc2',
                     inputs=inputs,
                     outputs=outputs,
@@ -472,8 +473,8 @@ def vqsr_snp(job, shared_ids, input_args):
     inputs=input_files + ['hapmap.vcf','omni.vcf', 'dbsnp.vcf', 'phase.vcf']
     outputD={'HAPSNP.recal': None, 'HAPSNP.tranches': None, 'HAPSNP.plots': None}
     docker_call(work_dir = work_dir,
-                java_opts='-Xmx%sg' % input_args['memory'],
-                tool_parameters = command,
+                env={'JAVA_OPTS':'-Xmx%sg' % input_args['memory']},
+                parameters = command,
                 tool ='quay.io/ucsc_cgl/gatk:3.5--dba6dae49156168a909c43330350c6161dc7ecc2',
                 inputs=inputs,
                 outputs=outputD,
@@ -512,8 +513,8 @@ def apply_vqsr_snp(job, shared_ids, input_args):
     inputs=input_files
     outputs={output: None}
     docker_call(work_dir = work_dir,
-                java_opts='-Xmx%sg' % input_args['memory'],
-                tool_parameters = command,
+                env={'JAVA_OPTS':'-Xmx%sg' % input_args['memory']},
+                parameters = command,
                 tool = 'quay.io/ucsc_cgl/gatk:3.5--dba6dae49156168a909c43330350c6161dc7ecc2',
                 inputs=inputs,
                 outputs=outputs,
@@ -570,8 +571,8 @@ def vqsr_indel(job, shared_ids, input_args):
     inputs=input_files
     outputD={'HAPINDEL.recal': None, 'HAPINDEL.tranches': None, 'HAPINDEL.plots': None}
     docker_call(work_dir = work_dir,
-                java_opts='-Xmx%sg' % input_args['memory'],
-                tool_parameters = command,
+                env={'JAVA_OPTS':'-Xmx%sg' % input_args['memory']},
+                parameters = command,
                 tool ='quay.io/ucsc_cgl/gatk:3.5--dba6dae49156168a909c43330350c6161dc7ecc2',
                 inputs=inputs,
                 outputs=outputD,
@@ -609,8 +610,8 @@ def apply_vqsr_indel(job, shared_ids, input_args):
     inputs=input_files
     outputs={output: None}
     docker_call(work_dir = work_dir,
-                java_opts='-Xmx%sg' % input_args['memory'],
-                tool_parameters = command,
+                env={'JAVA_OPTS':'-Xmx%sg' % input_args['memory']},
+                parameters = command,
                 tool = 'quay.io/ucsc_cgl/gatk:3.5--dba6dae49156168a909c43330350c6161dc7ecc2',
                 inputs = inputs,
                 outputs = outputs,

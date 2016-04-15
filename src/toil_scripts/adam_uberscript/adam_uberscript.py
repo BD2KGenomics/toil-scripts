@@ -28,6 +28,7 @@ import boto
 import boto.ec2.cloudwatch
 import boto.sdb
 from automated_scaling import ClusterSize, Samples, Semaphore, SparkMasterAddress
+from toil_scripts.lib.programs import mock_mode
 from boto.ec2 import connect_to_region
 from boto.exception import BotoServerError, EC2ResponseError
 from boto_lib import get_instance_ids
@@ -44,14 +45,6 @@ cluster_scaling_interval_in_seconds = 150
 # Protects against concurrent changes to the size of the Toil cluster, by both the metric thread terminating idle
 # nodes and the cluster-growing thread adding nodes.
 cluster_size_lock = threading.RLock()
-
-def mock_mode():
-    """
-    Checks the value of the ADAM_GATK_MOCK_MODE environment variable.
-    In mock mode, all docker calls other than those to spin up and submit jobs to the spark cluster
-    are stubbed out and dummy files are used as inputs and outputs.
-    """
-    return True if int(os.environ.get('ADAM_GATK_MOCK_MODE', '0')) else False
 
 def launch_cluster(params):
     """

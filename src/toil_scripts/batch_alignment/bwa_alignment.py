@@ -38,6 +38,7 @@ import shutil
 import tarfile
 import logging
 from toil.job import Job
+from toil_scripts.lib.programs import docker_call, mock_mode
 
 _log = logging.getLogger(__name__)
 
@@ -175,104 +176,6 @@ def return_input_paths(job, work_dir, ids, *args):
 
     return paths.values()
 
-def mock_mode():
-    """
-    Checks whether the ADAM_GATK_MOCK_MODE environment variable is set.
-    In mock mode, all docker calls other than those to spin up and submit jobs to the spark cluster
-    are stubbed out and dummy files are used as inputs and outputs.
-    """
-    return True if int(os.environ.get('ADAM_GATK_MOCK_MODE', '0')) else False
-
-def docker_call(work_dir,
-                tool_parameters,
-                tool,
-                inputs=[],
-                outputs={},
-                java_opts=None,
-                outfile=None,
-                sudo=False,
-                docker_parameters=None,
-                check_output=False,
-                no_rm=False,
-                mock=None):
-    """
-    Makes subprocess call of a command to a docker container.
-
-    tool_parameters: list   An array of the parameters to be passed to the tool
-    tool: str               Name of the Docker image to be used (e.g. quay.io/ucsc_cgl/samtools)
-    java_opts: str          Optional commands to pass to a java jar execution. (e.g. '-Xmx15G')
-    outfile: file           Filehandle that stderr will be passed to
-    sudo: bool              If the user wants the docker command executed as sudo
-    """
-
-    for filename in inputs:
-        assert(os.path.isfile(os.path.join(work_dir, filename)))
-
-    if mock is None:
-        mock = mock_mode()
-
-    if mock:
-        for filename, url in outputs.items():
-            file_path = os.path.join(work_dir, filename)
-            if url is None:
-                # create mock file
-                if not os.path.exists(file_path):
-                    f = open(file_path, 'w')
-                    f.write("contents") # FIXME
-                    f.close()
-                    
-            else:
-                file_path = os.path.join(work_dir, filename)
-                if not os.path.exists(file_path):
-                    if url.startswith('s3:'):
-                        _log.info("trying to download: " + url + " to " + file_path)
-                        download_from_s3_url(file_path, url)
-                    else:
-                        try:
-                            download_cmd = ['curl', '-fs', '--retry', '5', '--create-dir', url, '-o', file_path]
-                            subprocess.check_call(download_cmd)
-                        except OSError as e:
-                            if e.errno == errno.ENOENT:
-                                raise RuntimeError('Failed to find "curl". Install via "apt-get install curl"')
-                            else:
-                                raise
-                assert os.path.exists(file_path)
-
-        return
-
-    rm = '--rm'
-    if no_rm:
-        rm = ''
-
-    base_docker_call = ('docker run %s --log-driver=none -v %s:/data' % (rm, work_dir)).split()
-
-    if sudo:
-        base_docker_call = ['sudo'] + base_docker_call
-    if java_opts:
-        base_docker_call = base_docker_call + ['-e', 'JAVA_OPTS={}'.format(java_opts)]
-    if docker_parameters:
-        base_docker_call = base_docker_call + docker_parameters
-
-    _log.warn("Calling docker with %s." % " ".join(base_docker_call + [tool] + tool_parameters))
-
-    try:
-        if outfile:
-            subprocess.check_call(base_docker_call + [tool] + tool_parameters, stdout=outfile)
-        else:
-            if check_output:
-                return subprocess.check_output(base_docker_call + [tool] + tool_parameters)
-            else:
-                subprocess.check_call(base_docker_call + [tool] + tool_parameters)
-
-    except subprocess.CalledProcessError:
-        raise RuntimeError('docker command returned a non-zero exit status. Check error logs.')
-    except OSError:
-        raise RuntimeError('docker not found on system. Install on all nodes.')
-
-    for filename in outputs.keys():
-        if not os.path.isabs(filename):
-            filename = os.path.join(work_dir, filename)
-        assert(os.path.isfile(filename))
 
 def copy_to_output_dir(work_dir, output_dir, uuid=None, files=()):
     """
@@ -509,7 +412,7 @@ def run_bwa(job, job_vars):
         outputs={'aligned.aln.bam': input_args['mock_bam']}
 
         docker_call(tool='quay.io/ucsc_cgl/bwakit:0.7.12--528bb9bf73099a31e74a7f5e6e3f2e0a41da486e',
-                    tool_parameters=parameters, inputs=inputs, outputs=outputs, work_dir=work_dir, sudo=sudo)
+                    parameters=parameters, inputs=inputs, outputs=outputs, work_dir=work_dir, sudo=sudo)
 
         # bwa insists on adding an `*.aln.sam` suffix, so rename the output file
         output_file = '{}.bam'.format(uuid)
@@ -528,7 +431,7 @@ def run_bwa(job, job_vars):
         outputs = {'aligned.sam': None}
         with open(os.path.join(work_dir, 'aligned.sam'), 'w') as samfile:
             docker_call(tool='quay.io/ucsc_cgl/bwa:0.7.12--dd5ac549b95eb3e5d166a5e310417ef13651994e',
-                        tool_parameters=parameters, inputs=inputs, outputs=outputs, work_dir=work_dir,
+                        parameters=parameters, inputs=inputs, outputs=outputs, work_dir=work_dir,
                         outfile=samfile, sudo=sudo)
 
         # write aligned sam file to global file store
@@ -556,7 +459,7 @@ def bam_conversion(job, job_vars, sam_id):
     outputs = {'aligned.bam': None}
     with open(os.path.join(work_dir, 'aligned.bam'), 'w') as bamfile:
         docker_call(tool='quay.io/ucsc_cgl/samtools:1.2--35ac87df5b21a8e8e8d159f26864ac1e1db8cf86',
-                    tool_parameters=parameters, inputs=inputs, outputs=outputs, work_dir=work_dir, outfile=bamfile,
+                    parameters=parameters, inputs=inputs, outputs=outputs, work_dir=work_dir, outfile=bamfile,
                     sudo=sudo)
     return job.fileStore.writeGlobalFile(os.path.join(work_dir, 'aligned.bam'))
 
@@ -592,7 +495,7 @@ def fix_bam_header(job, job_vars, bam_id):
     outputs = {'output_bam.header': None}
     with open(os.path.join(work_dir, 'aligned_bam.header'), 'w') as headerfile:
         docker_call(tool='quay.io/ucsc_cgl/samtools:1.2--35ac87df5b21a8e8e8d159f26864ac1e1db8cf86',
-                    tool_parameters=parameters, inputs=inputs, outputs=outputs, work_dir=work_dir, outfile=headerfile,
+                    parameters=parameters, inputs=inputs, outputs=outputs, work_dir=work_dir, outfile=headerfile,
                     sudo=sudo)
     with open(headerfile.name, 'r') as headerfile, open('/'.join([work_dir, 'output_bam.header']), 'w') as outheaderfile:
             for line in headerfile:
@@ -608,7 +511,7 @@ def fix_bam_header(job, job_vars, bam_id):
     outputs = {'aligned_fixPG.bam': None}
     with open(os.path.join(work_dir, 'aligned_fixPG.bam'), 'w') as fixpg_bamfile:
         docker_call(tool='quay.io/ucsc_cgl/samtools:1.2--35ac87df5b21a8e8e8d159f26864ac1e1db8cf86',
-                    tool_parameters=parameters, inputs=inputs, outputs=outputs, work_dir=work_dir,
+                    parameters=parameters, inputs=inputs, outputs=outputs, work_dir=work_dir,
                     outfile=fixpg_bamfile, sudo=sudo)
     return job.fileStore.writeGlobalFile(os.path.join(work_dir, 'aligned_fixPG.bam'))
 
@@ -645,7 +548,7 @@ def add_readgroups(job, job_vars, bam_id):
     outputs = {output_file: 's3://adam-gatk-pipeline-mock-files/sequence/mouse_chrM.bam'}
 
     docker_call(tool='quay.io/ucsc_cgl/picardtools:1.95--dd5ac549b95eb3e5d166a5e310417ef13651994e',
-                tool_parameters=parameters, work_dir=work_dir, java_opts='-Xmx15G', sudo=sudo)
+                parameters=parameters, work_dir=work_dir, env={'JAVA_OPTS':'-Xmx15G'}, sudo=sudo)
 
     # Either write file to local output directory or upload to S3 cloud storage
     copy_or_upload(work_dir, input_args, output_file)

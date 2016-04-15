@@ -12,7 +12,7 @@ from subprocess import call, check_call, check_output
 import time
 
 from toil.job import Job
-from toil_scripts.batch_alignment.bwa_alignment import docker_call
+from toil_scripts.lib.programs import docker_call
 
 _log = logging.getLogger(__name__)
 
@@ -89,30 +89,23 @@ class MasterService(Job.Service):
         self.IP = check_output(["hostname", "-f",])[:-1]
 
         _log.info("Started Spark master container.")
-        self.sparkContainerID = docker_call(no_rm = True,
-                                            work_dir = os.getcwd(),
-                                            tool = "quay.io/ucsc_cgl/apache-spark-master:1.5.2",
+        self.sparkContainerID = docker_call(tool = "quay.io/ucsc_cgl/apache-spark-master:1.5.2",
                                             docker_parameters = ["--net=host",
                                                                  "-d",
                                                                  "-v", "/mnt/ephemeral/:/ephemeral/:rw",
                                                                  "-e", "SPARK_MASTER_IP="+self.IP,
                                                                  "-e", "SPARK_LOCAL_DIRS=/ephemeral/spark/local",
                                                                  "-e", "SPARK_WORKER_DIR=/ephemeral/spark/work"],
-                                            tool_parameters = [],
-                                            inputs=[],
-                                            outputs={},
+                                            rm=False,
                                             sudo = self.sudo,
                                             check_output = True,
                                             mock = False)[:-1]
         _log.info("Started HDFS Datanode.")
-        self.hdfsContainerID = docker_call(no_rm = True,
-                                           work_dir = os.getcwd(),
-                                           tool = "quay.io/ucsc_cgl/apache-hadoop-master:2.6.2",
+        self.hdfsContainerID = docker_call(tool = "quay.io/ucsc_cgl/apache-hadoop-master:2.6.2",
                                            docker_parameters = ["--net=host",
                                                                 "-d"],
-                                           tool_parameters = [self.IP],
-                                           inputs=[],
-                                           outputs={},
+                                           parameters = [self.IP],
+                                           rm=False,
                                            sudo = self.sudo,
                                            check_output = True,
                                            mock = False)[:-1]
@@ -171,18 +164,15 @@ class WorkerService(Job.Service):
         fileStore: Unused
         """
         # start spark and our datanode
-        self.sparkContainerID = docker_call(no_rm = True,
-                                            work_dir = os.getcwd(),
-                                            tool = "quay.io/ucsc_cgl/apache-spark-worker:1.5.2",
+        self.sparkContainerID = docker_call(tool = "quay.io/ucsc_cgl/apache-spark-worker:1.5.2",
                                             docker_parameters = ["--net=host", 
                                                                  "-d",
                                                                  "-v", "/mnt/ephemeral/:/ephemeral/:rw",
                                                                  "-e", "\"SPARK_MASTER_IP="+self.masterIP+":"+SPARK_MASTER_PORT+"\"",
                                                                  "-e", "SPARK_LOCAL_DIRS=/ephemeral/spark/local",
                                                                  "-e", "SPARK_WORKER_DIR=/ephemeral/spark/work"],
-                                            tool_parameters = [self.masterIP+":"+SPARK_MASTER_PORT],
-                                            inputs=[],
-                                            outputs={},
+                                            parameters = [self.masterIP+":"+SPARK_MASTER_PORT],
+                                            rm=False,
                                             sudo = self.sudo,
                                             check_output = True,
                                             mock = False)[:-1]
@@ -244,15 +234,12 @@ class WorkerService(Job.Service):
         """
         Launches the Hadoop datanode.
         """
-        self.hdfsContainerID = docker_call(no_rm = True,
-                                           work_dir = os.getcwd(),
-                                           tool = "quay.io/ucsc_cgl/apache-hadoop-worker:2.6.2",
+        self.hdfsContainerID = docker_call(tool = "quay.io/ucsc_cgl/apache-hadoop-worker:2.6.2",
                                            docker_parameters = ["--net=host",
                                                                 "-d",
                                                                 "-v", "/mnt/ephemeral/:/ephemeral/:rw"],
-                                           tool_parameters = [self.masterIP],
-                                           inputs=[],
-                                           outputs={},
+                                           parameters = [self.masterIP],
+                                           rm=False,
                                            sudo = self.sudo,
                                            check_output = True,
                                            mock = False)[:-1]

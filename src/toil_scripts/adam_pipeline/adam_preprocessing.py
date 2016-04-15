@@ -90,11 +90,10 @@ def call_conductor(masterIP, inputs, src, dst):
 
     :type masterIP: MasterAddress
     """
-    docker_call(no_rm = True,
-                work_dir = os.getcwd(),
+    docker_call(rm = False,
                 tool = "quay.io/ucsc_cgl/conductor",
                 docker_parameters = masterIP.docker_parameters(["--net=host"]),
-                tool_parameters = ["--master", "spark://"+masterIP+":"+SPARK_MASTER_PORT,
+                parameters = ["--master", "spark://"+masterIP+":"+SPARK_MASTER_PORT,
                  "--conf", "spark.driver.memory=%sg" % inputs["driverMemory"],
                  "--conf", "spark.executor.memory=%sg" % inputs["executorMemory"],
                  "--", "-C", src, dst],
@@ -114,11 +113,10 @@ def call_adam(masterIP, inputs, arguments):
                       "--conf", ("spark.hadoop.fs.default.name=hdfs://%s:%s" % (masterIP, HDFS_MASTER_PORT)),
                       "--conf", "spark.driver.maxResultSize=0", # set max result size to unlimited, see #177
                       "--"]
-    docker_call(no_rm = True,
-                work_dir = os.getcwd(),
+    docker_call(rm = False,
                 tool = "quay.io/ucsc_cgl/adam:962-ehf--6e7085f8cac4b9a927dc9fb06b48007957256b80",
                 docker_parameters = masterIP.docker_parameters(["--net=host"]),
-                tool_parameters = default_params + arguments,
+                parameters = default_params + arguments,
                 sudo = inputs['sudo'],
                 mock=False)
 
