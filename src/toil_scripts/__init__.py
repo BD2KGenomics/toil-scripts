@@ -2,6 +2,8 @@ import logging
 
 _log = logging.getLogger(__name__)
 
+# TODO: replace this with toil_scripts.lib.urls._download_s3_url
+
 def download_from_s3_url(file_path, url):
     from urlparse import urlparse
     from boto.s3.connection import S3Connection
