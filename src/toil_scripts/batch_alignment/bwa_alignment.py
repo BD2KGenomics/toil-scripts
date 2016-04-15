@@ -378,7 +378,7 @@ def static_dag_declaration(job, job_vars):
 
 def copy_or_upload(work_dir, input_args, output_file):
     """
-    Looks at what input args are defined and uploads the file to it's proper location.
+    Looks at what input args are defined and uploads the file to its proper location.
     """
 
     # Either write file to local output directory or upload to S3 cloud storage

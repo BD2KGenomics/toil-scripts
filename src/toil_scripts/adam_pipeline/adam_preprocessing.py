@@ -38,7 +38,7 @@ from toil.job import Job
 
 from toil_scripts.adam_uberscript.automated_scaling import SparkMasterAddress
 from toil_scripts.batch_alignment.bwa_alignment import docker_call
-from toil_scripts.spark_utils.spawn_cluster import start_spark_hdfs_cluster
+from toil_scripts.spark_utils.spawn_cluster import *
 
 SPARK_MASTER_PORT = "7077"
 HDFS_MASTER_PORT = "8020"
@@ -128,23 +128,19 @@ def remove_file(masterIP, filename, sparkOnToil):
     :type masterIP: MasterAddress
     """
     masterIP = masterIP.actual
-    if sparkOnToil:
-        try:
-            output = check_output(['ssh',
-                                   '-o', 'StrictHostKeyChecking=no',
-                                   masterIP, 'docker', 'ps'])
-            containerID = next(line.split()[0] for line in output.splitlines() if 'apache-hadoop-master' in line)
-            check_call(['ssh',
-                        '-o', 'StrictHostKeyChecking=no',
-                        masterIP,
-                        'docker', 'exec', containerID,
-                        'hdfs', 'dfs', '-rm', '-r', '/' + filename])
-        except:
-            pass
-    else:
-        log.warning('Cannot remove file %s. Can only remove files when running Spark-on-Toil', filename)
+    
+    ssh_call = ['ssh', '-o', 'StrictHostKeyChecking=no', masterIP]
 
-# FIXME: unused parameter sparkOnToil
+    if sparkOnToil:
+        output = check_output(ssh_call +  ['docker', 'ps'])
+        containerID = next(line.split()[0] for line in output.splitlines() if 'apache-hadoop-master' in line)
+        ssh_call += ['docker', 'exec', containerID]
+
+    try:
+        check_call(ssh_call + ['hdfs', 'dfs', '-rm', '-r', '/' + filename])
+    except:
+        pass
+
 
 def download_data(masterIP, inputs, knownSNPs, bam, hdfsSNPs, hdfsBAM):
     """
@@ -183,7 +179,7 @@ def adam_convert(masterIP, inputs, inFile, inSnps, adamFile, adamSnps, sparkOnTo
                inSnps, adamSnps])
 
     inSnpsName = inSnps.split("/")[-1]
-    remove_file(masterIP, snpFileName, sparkOnToil)
+    remove_file(masterIP, inSnpsName, sparkOnToil)
 
 
 def adam_transform(masterIP, inputs, inFile, snpFile, hdfsDir, outFile, sparkOnToil):
@@ -267,7 +263,7 @@ def download_run_and_upload(job, masterIP, inputs, sparkOnToil):
         
         hdfsSNPs = hdfsDir + "/" + inputs['knownSNPs'].split('://')[-1].split('/')[-1]
 
-        download_data(masterIP, inputs, inputs['bamName'], inputs['knownSNPs'], hdfsSNPs, hdfsBAM, sparkOnToil)
+        download_data(masterIP, inputs, inputs['knownSNPs'], inputs['bamName'], hdfsSNPs, hdfsBAM)
 
         adamInput = hdfsPrefix + ".adam"
         adamSNPs = hdfsDir + "/snps.var.adam"
@@ -276,8 +272,9 @@ def download_run_and_upload(job, masterIP, inputs, sparkOnToil):
         adamOutput = hdfsPrefix + ".processed.adam" 
         adam_transform(masterIP, inputs, adamInput, adamSNPs, hdfsDir, adamOutput, sparkOnToil)
 
-        suffix = '.' + inputs['suffix'] if 'suffix' in inputs else ''            
-        outFile = inputs['outDir'] + "/" + sampleName + "." + suffix + ".bam"
+        suffix = inputs['suffix'] if inputs['suffix'] else ''
+        outFile = inputs['outDir'] + "/" + sampleName + suffix + ".bam"
+
         upload_data(masterIP, inputs, adamOutput, outFile, sparkOnToil)
 
     except:
@@ -374,7 +371,7 @@ def main(args):
     Job.Runner.addToilOptions(parser)
     options = parser.parse_args()
 
-    if bool(options.master_ip) != bool(options.num_nodes):
+    if bool(options.master_ip) == bool(options.num_nodes):
         raise ValueError("Only one of --master_ip (%s) and --num_nodes (%d) can be provided." %
                          (options.master_ip, options.num_nodes))
 
