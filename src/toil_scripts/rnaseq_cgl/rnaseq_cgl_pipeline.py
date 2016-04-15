@@ -38,11 +38,8 @@ Boto:       pip install boto
 """
 import os
 import argparse
-import base64
 from contextlib import closing
 import glob
-import hashlib
-import errno
 import subprocess
 from subprocess import PIPE
 import shutil
@@ -51,8 +48,16 @@ import multiprocessing
 from urlparse import urlparse
 from toil.job import Job
 import logging
+from toil_scripts.lib import copy_to_output_dir, flatten
+
+from toil_scripts.lib.programs import docker_call, which
+from toil_scripts.lib.urls import download_url_job, s3am_upload, s3am_upload_job
+from toil_scripts.lib.jobs import map_job
+from toil_scripts.lib.files import mkdir_p
+from toil_scripts.lib.files import tarball_files
 
 logging.basicConfig(level=logging.INFO)
+_log = logging.getLogger(__name__)
 
 
 def build_parser():
@@ -101,196 +106,6 @@ def build_parser():
     return parser
 
 
-# Convenience functions used in the pipeline
-def mkdir_p(path):
-    """
-    It is Easier to Ask for Forgiveness than Permission
-    """
-    try:
-        os.makedirs(path)
-    except OSError as exc:
-        if exc.errno == errno.EEXIST and os.path.isdir(path):
-            pass
-        else:
-            raise
-
-
-def flatten(x):
-    """
-    Flattens a nested array into a single list
-
-    x: list/tuple       The nested list/tuple to be flattened.
-    """
-    result = []
-    for el in x:
-        if hasattr(el, "__iter__") and not isinstance(el, basestring):
-            result.extend(flatten(el))
-        else:
-            result.append(el)
-    return result
-
-
-def which(program):
-    import os
-
-    def is_exe(f):
-        return os.path.isfile(f) and os.access(f, os.X_OK)
-
-    fpath, fname = os.path.split(program)
-    if fpath:
-        if is_exe(program):
-            return program
-    else:
-        for path in os.environ["PATH"].split(os.pathsep):
-            path = path.strip('"')
-            exe_file = os.path.join(path, program)
-            if is_exe(exe_file):
-                return exe_file
-
-    return None
-
-
-def generate_unique_key(master_key_path, url):
-    """
-    master_key_path: str    Path to the BD2K Master Key (for S3 Encryption)
-    url: str                S3 URL (e.g. https://s3-us-west-2.amazonaws.com/bucket/file.txt)
-
-    Returns: str            32-byte unique key generated for that URL
-    """
-    with open(master_key_path, 'r') as f:
-        master_key = f.read()
-    assert len(master_key) == 32, 'Invalid Key! Must be 32 characters. ' \
-                                  'Key: {}, Length: {}'.format(master_key, len(master_key))
-    new_key = hashlib.sha256(master_key + url).digest()
-    assert len(new_key) == 32, 'New key is invalid and is not 32 characters: {}'.format(new_key)
-    return new_key
-
-
-def download_encrypted_file(job, input_args, name):
-    """
-    Downloads encrypted files from S3 via header injection
-
-    input_args: dict    Input dictionary defined in main()
-    name: str           Symbolic name associated with file
-    """
-    work_dir = job.fileStore.getLocalTempDir()
-    key_path = input_args['ssec']
-    file_path = os.path.join(work_dir, name)
-    url = input_args[name]
-    # Grab master key
-    with open(key_path, 'r') as f:
-        key = f.read()
-    if len(key) != 32:
-        raise RuntimeError('Invalid Key! Must be 32 bytes: {}'.format(key))
-
-    key = generate_unique_key(key_path, url)
-    # Create necessary headers for SSE-C encryption and download
-    encoded_key = base64.b64encode(key)
-    encoded_key_md5 = base64.b64encode(hashlib.md5(key).digest())
-    h1 = 'x-amz-server-side-encryption-customer-algorithm:AES256'
-    h2 = 'x-amz-server-side-encryption-customer-key:{}'.format(encoded_key)
-    h3 = 'x-amz-server-side-encryption-customer-key-md5:{}'.format(encoded_key_md5)
-    try:
-        subprocess.check_call(['curl', '-fs', '--retry', '5', '-H', h1, '-H', h2, '-H', h3, url, '-o', file_path])
-    except OSError:
-        raise RuntimeError('Failed to find "curl". Install via "apt-get install curl"')
-    assert os.path.exists(file_path)
-    return job.fileStore.writeGlobalFile(file_path)
-
-
-def download_from_url(job, url):
-    """
-    Simple curl request made for a given url
-
-    url: str    URL to download
-    """
-    work_dir = job.fileStore.getLocalTempDir()
-    file_path = os.path.join(work_dir, os.path.basename(url))
-    if url.startswith('s3:'):
-        download_from_s3_url(file_path, url)
-    else:
-        try:
-            subprocess.check_call(['curl', '-fs', '--retry', '5', '--create-dir', url, '-o', file_path])
-        except OSError:
-            raise RuntimeError('Failed to find "curl". Install via "apt-get install curl"')
-    assert os.path.exists(file_path)
-    return job.fileStore.writeGlobalFile(file_path)
-
-
-def read_from_filestore(job, work_dir, ids, *filenames):
-    """
-    Reads file from fileStore and writes it to working directory.
-
-
-    work_dir: str       working directory
-    ids: dict           dict of fileStore IDs
-    *filenames: str     filenames to be read from jobStore
-    """
-    for filename in filenames:
-        if not os.path.exists(os.path.join(work_dir, filename)):
-            job.fileStore.readGlobalFile(ids[filename], os.path.join(work_dir, filename))
-
-
-def docker_call(work_dir, tool_parameters, tool, java_opts=None, sudo=False, outfile=None):
-    """
-    Makes subprocess call of a command to a docker container.
-
-
-    tool_parameters: list   An array of the parameters to be passed to the tool
-    tool: str               Name of the Docker image to be used (e.g. quay.io/ucsc_cgl/samtools)
-    java_opts: str          Optional commands to pass to a java jar execution. (e.g. '-Xmx15G')
-    outfile: file           Filehandle that stderr will be passed to
-    sudo: bool              If the user wants the docker command executed as sudo
-    """
-    base_docker_call = 'docker run --log-driver=none --rm -v {}:/data'.format(work_dir).split()
-    if sudo:
-        base_docker_call = ['sudo'] + base_docker_call
-    if java_opts:
-        base_docker_call = base_docker_call + ['-e', 'JAVA_OPTS={}'.format(java_opts)]
-    try:
-        if outfile:
-            subprocess.check_call(base_docker_call + [tool] + tool_parameters, stdout=outfile)
-        else:
-            subprocess.check_call(base_docker_call + [tool] + tool_parameters)
-    except subprocess.CalledProcessError:
-        raise RuntimeError('docker command returned a non-zero exit status: {}'.format(tool_parameters))
-    except OSError:
-        raise RuntimeError('docker not found on system. Install on all nodes.')
-
-
-def copy_to_output_dir(work_dir, output_dir, uuid=None, files=list()):
-    """
-    A list of files to move from work_dir to output_dir.
-
-    work_dir: str       Current working directory
-    output_dir: str     Output directory for files to go
-    uuid: str           UUID to "stamp" onto output files
-    files: list         List of files to iterate through
-    """
-    for fname in files:
-        if uuid is None:
-            shutil.copy(os.path.join(work_dir, fname), os.path.join(output_dir, fname))
-        else:
-            shutil.copy(os.path.join(work_dir, fname), os.path.join(output_dir, '{}.{}'.format(uuid, fname)))
-
-
-def tarball_files(work_dir, tar_name, uuid=None, files=None):
-    """
-    Tars a group of files together into a tarball
-
-    work_dir: str       Current Working Directory
-    tar_name: str       Name of tarball
-    uuid: str           UUID to stamp files with
-    files: str(s)       List of filenames to place in the tarball from working directory
-    """
-    with tarfile.open(os.path.join(work_dir, tar_name), 'w:gz') as f_out:
-        for fname in files:
-            if uuid:
-                f_out.add(os.path.join(work_dir, fname), arcname=uuid + '.' + fname)
-            else:
-                f_out.add(os.path.join(work_dir, fname), arcname=fname)
-
-
 def parse_config(path_to_config):
     """
     Parses config file. Returns list of samples: [ [uuid1, url1], [uuid2, url2], ... ]
@@ -318,56 +133,6 @@ def parse_genetorrent(path_to_config):
     return samples
 
 
-def download_from_genetorrent(job, input_args, analysis_id):
-    """
-    Downloads a sample from CGHub via GeneTorrent.
-
-    input_args: dict        Dictionary of input arguments
-    analysis_id: str        An analysis ID for a sample in CGHub
-    """
-    work_dir = job.fileStore.getLocalTempDir()
-    folder_path = os.path.join(work_dir, os.path.basename(analysis_id))
-    sudo = input_args['sudo']
-    shutil.copy(input_args['genetorrent_key'], os.path.join(work_dir, 'cghub.key'))
-    parameters = ['-vv', '-c', 'cghub.key', '-d', analysis_id]
-    docker_call(tool='quay.io/ucsc_cgl/genetorrent:3.8.7--9911761265b6f08bc3ef09f53af05f56848d805b',
-                work_dir=work_dir, tool_parameters=parameters, sudo=sudo)
-    sample = glob.glob(os.path.join(folder_path, '*tar*'))
-    assert len(sample) == 1, 'More than one sample tar in CGHub download: {}'.format(analysis_id)
-    return job.fileStore.writeGlobalFile(sample[0])
-
-
-def partitions(l, partition_size):
-    """
-    >>> list(partitions([], 10))
-    []
-    >>> list(partitions([1,2,3,4,5], 1))
-    [[1], [2], [3], [4], [5]]
-    >>> list(partitions([1,2,3,4,5], 2))
-    [[1, 2], [3, 4], [5]]
-    >>> list(partitions([1,2,3,4,5], 5))
-    [[1, 2, 3, 4, 5]]
-    """
-    for i in xrange(0, len(l), partition_size):
-        yield l[i:i+partition_size]
-
-
-def download_from_s3_url(file_path, url):
-    from urlparse import urlparse
-    from boto.s3.connection import S3Connection
-    s3 = S3Connection()
-    try:
-        parsed_url = urlparse(url)
-        if not parsed_url.netloc or not parsed_url.path.startswith('/'):
-            raise RuntimeError("An S3 URL must be of the form s3:/BUCKET/ or "
-                               "s3://BUCKET/KEY. '%s' is not." % url)
-        bucket = s3.get_bucket(parsed_url.netloc)
-        key = bucket.get_key(parsed_url.path[1:])
-        key.get_contents_to_filename(file_path)
-    finally:
-        s3.close()
-
-
 # Job Functions
 def parse_input_samples(job, input_args):
     """
@@ -392,27 +157,10 @@ def parse_input_samples(job, input_args):
     elif genetorrent:
         samples = parse_genetorrent(genetorrent)
     # Pass to batcher to spawn tree of jobs
-    job.addChildJobFn(batcher, input_args, samples)
+    job.addChildJobFn(map_job, download_sample, samples, input_args)
 
 
-def batcher(job, input_args, samples):
-    """
-    Spawns a tree of jobs to avoid overloading the number of jobs spawned by a single parent.
-
-    input_args: dict             Dictionary of input arguments
-    samples: list/iterable       target list/iterable that spawns one job per item
-    """
-    num_partitions = 10
-    partition_size = len(samples) / num_partitions
-    if partition_size > 1:
-        for partition in partitions(samples, partition_size):
-            job.addChildJobFn(batcher, input_args, partition)
-    else:
-        for sample in samples:
-            job.addChildJobFn(download_sample, input_args, sample)
-
-
-def download_sample(job, input_args, sample):
+def download_sample(job, sample, input_args):
     """
     Defines variables unique to a sample that are used in the rest of the pipelines
 
@@ -421,6 +169,7 @@ def download_sample(job, input_args, sample):
     sample: tuple       Contains uuid and sample_url
     """
     sample_input = dict(input_args)
+    s3_key_path = sample_input['ssec']
     uuid, url = None, None
     if len(sample) == 2:
         uuid, url = sample
@@ -440,25 +189,27 @@ def download_sample(job, input_args, sample):
     job_vars = (sample_input, ids)
     # Download or locate local file and place in the jobStore
     if sample_input['genetorrent']:
-        ids['sample.tar'] = job.addChildJobFn(download_from_genetorrent, input_args, url, disk='20G').rv()
+        cghub_key_path = sample_input['genetorrent']
+        ids['sample.tar'] = job.addChildJobFn(download_url_job, url, cghub_key_path=cghub_key_path, disk='20G').rv()
     elif type(url) is list and len(url) == 2:
         if urlparse(url[0]) == 'file':
             ids['R1.fastq'] = job.fileStore.writeGlobalFile(urlparse(url[0]).path)
             ids['R2.fastq'] = job.fileStore.writeGlobalFile(urlparse(url[1]).path)
         else:
             if sample_input['ssec']:
-                ids['R1.fastq'] = job.addChildJobFn(download_encrypted_file, sample_input, 'R1.fastq', disk='20G').rv()
-                ids['R2.fastq'] = job.addChildJobFn(download_encrypted_file, sample_input, 'R1.fastq', disk='20G').rv()
+
+                ids['R1.fastq'] = job.addChildJobFn(download_url_job, url[0], s3_key_path=s3_key_path, disk='20G').rv()
+                ids['R2.fastq'] = job.addChildJobFn(download_url_job, url[1], s3_key_path=s3_key_path, disk='20G').rv()
             else:
-                ids['R1.fastq'] = job.addChildJobFn(download_from_url, sample_input['R1.fastq'], disk='20G').rv()
-                ids['R2.fastq'] = job.addChildJobFn(download_from_url, sample_input['R1.fastq'], disk='20G').rv()
+                ids['R1.fastq'] = job.addChildJobFn(download_url_job, url[0], disk='20G').rv()
+                ids['R1.fastq'] = job.addChildJobFn(download_url_job, url[1], disk='20G').rv()
     elif urlparse(url).scheme == 'file':
         ids['sample.tar'] = job.fileStore.writeGlobalFile(urlparse(url).path)
     else:
         if sample_input['ssec']:
-            ids['sample.tar'] = job.addChildJobFn(download_encrypted_file, sample_input, 'sample.tar', disk='20G').rv()
+            ids['sample.tar'] = job.addChildJobFn(download_url_job, url, s3_key_path=s3_key_path, disk='20G').rv()
         else:
-            ids['sample.tar'] = job.addChildJobFn(download_from_url, sample_input['sample.tar'], disk='20G').rv()
+            ids['sample.tar'] = job.addChildJobFn(download_url_job, url, disk='20G').rv()
     job.addFollowOnJobFn(static_dag_launchpoint, job_vars)
 
 
@@ -489,23 +240,25 @@ def process_sample_tar(job, job_vars):
     """
     # Unpack variables
     input_args, ids = job_vars
+    uuid = input_args['uuid']
     work_dir = job.fileStore.getLocalTempDir()
     ids['R.fastq'] = None
     # I/O
-    read_from_filestore(job, work_dir, ids, 'sample.tar')
-    sample_tar = os.path.join(work_dir, 'sample.tar')
+    tar_id = ids['sample.tar']
+    job.fileStore.readGlobalFile(tar_id, os.path.join(work_dir, 'sample.tar'))
+    tar_path = os.path.join(work_dir, 'sample.tar')
     # Untar File and concat
-    p = subprocess.Popen(['tar', '-xvf', sample_tar, '-C', work_dir], stderr=PIPE, stdout=PIPE)
+    p = subprocess.Popen(['tar', '-xvf', tar_path, '-C', work_dir], stderr=PIPE, stdout=PIPE)
     stdout, stderr = p.communicate()
     if p.returncode != 0:
         # Handle error if tar archive is corrupt
         if 'EOF' in stderr:
-            with open(os.path.join(work_dir, 'error.txt'), 'w') as f:
+            error_path = os.path.join(work_dir, uuid + '.error.txt')
+            with open(error_path, 'w') as f:
                 f.write(stderr)
                 f.write(stdout)
-            ids['error.txt'] = job.fileStore.writeGlobalFile(os.path.join(work_dir, 'error.txt'))
             if input_args['s3_dir']:
-                job.addChildJobFn(upload_to_s3, job_vars)
+                s3am_upload(error_path, input_args['s3_dir'])
         else:
             raise subprocess.CalledProcessError
     else:
@@ -580,10 +333,11 @@ def cutadapt(job, job_vars):
                   '-m', '35']
     if ids['R.fastq']:
         input_args['single_end'] = True
-        read_from_filestore(job, work_dir, ids, 'R.fastq')
+        job.fileStore.readGlobalFile(ids['R.fastq'], os.path.join(work_dir, 'R.fastq'))
         parameters.extend(['-o', '/data/R_cutadapt.fastq', '/data/R.fastq'])
     else:
-        read_from_filestore(job, work_dir, ids, 'R1.fastq', 'R2.fastq')
+        job.fileStore.readGlobalFile(ids['R1.fastq'], os.path.join(work_dir, 'R1.fastq'))
+        job.fileStore.readGlobalFile(ids['R2.fastq'], os.path.join(work_dir, 'R2.fastq'))
         parameters.extend(['-A', input_args['rev_3pr_adapter'],
                            '-o', '/data/R1_cutadapt.fastq',
                            '-p', '/data/R2_cutadapt.fastq',
@@ -632,7 +386,6 @@ def kallisto(job, job_vars):
     input_args, ids = job_vars
     sudo = input_args['sudo']
     cores = input_args['cpu_count']
-    uuid = input_args['uuid']
     work_dir = job.fileStore.getLocalTempDir()
     subprocess.check_call(['curl', '-fs', '--retry', '5', '--create-dir', input_args['kallisto_hg38.idx'], '-o',
                            os.path.join(work_dir, 'kallisto_hg38.idx')])
@@ -643,17 +396,18 @@ def kallisto(job, job_vars):
                   '-o', '/data/',
                   '-b', '100']
     if ids['R_cutadapt.fastq']:
-        read_from_filestore(job, work_dir, ids, 'R_cutadapt.fastq')
+        job.fileStore.readGlobalFile(ids['R_cutadapt.fastq'], os.path.join(work_dir, 'R_cutadapt.fastq'))
         parameters.extend(['--single', '-l', '200', '-s', '15', '/data/R_cutadapt.fastq'])
     else:
-        read_from_filestore(job, work_dir, ids, 'R1_cutadapt.fastq', 'R2_cutadapt.fastq')
+        job.fileStore.readGlobalFile(ids['R1_cutadapt.fastq'], os.path.join(work_dir, 'R1_cutadapt.fastq'))
+        job.fileStore.readGlobalFile(ids['R2_cutadapt.fastq'], os.path.join(work_dir, 'R2_cutadapt.fastq'))
         parameters.extend(['/data/R1_cutadapt.fastq', '/data/R2_cutadapt.fastq'])
     # Call: Kallisto
     docker_call(tool='quay.io/ucsc_cgl/kallisto:0.42.4--35ac87df5b21a8e8e8d159f26864ac1e1db8cf86',
-                work_dir=work_dir, tool_parameters=parameters, sudo=sudo)
+                work_dir=work_dir, parameters=parameters, sudo=sudo)
     # Tar output files together and store in fileStore
-    output_files = ['run_info.json', 'abundance.tsv', 'abundance.h5']
-    tarball_files(work_dir, tar_name='kallisto.tar.gz', uuid=uuid, files=output_files)
+    output_files = [os.path.join(work_dir, x) for x in ['run_info.json', 'abundance.tsv', 'abundance.h5']]
+    tarball_files(tar_name='kallisto.tar.gz', file_paths=output_files, output_dir=work_dir)
     return job.fileStore.writeGlobalFile(os.path.join(work_dir, 'kallisto.tar.gz'))
 
 
@@ -694,15 +448,16 @@ def star(job, job_vars):
                            '--outWigStrand', 'Unstranded',
                            '--outWigReferencesPrefix', 'chr'])
     if ids['R_cutadapt.fastq']:
-        read_from_filestore(job, work_dir, ids, 'R_cutadapt.fastq')
+        job.fileStore.readGlobalFile(ids['R_cutadapt.fastq'], os.path.join(work_dir, 'R_cutadapt.fastq'))
         parameters.extend(['--readFilesIn', '/data/R_cutadapt.fastq'])
     else:
-        read_from_filestore(job, work_dir, ids, 'R1_cutadapt.fastq', 'R2_cutadapt.fastq')
+        job.fileStore.readGlobalFile(ids['R1_cutadapt.fastq'], os.path.join(work_dir, 'R1_cutadapt.fastq'))
+        job.fileStore.readGlobalFile(ids['R2_cutadapt.fastq'], os.path.join(work_dir, 'R2_cutadapt.fastq'))
         parameters.extend(['--readFilesIn', '/data/R1_cutadapt.fastq', '/data/R2_cutadapt.fastq'])
     subprocess.check_call(['tar', '-xvf', os.path.join(work_dir, 'starIndex.tar.gz'), '-C', work_dir])
     # Call: STAR Map
     docker_call(tool='quay.io/ucsc_cgl/star:2.4.2a--bcbd5122b69ff6ac4ef61958e47bde94001cfe80',
-                work_dir=work_dir, tool_parameters=parameters, sudo=sudo)
+                work_dir=work_dir, parameters=parameters, sudo=sudo)
     # Write to fileStore
     ids['transcriptome.bam'] = job.fileStore.writeGlobalFile(os.path.join(work_dir,
                                                                           'rnaAligned.toTranscriptome.out.bam'))
@@ -713,12 +468,15 @@ def star(job, job_vars):
         for wiggle in wiggles:
             shutil.move(os.path.join(work_dir, wiggle),
                         os.path.join(work_dir, os.path.splitext(wiggle)[0] + '.bedGraph'))
-        wiggles = [os.path.splitext(x)[0] + '.bedGraph' for x in wiggles]
-        tarball_files(work_dir, 'wiggle.tar.gz', uuid=uuid, files=wiggles)
-        ids['wiggle.tar.gz'] = job.fileStore.writeGlobalFile(os.path.join(work_dir, 'wiggle.tar.gz'))
-        job.addChildJobFn(upload_wiggle_to_s3, job_vars, disk='10G', cores=cores)
+        wiggles = [os.path.join(work_dir, x) for x in [os.path.splitext(x)[0] + '.bedGraph' for x in wiggles]]
+        tarball_files('wiggle.tar.gz', file_paths=wiggles, output_dir=work_dir)
+        wiggle_id = job.fileStore.writeGlobalFile(os.path.join(work_dir, 'wiggle.tar.gz'))
+        job.addChildJobFn(s3am_upload_job, file_id=wiggle_id, file_name='wiggle.tar.gz',
+                          s3_dir=input_args['s3_dir'], num_cores=cores)
     if input_args['save_bam'] and input_args['s3_dir']:
-        job.addChildJobFn(upload_bam_to_s3, job_vars, disk='20G', cores=cores)
+        sorted_bam_id = job.fileStore.writeGlobalFile(os.path.join(work_dir, 'rnaAligned.sortedByCoord.out.bam'))
+        job.addChildJobFn(s3am_upload_job, file_id=sorted_bam_id, file_name=uuid + '.sorted.bam',
+                          s3_dir=input_args['s3_dir'], num_cores=cores, s3_key_path=input_args['ssec'])
     # RSEM doesn't tend to use more than 16 cores
     cores = min(cores, 16)
     disk = '2G' if input_args['ci_test'] else '50G'
@@ -737,7 +495,7 @@ def rsem(job, job_vars):
     cores = 16 if cores >= 16 else cores
     sudo = input_args['sudo']
     # I/O
-    read_from_filestore(job, work_dir, ids, 'transcriptome.bam')
+    job.fileStore.readGlobalFile(ids['transcriptome.bam'], os.path.join(work_dir, 'transcriptome.bam'))
     subprocess.check_call(['curl', '-fs', '--retry', '5', '--create-dir', input_args['rsem_ref_hg38.tar.gz'], '-o',
                            os.path.join(work_dir, 'rsem_ref_hg38.tar.gz')])
     subprocess.check_call(['tar', '-xvf', os.path.join(work_dir, 'rsem_ref_hg38.tar.gz'), '-C', work_dir])
@@ -755,7 +513,7 @@ def rsem(job, job_vars):
     if not ids['R_cutadapt.fastq']:
         parameters = ['--paired-end'] + parameters
     docker_call(tool='quay.io/ucsc_cgl/rsem:1.2.25--d4275175cc8df36967db460b06337a14f40d2f21',
-                tool_parameters=parameters, work_dir=work_dir, sudo=sudo)
+                parameters=parameters, work_dir=work_dir, sudo=sudo)
     os.rename(os.path.join(work_dir, prefix + '.genes.results'), os.path.join(work_dir, 'rsem_gene.tab'))
     os.rename(os.path.join(work_dir, prefix + '.isoforms.results'), os.path.join(work_dir, 'rsem_isoform.tab'))
     # Write to FileStore
@@ -775,13 +533,13 @@ def rsem_postprocess(job, job_vars):
     """
     input_args, ids = job_vars
     work_dir = job.fileStore.getLocalTempDir()
-    uuid = input_args['uuid']
     sudo = input_args['sudo']
     # I/O
-    read_from_filestore(job, work_dir, ids, 'rsem_gene.tab', 'rsem_isoform.tab')
+    job.fileStore.readGlobalFile(ids['rsem_gene.tab'], os.path.join(work_dir, 'rsem_gene.tab'))
+    job.fileStore.readGlobalFile(ids['rsem_isoform.tab'], os.path.join(work_dir, 'rsem_isoform.tab'))
     # Convert RSEM files into individual .tab files.
     sample = input_args['uuid']
-    docker_call(tool='jvivian/rsem_postprocess', tool_parameters=[sample], work_dir=work_dir, sudo=sudo)
+    docker_call(tool='jvivian/rsem_postprocess', parameters=[sample], work_dir=work_dir, sudo=sudo)
     os.rename(os.path.join(work_dir, 'rsem_gene.tab'), os.path.join(work_dir, 'rsem_genes.results'))
     os.rename(os.path.join(work_dir, 'rsem_isoform.tab'), os.path.join(work_dir, 'rsem_isoforms.results'))
     output_files = ['rsem.genes.norm_counts.tab', 'rsem.genes.raw_counts.tab', 'rsem.genes.norm_fpkm.tab',
@@ -792,11 +550,11 @@ def rsem_postprocess(job, job_vars):
     genes = [x for x in output_files if 'gene' in x]
     isoforms = [x for x in output_files if 'isoform' in x]
     command = ['-g'] + genes + ['-i'] + isoforms
-    docker_call(tool='jvivian/gencode_hugo_mapping', tool_parameters=command, work_dir=work_dir, sudo=sudo)
+    docker_call(tool='jvivian/gencode_hugo_mapping', parameters=command, work_dir=work_dir, sudo=sudo)
     hugo_files = [os.path.splitext(x)[0] + '.hugo' + os.path.splitext(x)[1] for x in output_files]
     # Create tarballs for outputs
-    tarball_files(work_dir, tar_name='rsem.tar.gz', uuid=uuid, files=output_files)
-    tarball_files(work_dir, tar_name='rsem_hugo.tar.gz', uuid=uuid, files=hugo_files)
+    tarball_files(tar_name='rsem.tar.gz', file_paths=[os.path.join(work_dir, x) for x in output_files], output_dir=work_dir)
+    tarball_files('rsem_hugo.tar.gz', [os.path.join(work_dir, x) for x in hugo_files], output_dir=work_dir)
     rsem_id = job.fileStore.writeGlobalFile(os.path.join(work_dir, 'rsem.tar.gz'))
     hugo_id = job.fileStore.writeGlobalFile(os.path.join(work_dir, 'rsem_hugo.tar.gz'))
     return rsem_id, hugo_id
@@ -847,104 +605,12 @@ def consolidate_output(job, job_vars, output_ids_and_values):
     if input_args['output_dir']:
         output_dir = input_args['output_dir']
         mkdir_p(output_dir)
-        copy_to_output_dir(work_dir, output_dir, uuid=None, files=[uuid + '.tar.gz'])
+        copy_to_output_dir(output_dir, fpaths=[os.path.join(work_dir, uuid + '.tar.gz')])
     # Write output file to fileStore
     ids['uuid.tar.gz'] = job.fileStore.writeGlobalFile(out_tar)
     # If S3 bucket argument specified, upload to S3
     if input_args['s3_dir']:
-        job.addChildJobFn(upload_to_s3, (input_args, ids), cores=cores)
-
-
-def upload_to_s3(job, job_vars):
-    """
-    If s3_dir is specified in arguments, file will be uploaded to S3 using boto.
-    WARNING: ~/.boto credentials are necessary for this to succeed!
-
-    job_vars: tuple     Tuple of dictionaries: input_args and ids
-    """
-    import boto
-    from boto.s3.key import Key
-
-    input_args, ids = job_vars
-    work_dir = job.fileStore.getLocalTempDir()
-    uuid = input_args['uuid']
-    # Parse s3_dir
-    s3_dir = input_args['s3_dir']
-    bucket_name = s3_dir.split('/')[0]
-    bucket_dir = '/'.join(s3_dir.split('/')[1:])
-    # Upload to S3 via boto
-    conn = boto.connect_s3()
-    bucket = conn.get_bucket(bucket_name)
-    k = Key(bucket)
-    if 'error.txt' in ids:
-        read_from_filestore(job, work_dir, ids, 'error.txt')
-        k.key = os.path.join(bucket_dir, uuid + '.ERROR')
-        k.set_contents_from_filename(os.path.join(work_dir, 'error.txt'))
-    else:
-        read_from_filestore(job, work_dir, ids, 'uuid.tar.gz')
-        uuid_tar = os.path.join(work_dir, 'uuid.tar.gz')
-        if 'R.fastq' in ids:
-            k.key = os.path.join(bucket_dir, uuid + 'single-end' + '.tar.gz')
-        else:
-            k.key = os.path.join(bucket_dir, uuid + '.tar.gz')
-        k.set_contents_from_filename(uuid_tar)
-
-
-def s3am_with_retry(cores, *args):
-    retry_count = 3
-    for i in xrange(retry_count):
-        s3am_command = ['s3am', 'upload', '--resume', '--part-size=50M',
-                        '--upload-slots={}'.format(cores),
-                        '--download-slots={}'.format(cores)] + list(args)
-        ret_code = subprocess.call(s3am_command)
-        if ret_code == 0:
-            return
-        else:
-            print 'S3AM failed with status code: {}'.format(ret_code)
-    raise RuntimeError('S3AM failed to upload after {} retries.'.format(retry_count))
-
-
-def upload_wiggle_to_s3(job, job_vars):
-    input_args, ids = job_vars
-    work_dir = job.fileStore.getLocalTempDir()
-    cores = input_args['cpu_count']
-    uuid = input_args['uuid']
-    # I/O
-    read_from_filestore(job, work_dir, ids, 'wiggle.tar.gz')
-    wiggle_tar = os.path.join(work_dir, 'wiggle.tar.gz')
-    sample_name = uuid + '.wiggle.tar.gz'
-    # Parse s3_dir to get bucket and s3 path
-    s3_dir = input_args['s3_dir']
-    bucket_name = s3_dir.split('/')[0]
-    bucket_dir = os.path.join('/'.join(s3_dir.split('/')[1:]), 'wiggle_files')
-    # Upload to S3 via S3AM
-    s3am_with_retry(cores, 'file://{}'.format(wiggle_tar),
-                    os.path.join('s3://', bucket_name, bucket_dir, sample_name))
-
-
-def upload_bam_to_s3(job, job_vars):
-    input_args, ids = job_vars
-    work_dir = job.fileStore.getLocalTempDir()
-    uuid = input_args['uuid']
-    cores = input_args['cpu_count']
-    key_path = input_args['ssec']
-    # I/O
-    read_from_filestore(job, work_dir, ids, 'transcriptome.bam')
-    bam_path = os.path.join(work_dir, 'transcriptome.bam')
-    sample_name = uuid + '.bam'
-    # Parse s3_dir to get bucket and s3 path
-    s3_dir = input_args['s3_dir']
-    bucket_name = s3_dir.split('/')[0]
-    bucket_dir = os.path.join('/'.join(s3_dir.split('/')[1:]), 'bam_files')
-    base_url = 'https://s3-us-west-2.amazonaws.com/'
-    url = os.path.join(base_url, bucket_name, bucket_dir, sample_name)
-    # Generate keyfile for upload
-    with open(os.path.join(work_dir, 'temp.key'), 'wb') as f_out:
-        f_out.write(generate_unique_key(key_path, url))
-    # Upload to S3 via S3AM
-    s3am_with_retry(cores, '--sse-key-file', os.path.join(work_dir, 'temp.key'),
-                    'file://{}'.format(bam_path),
-                    os.path.join('s3://', bucket_name, bucket_dir, sample_name))
+        s3am_upload(fpath=out_tar, s3_dir=input_args['s3_dir'], num_cores=cores)
 
 
 def main():
