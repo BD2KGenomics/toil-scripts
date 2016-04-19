@@ -10,7 +10,7 @@ aws:us-west-2:rnaseq-run-1 \
 --config /home/mesosbox/shared/rnaseq-config.txt \
 --retryCount 2 \
 --ssec /home/mesosbox/shared/master.key \
---s3_dir cgl-driver-projects/test/ \
+--s3-dir cgl-driver-projects/test/ \
 --sseKey=/home/mesosbox/shared/master.key \
 --batchSystem="mesos" \
 --mesosMaster mesos-master:5050 \
