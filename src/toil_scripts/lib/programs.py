@@ -41,14 +41,14 @@ def mock_mode():
 
 
 def docker_call(tool,
-                parameters=[],
+                parameters=None,
                 work_dir='.',
                 rm=True,
                 env=None,
                 sudo=False,
                 outfile=None,
-                inputs=[],
-                outputs={},
+                inputs=None,
+                outputs=None,
                 docker_parameters=None,
                 check_output=False,
                 mock=None):
@@ -72,11 +72,17 @@ def docker_call(tool,
     """
     from toil_scripts.lib.urls import download_url
 
-    for filename in inputs:
-        assert(os.path.isfile(os.path.join(work_dir, filename)))
-
     if mock is None:
         mock = mock_mode()
+    if parameters is None:
+        parameters = []
+    if inputs is None:
+        inputs = []
+    if outputs is None:
+        outputs = {}
+
+    for filename in inputs:
+        assert(os.path.isfile(os.path.join(work_dir, filename)))
 
     if mock:
         for filename, url in outputs.items():
