@@ -31,7 +31,27 @@ def which(program):
     return None
 
 
-def docker_call(tool, parameters=None, work_dir='.', rm=True, env=None, sudo=False, outfile=None):
+def mock_mode():
+    """
+    Checks whether the ADAM_GATK_MOCK_MODE environment variable is set.
+    In mock mode, all docker calls other than those to spin up and submit jobs to the spark cluster
+    are stubbed out and dummy files are used as inputs and outputs.
+    """
+    return True if int(os.environ.get('TOIL_SCRIPTS_MOCK_MODE', '0')) else False
+
+
+def docker_call(tool,
+                parameters=[],
+                work_dir='.',
+                rm=True,
+                env=None,
+                sudo=False,
+                outfile=None,
+                inputs=[],
+                outputs={},
+                docker_parameters=None,
+                check_output=False,
+                mock=None):
     """
     Calls Docker, passing along parameters and tool.
 
@@ -42,7 +62,39 @@ def docker_call(tool, parameters=None, work_dir='.', rm=True, env=None, sudo=Fal
     :param dict[str,str] env: Environment variables to be added (e.g. dict(JAVA_OPTS='-Xmx15G'))
     :param bool sudo: If True, prepends `sudo` to the docker call
     :param file outfile: Pipe output of Docker call to file handle
+    :param list[str] inputs: A list of the input files.
+    :param dict[str,str] outputs: A dictionary containing the outputs files as keys with either None
+                                  or a url. The value is only used if mock=True
+    :param dict[str,str] docker_parameters: Parameters to pass to docker
+    :param bool check_output: When True, this function returns docker's output
+    :param bool mock: Whether to run in mock mode. If this variable is unset, its value will be determined by
+                      the environment variable.
     """
+    from toil_scripts.lib.urls import download_url
+
+    for filename in inputs:
+        assert(os.path.isfile(os.path.join(work_dir, filename)))
+
+    if mock is None:
+        mock = mock_mode()
+
+    if mock:
+        for filename, url in outputs.items():
+            file_path = os.path.join(work_dir, filename)
+            if url is None:
+                # create mock file
+                if not os.path.exists(file_path):
+                    f = open(file_path, 'w')
+                    f.write("contents") # FIXME
+                    f.close()
+
+            else:
+                file_path = os.path.join(work_dir, filename)
+                if not os.path.exists(file_path):
+                    outfile = download_url(url, work_dir=work_dir, name=filename)
+                assert os.path.exists(file_path)
+        return
+    
     base_docker_call = ['docker', 'run',
                         '--log-driver=none',
                         '-v', '{}:/data'.format(os.path.abspath(work_dir))]
@@ -53,6 +105,28 @@ def docker_call(tool, parameters=None, work_dir='.', rm=True, env=None, sudo=Fal
     if env:
         for e, v in env.iteritems():
             base_docker_call.extend(['-e', '{}={}'.format(e, v)])
-    docker_command = base_docker_call + [tool] + parameters
-    _log.info(docker_command)
-    subprocess.check_call(docker_command, stdout=outfile)
+    if docker_parameters:
+        base_docker_call += docker_parameters
+
+    _log.debug("Calling docker with %s." % " ".join(base_docker_call + [tool] + parameters))
+
+    docker_call = base_docker_call + [tool] + parameters
+
+    try:
+        if outfile:
+            subprocess.check_call(docker_call, stdout=outfile)
+        else:
+            if check_output:
+                return subprocess.check_output(docker_call)
+            else:
+                subprocess.check_call(docker_call)
+
+    except subprocess.CalledProcessError:
+        raise RuntimeError('docker command returned a non-zero exit status. Check error logs.')
+    except OSError:
+        raise RuntimeError('docker not found on system. Install on all nodes.')
+
+    for filename in outputs.keys():
+        if not os.path.isabs(filename):
+            filename = os.path.join(work_dir, filename)
+        assert(os.path.isfile(filename))

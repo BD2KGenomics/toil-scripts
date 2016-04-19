@@ -40,7 +40,8 @@ from collections import OrderedDict
 from toil.job import Job
 
 from toil_scripts import download_from_s3_url
-from toil_scripts.batch_alignment.bwa_alignment import upload_to_s3, docker_call
+from toil_scripts.batch_alignment.bwa_alignment import upload_to_s3
+from toil_scripts.lib.programs import docker_call
 
 def build_parser():
     """
@@ -57,7 +58,6 @@ def build_parser():
     parser.add_argument('-o', '--output_dir', default="./data", help='Full path to final output dir')
     parser.add_argument('-se', '--file_size', default='100G', help='Approximate input file size. Should be given as %d[TGMK], e.g., for a 100 gigabyte file, use --file_size 100G')
     parser.add_argument('-x', '--suffix', default="", help='additional suffix, if any')
-
     return parser
 
 
@@ -206,9 +206,13 @@ def create_reference_index_hc(job, shared_ids, input_args):
     faidx_output = os.path.join(work_dir, 'ref.fa.fai')
     # Call: Samtools
     faidx_command = ['faidx', 'ref.fa']
+    inputs= ref_path
+    outputs={'ref.fa.fai': None}
     docker_call(work_dir = work_dir,
-                tool_parameters = faidx_command,
+                parameters = faidx_command,
                 tool = 'quay.io/ucsc_cgl/samtools',
+                inputs=inputs,
+                outputs=outputs,
                 sudo = input_args['sudo'])
     # Update fileStore for output
     shared_ids['ref.fa.fai'] = job.fileStore.writeGlobalFile(faidx_output)
@@ -232,10 +236,14 @@ def create_reference_dict_hc(job, shared_ids, input_args):
     # Call: picardtools
     picard_output = os.path.join(work_dir, 'ref.dict')
     command = ['CreateSequenceDictionary', 'R=ref.fa', 'O=ref.dict']
+    inputs=['ref.fa']
+    outputs={picard_output: None}
     docker_call(work_dir = work_dir,
-                java_opts='-Xmx%sg' % input_args['memory'],
-                tool_parameters = command,
+                env={'JAVA_OPTS':'-Xmx%sg' % input_args['memory']},
+                parameters = command,
                 tool = 'quay.io/ucsc_cgl/picardtools',
+                inputs=inputs,
+                outputs=outputs,
                 sudo = input_args['sudo'])
     # Update fileStore for output
     shared_ids['ref.dict'] = job.fileStore.writeGlobalFile(picard_output)
@@ -317,9 +325,13 @@ def index(job, shared_ids, input_args):
     output_path = os.path.join(work_dir, 'toil.bam.bai')
     # Call: index the normal.bam
     parameters = ['index', 'toil.bam']
+    inputs=['toil.bam']
+    outputs={'toil.bam.bai': None}
     docker_call(work_dir = work_dir,
-                tool_parameters = parameters,
+                parameters = parameters,
                 tool = 'quay.io/ucsc_cgl/samtools',
+                inputs=inputs,
+                outputs=outputs,
                 sudo = input_args['sudo'])
     # Update FileStore and call child
     shared_ids['toil.bam.bai'] = job.fileStore.writeGlobalFile(output_path)
@@ -357,10 +369,14 @@ def haplotype_caller(job, shared_ids, input_args):
                '--annotation', 'FisherStrand',
                '--annotation', 'ReadPosRankSumTest']
     try:
+        inputs=input_files
+        outputs={output: None}
         docker_call(work_dir = work_dir,
-                    java_opts='-Xmx%sg' % input_args['memory'],
-                    tool_parameters = command,
+                    env={'JAVA_OPTS':'-Xmx%sg' % input_args['memory']},
+                    parameters = command,
                     tool = 'quay.io/ucsc_cgl/gatk:3.5--dba6dae49156168a909c43330350c6161dc7ecc2',
+                    inputs=inputs,
+                    outputs=outputs,
                     sudo = input_args['sudo'])
     except:
         sys.stderr.write("Running haplotype caller with %s in %s failed." % (
@@ -404,10 +420,14 @@ def genotype_gvcf(job, shared_ids, input_args):
                '-stand_call_conf', '30.0']
 
     try:
+        inputs=input_files
+        outputs={output: None}
         docker_call(work_dir = work_dir,
-                    java_opts='-Xmx%sg' % input_args['memory'],
-                    tool_parameters = command,
+                    env={'JAVA_OPTS':'-Xmx%sg' % input_args['memory']},
+                    parameters = command,
                     tool = 'quay.io/ucsc_cgl/gatk:3.5--dba6dae49156168a909c43330350c6161dc7ecc2',
+                    inputs=inputs,
+                    outputs=outputs,
                     sudo = input_args['sudo'])
     except:
         sys.stderr.write("Running GenotypeGVCFs with %s in %s failed." % (
@@ -450,10 +470,14 @@ def vqsr_snp(job, shared_ids, input_args):
                '-recalFile', 'HAPSNP.recal',
                '-tranchesFile', 'HAPSNP.tranches',
                '-rscriptFile', 'HAPSNP.plots']
+    inputs=input_files + ['hapmap.vcf','omni.vcf', 'dbsnp.vcf', 'phase.vcf']
+    outputD={'HAPSNP.recal': None, 'HAPSNP.tranches': None, 'HAPSNP.plots': None}
     docker_call(work_dir = work_dir,
-                java_opts='-Xmx%sg' % input_args['memory'],
-                tool_parameters = command,
+                env={'JAVA_OPTS':'-Xmx%sg' % input_args['memory']},
+                parameters = command,
                 tool ='quay.io/ucsc_cgl/gatk:3.5--dba6dae49156168a909c43330350c6161dc7ecc2',
+                inputs=inputs,
+                outputs=outputD,
                 sudo = input_args['sudo'])
     shared_ids = write_to_filestore(job, work_dir, shared_ids, *outputs)
     job.addChildJobFn(apply_vqsr_snp, shared_ids, input_args)
@@ -486,10 +510,14 @@ def apply_vqsr_snp(job, shared_ids, input_args):
                '-tranchesFile', 'HAPSNP.tranches',
                '-recalFile', 'HAPSNP.recal',
                '-mode', 'SNP']
+    inputs=input_files
+    outputs={output: None}
     docker_call(work_dir = work_dir,
-                java_opts='-Xmx%sg' % input_args['memory'],
-                tool_parameters = command,
+                env={'JAVA_OPTS':'-Xmx%sg' % input_args['memory']},
+                parameters = command,
                 tool = 'quay.io/ucsc_cgl/gatk:3.5--dba6dae49156168a909c43330350c6161dc7ecc2',
+                inputs=inputs,
+                outputs=outputs,
                 sudo = input_args['sudo'])
 
     upload_or_move_hc(work_dir, input_args, output)
@@ -540,10 +568,14 @@ def vqsr_indel(job, shared_ids, input_args):
                '-tranchesFile', 'HAPINDEL.tranches',
                '-rscriptFile', 'HAPINDEL.plots',
                '--maxGaussians', '4']
+    inputs=input_files
+    outputD={'HAPINDEL.recal': None, 'HAPINDEL.tranches': None, 'HAPINDEL.plots': None}
     docker_call(work_dir = work_dir,
-                java_opts='-Xmx%sg' % input_args['memory'],
-                tool_parameters = command,
+                env={'JAVA_OPTS':'-Xmx%sg' % input_args['memory']},
+                parameters = command,
                 tool ='quay.io/ucsc_cgl/gatk:3.5--dba6dae49156168a909c43330350c6161dc7ecc2',
+                inputs=inputs,
+                outputs=outputD,
                 sudo = input_args['sudo'])
     shared_ids = write_to_filestore(job, work_dir, shared_ids, *outputs)
     job.addChildJobFn(apply_vqsr_indel, shared_ids, input_args)
@@ -575,10 +607,14 @@ def apply_vqsr_indel(job, shared_ids, input_args):
                '-tranchesFile', 'HAPINDEL.tranches',
                '-recalFile', 'HAPINDEL.recal',
                '-mode', 'INDEL']
+    inputs=input_files
+    outputs={output: None}
     docker_call(work_dir = work_dir,
-                java_opts='-Xmx%sg' % input_args['memory'],
-                tool_parameters = command,
+                env={'JAVA_OPTS':'-Xmx%sg' % input_args['memory']},
+                parameters = command,
                 tool = 'quay.io/ucsc_cgl/gatk:3.5--dba6dae49156168a909c43330350c6161dc7ecc2',
+                inputs = inputs,
+                outputs = outputs,
                 sudo = input_args['sudo'])
 
     upload_or_move_hc(work_dir, input_args, output)

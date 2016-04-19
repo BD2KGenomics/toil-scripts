@@ -12,7 +12,7 @@ from subprocess import call, check_call, check_output
 import time
 
 from toil.job import Job
-from toil_scripts.batch_alignment.bwa_alignment import docker_call
+from toil_scripts.lib.programs import docker_call
 
 _log = logging.getLogger(__name__)
 
@@ -44,6 +44,7 @@ def start_spark_hdfs_cluster(job,
                       jFn,
                       jArgs,
                       jReqs)
+
 
 def start_spark_hdfs_master(job, executorMemory, sudo):
     """
@@ -78,40 +79,44 @@ class MasterService(Job.Service):
         self.cores = multiprocessing.cpu_count()
         Job.Service.__init__(self, memory = self.memory, cores = self.cores)
 
-    def start(self):
+    def start(self, fileStore):
         """
         Start spark and hdfs master containers
+
+        fileStore: Unused
         """
         
         self.IP = check_output(["hostname", "-f",])[:-1]
 
         _log.info("Started Spark master container.")
-        self.sparkContainerID = docker_call(no_rm = True,
-                                            work_dir = os.getcwd(),
-                                            tool = "quay.io/ucsc_cgl/apache-spark-master:1.5.2",
+        self.sparkContainerID = docker_call(tool = "quay.io/ucsc_cgl/apache-spark-master:1.5.2",
                                             docker_parameters = ["--net=host",
                                                                  "-d",
                                                                  "-v", "/mnt/ephemeral/:/ephemeral/:rw",
                                                                  "-e", "SPARK_MASTER_IP="+self.IP,
                                                                  "-e", "SPARK_LOCAL_DIRS=/ephemeral/spark/local",
                                                                  "-e", "SPARK_WORKER_DIR=/ephemeral/spark/work"],
-                                            tool_parameters = [],
+                                            rm=False,
                                             sudo = self.sudo,
-                                            check_output = True)[:-1]
+                                            check_output = True,
+                                            mock = False)[:-1]
         _log.info("Started HDFS Datanode.")
-        self.hdfsContainerID = docker_call(no_rm = True,
-                                           work_dir = os.getcwd(),
-                                           tool = "quay.io/ucsc_cgl/apache-hadoop-master:2.6.2",
+        self.hdfsContainerID = docker_call(tool = "quay.io/ucsc_cgl/apache-hadoop-master:2.6.2",
                                            docker_parameters = ["--net=host",
                                                                 "-d"],
-                                           tool_parameters = [self.IP],
+                                           parameters = [self.IP],
+                                           rm=False,
                                            sudo = self.sudo,
-                                           check_output = True)[:-1]
+                                           check_output = True,
+                                           mock = False)[:-1]
         return self.IP
 
-    def stop(self):
+
+    def stop(self, fileStore):
         """
         Stop and remove spark and hdfs master containers
+
+        fileStore: Unused
         """
         
         sudo = []
@@ -125,9 +130,20 @@ class MasterService(Job.Service):
 
         call(sudo + ["docker", "stop", self.hdfsContainerID])
         call(sudo + ["docker", "rm", self.hdfsContainerID])
-        _log.info("Stopped HDFS datanode.")
+        _log.info("Stopped HDFS namenode.")
 
         return
+
+
+    def check(self):
+        """
+        Checks to see if Spark master and HDFS namenode are still running.
+        """
+
+        containers = check_output(["docker", "ps", "-q"])
+
+        return ((self.sparkContainerID in containers) and
+                (self.hdfsContainerID in containers))
 
 
 SPARK_MASTER_PORT = "7077"
@@ -141,24 +157,25 @@ class WorkerService(Job.Service):
         self.cores = multiprocessing.cpu_count()
         Job.Service.__init__(self, memory = self.memory, cores = self.cores)
 
-    def start(self):
+    def start(self, fileStore):
         """
         Start spark and hdfs worker containers
-        """
 
+        fileStore: Unused
+        """
         # start spark and our datanode
-        self.sparkContainerID = docker_call(no_rm = True,
-                                            work_dir = os.getcwd(),
-                                            tool = "quay.io/ucsc_cgl/apache-spark-worker:1.5.2",
+        self.sparkContainerID = docker_call(tool = "quay.io/ucsc_cgl/apache-spark-worker:1.5.2",
                                             docker_parameters = ["--net=host", 
                                                                  "-d",
                                                                  "-v", "/mnt/ephemeral/:/ephemeral/:rw",
                                                                  "-e", "\"SPARK_MASTER_IP="+self.masterIP+":"+SPARK_MASTER_PORT+"\"",
                                                                  "-e", "SPARK_LOCAL_DIRS=/ephemeral/spark/local",
                                                                  "-e", "SPARK_WORKER_DIR=/ephemeral/spark/work"],
-                                            tool_parameters = [self.masterIP+":"+SPARK_MASTER_PORT],
+                                            parameters = [self.masterIP+":"+SPARK_MASTER_PORT],
+                                            rm=False,
                                             sudo = self.sudo,
-                                            check_output = True)[:-1]
+                                            check_output = True,
+                                            mock = False)[:-1]
         self.__start_datanode()
         
         # fake do/while to check if HDFS is up
@@ -217,20 +234,22 @@ class WorkerService(Job.Service):
         """
         Launches the Hadoop datanode.
         """
-        self.hdfsContainerID = docker_call(no_rm = True,
-                                           work_dir = os.getcwd(),
-                                           tool = "quay.io/ucsc_cgl/apache-hadoop-worker:2.6.2",
+        self.hdfsContainerID = docker_call(tool = "quay.io/ucsc_cgl/apache-hadoop-worker:2.6.2",
                                            docker_parameters = ["--net=host",
                                                                 "-d",
                                                                 "-v", "/mnt/ephemeral/:/ephemeral/:rw"],
-                                           tool_parameters = [self.masterIP],
+                                           parameters = [self.masterIP],
+                                           rm=False,
                                            sudo = self.sudo,
-                                           check_output = True)[:-1]
+                                           check_output = True,
+                                           mock = False)[:-1]
 
 
-    def stop(self):
+    def stop(self, fileStore):
         """
         Stop spark and hdfs worker containers
+
+        fileStore: Unused
         """
 
         sudo = []
@@ -245,6 +264,17 @@ class WorkerService(Job.Service):
         call(sudo + ["docker", "exec", self.hdfsContainerID, "rm", "-r", "/ephemeral/hdfs"])
         call(sudo + ["docker", "stop", self.hdfsContainerID])
         call(sudo + ["docker", "rm", self.hdfsContainerID])
-        _log.info("Stopped HDFS namenode.")
+        _log.info("Stopped HDFS datanode.")
 
         return
+
+
+    def check(self):
+        """
+        Checks to see if Spark master and HDFS namenode are still running.
+        """
+
+        containers = check_output(["docker", "ps", "-q"])
+
+        return ((self.sparkContainerID in containers) and
+                (self.hdfsContainerID in containers))

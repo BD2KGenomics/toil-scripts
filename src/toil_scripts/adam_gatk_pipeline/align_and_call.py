@@ -137,7 +137,7 @@ def build_parser():
     parser = argparse.ArgumentParser()
 
     # add sample uuid
-    parser.add_argument('-U', '--uuid_manifest', required = True,
+    parser.add_argument('-U', '--uuid_manifest', required = False,
                         help = 'Sample UUID.')
 
     # optionally add suffix
@@ -165,29 +165,30 @@ def build_parser():
     parser.add_argument('--autoscale_cluster', action='store_true', help = "Scales cluster during pipeline run")
 
     # add bucket args
-    parser.add_argument('-3', '--s3_bucket', required = True,
+    parser.add_argument('-3', '--s3_bucket', required = not mock_mode(),
                         help = 'S3 Bucket URI')
     parser.add_argument('-3r', '--bucket_region', default = "us-west-2",
                         help = 'Region of the S3 bucket. Defaults to us-east-1.')
 
     # add file size argument
     parser.add_argument('-se', '--file_size', default = '100G',
-                        help = 'Approximate input file size. Should be given as %d[TGMK], e.g., for a 100 gigabyte file, use --file_size 100G')
+                        help = 'Approximate input file size. Should be given as %d[TGMK], e.g., '
+                               'for a 100 gigabyte file, use --file_size 100G')
 
     # add bwa args
-    parser.add_argument('-r', '--ref', required = True,
+    parser.add_argument('-r', '--ref', required = not mock_mode(),
                         help = 'Reference fasta file')
-    parser.add_argument('-m', '--amb', required = True,
+    parser.add_argument('-m', '--amb', required = not mock_mode(),
                         help = 'Reference fasta file (amb)')
-    parser.add_argument('-n', '--ann', required = True,
+    parser.add_argument('-n', '--ann', required = not mock_mode(),
                         help = 'Reference fasta file (ann)')
-    parser.add_argument('-b', '--bwt', required = True,
+    parser.add_argument('-b', '--bwt', required = not mock_mode(),
                         help = 'Reference fasta file (bwt)')
-    parser.add_argument('-p', '--pac', required = True,
+    parser.add_argument('-p', '--pac', required = not mock_mode(),
                         help = 'Reference fasta file (pac)')
-    parser.add_argument('-a', '--sa', required = True,
+    parser.add_argument('-a', '--sa', required = not mock_mode(),
                         help = 'Reference fasta file (sa)')
-    parser.add_argument('-f', '--fai', required = True,
+    parser.add_argument('-f', '--fai', required = not mock_mode(),
                         help = 'Reference fasta file (fai)')
     parser.add_argument('-u', '--sudo', dest = 'sudo', action = 'store_true',
                         help = 'Docker usually needs sudo to execute '
@@ -195,7 +196,7 @@ def build_parser():
                         'or when a member of a Docker group.')
     parser.add_argument('-k', '--use_bwakit', action='store_true', help='Use bwakit instead of the binary build of bwa')
     parser.add_argument('-t', '--alt', required=False, help='Alternate file for reference build (alt). Necessary for alt aware alignment.')
-    parser.set_defaults(sudo = False)
+    parser.set_defaults(sudo = False) 
     parser.add_argument('--trim', action='store_true', help='Trim adapters during alignment.')
 
     # add ADAM args
@@ -206,21 +207,21 @@ def build_parser():
                               "if pointing at a static (external or standalone) Spark cluster. The special value "
                               "'auto' indicates the master of standalone cluster, i.e. one that is managed by the "
                               "uberscript.")
-    parser.add_argument('-d', '--driver_memory', required = True,
+    parser.add_argument('-d', '--driver_memory', required = not mock_mode(),
                         help = 'Amount of memory to allocate for Spark Driver.')
-    parser.add_argument('-q', '--executor_memory', required = True,
+    parser.add_argument('-q', '--executor_memory', required = not mock_mode(),
                         help = 'Amount of memory to allocate per Spark Executor.')
 
     # add GATK args
-    parser.add_argument('-P', '--phase', required = True,
+    parser.add_argument('-P', '--phase', required = not mock_mode(),
                         help = '1000G_phase1.indels.b37.vcf URL')
-    parser.add_argument('-M', '--mills', required = True,
+    parser.add_argument('-M', '--mills', required = not mock_mode(),
                         help = 'Mills_and_1000G_gold_standard.indels.b37.vcf URL')
-    parser.add_argument('-s', '--dbsnp', required = True,
+    parser.add_argument('-s', '--dbsnp', required = not mock_mode(),
                         help = 'dbsnp_137.b37.vcf URL')
-    parser.add_argument('-O', '--omni', required = True,
+    parser.add_argument('-O', '--omni', required = not mock_mode(),
                         help = '1000G_omni.5.b37.vcf URL')
-    parser.add_argument('-H', '--hapmap', required = True,
+    parser.add_argument('-H', '--hapmap', required = not mock_mode(),
                         help = 'hapmap_3.3.b37.vcf URL')
 
     # return built parser
@@ -486,6 +487,11 @@ if __name__ == '__main__':
     Job.Runner.addToilOptions(args_parser)
     args = args_parser.parse_args()
 
+    if mock_mode():
+        from mock_inputs import mock_inputs
+        for k,v in mock_inputs.iteritems():
+            setattr(args, k, v)
+
     ## Parse manifest file
     uuid_list = []
     with open(args.uuid_manifest) as f_manifest:
@@ -567,7 +573,8 @@ if __name__ == '__main__':
                              'suffix': '.gatk',
                              'indexed': True,
                              'sudo': args.sudo,
-                             'memory': args.executor_memory}
+                             'memory': args.executor_memory,
+                             'sudo': args.sudo}
 
     if (args.pipeline_to_run != "adam" and
         args.pipeline_to_run != "gatk" and

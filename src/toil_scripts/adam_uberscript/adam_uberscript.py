@@ -28,6 +28,7 @@ import boto
 import boto.ec2.cloudwatch
 import boto.sdb
 from automated_scaling import ClusterSize, Samples, Semaphore, SparkMasterAddress
+from toil_scripts.lib.programs import mock_mode
 from boto.ec2 import connect_to_region
 from boto.exception import BotoServerError, EC2ResponseError
 from boto_lib import get_instance_ids
@@ -44,7 +45,6 @@ cluster_scaling_interval_in_seconds = 150
 # Protects against concurrent changes to the size of the Toil cluster, by both the metric thread terminating idle
 # nodes and the cluster-growing thread adding nodes.
 cluster_size_lock = threading.RLock()
-
 
 def launch_cluster(params):
     """
@@ -124,45 +124,51 @@ def launch_pipeline(params):
             assert False, 'Invalid ref genome %s' % params.reference_genome
 
         # Assemble pipeline command to be stuffed into a screen session
-
+        
         pipeline_command = ['PYTHONPATH=$PYTHONPATH:~/toil-scripts/src',
                             'python -m toil_scripts.adam_gatk_pipeline.align_and_call',
                             'aws:{region}:{j}',
                             '--autoscale_cluster',
-                            '--sequence_dir {sequence_dir}',
-                            '--dir_suffix /{genome}',
                             '--retryCount 1',
-                            '--s3_bucket {b}',
-                            '--bucket_region {region}',
-                            '--uuid_manifest ~/manifest',
-                            '--ref {ref}',
-                            '--amb {amb}',
-                            '--ann {ann}',
-                            '--bwt {bwt}',
-                            '--pac {pac}',
-                            '--sa {sa}',
-                            '--fai {fai}',
                             '--use_bwakit',
-                            '--num_nodes {s}',
                             '--driver_memory {m}',
                             '--executor_memory {m}',
-                            '--phase {phase}',
-                            '--mills {mills}',
-                            '--dbsnp {dbsnp}',
-                            '--omni {omni}',
-                            '--hapmap {hapmap}',
                             '--batchSystem mesos',
                             '--mesosMaster $(hostname -i):5050',
                             '--workDir /var/lib/toil',
-                            '--file_size {fs}',
                             '--logInfo']
+        if mock_mode():
+            pipeline_command = ['ADAM_GATK_MOCK_MODE=1'] + \
+                               pipeline_command + \
+                               ['--dir_suffix /mock']
+        else:    
+            pipeline_command += ['--s3_bucket {b}',
+                                 '--bucket_region {region}',
+                                 '--sequence_dir {sequence_dir}',
+                                 '--dir_suffix /{genome}',
+                                 '--uuid_manifest ~/manifest',
+                                 '--ref {ref}',
+                                 '--amb {amb}',
+                                 '--ann {ann}',
+                                 '--bwt {bwt}',
+                                 '--pac {pac}',
+                                 '--sa {sa}',
+                                 '--fai {fai}',
+                                 '--phase {phase}',
+                                 '--mills {mills}',
+                                 '--dbsnp {dbsnp}',
+                                 '--omni {omni}',
+                                 '--hapmap {hapmap}',
+                                 '--file_size {fs}']
+
+            if 'alt' in inputs:
+                pipeline_command.append('--alt {alt}')
 
         # Do we have a defined master IP?
         if params.master_ip:
             pipeline_command.append('--master_ip %s' % params.master_ip)
-
-        if 'alt' in inputs:
-            pipeline_command.append('--alt {alt}')
+        elif params.spark_nodes:
+            pipeline_command.append('--num_nodes %s' % params.spark_nodes)
 
         pipeline_command.append('{r} 2>&1 | tee toil_output\n')
 
@@ -170,7 +176,6 @@ def launch_pipeline(params):
         pipeline_command = pipeline_command.format(j=jobstore,
                                                    b=params.bucket,
                                                    region=region_of_zone(params.zone),
-                                                   s=params.spark_nodes,
                                                    m=params.memory,
                                                    fs=params.file_size,
                                                    r=restart,
@@ -540,7 +545,7 @@ def main():
     parser = argparse.ArgumentParser(description=main.__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     subparsers = parser.add_subparsers(dest='command')
-
+    
     # Launch cluster
     cluster_sp = subparsers.add_parser('launch-cluster',
                                        help='Launches EC2 cluster via CGCloud')
@@ -550,7 +555,8 @@ def main():
                             help='Sets leader instance type.')
     cluster_sp.add_argument('-b', '--boto-path', default='/home/mesosbox/.boto', type=str,
                             help='Path to local .boto file to be placed on leader.')
-    cluster_sp.add_argument('-M', '--manifest-path', required=True, help='Path to manifest file.')
+    cluster_sp.add_argument('-M', '--manifest-path', default = None if not mock_mode() else "/home/ubuntu/toil-scripts/src/toil_scripts/adam_gatk_pipeline/mock_manifest",
+                            required=not mock_mode(), help='Path to manifest file.')
 
     # Launch pipeline
     pipeline_sp = subparsers.add_parser('launch-pipeline',
@@ -565,19 +571,20 @@ def main():
                                   "--max-samples-on-spark option to the launch-metric command.")
     pipeline_sp.add_argument('-B', '--bucket',
                              help='The name of the destination bucket.')
-    pipeline_sp.add_argument('-m', '--memory', default='200g',
+    pipeline_sp.add_argument('-m', '--memory', default='200g' if not mock_mode() else '3g',
                              help='The amount of memory per worker node in GiB. Must match what EC2 provides on '
-                                  'the specified worker instance type')
-    pipeline_sp.add_argument('-f', '--file_size', default='100G',
-                             help='Approximate size of the BAM files')
-    pipeline_sp.add_argument('-s', '--spark_nodes', type=int, default=8 + 1,
-                             help="The number of Spark nodes, including the master, to allocate per sample. Relevant with separate "
-                                  "running against a standSpark cluster managed, the master will be shared by all samples "
-                                  "and the actual number of workers allocated per sample will be one less than "
-                                  "specified here. Otherwise, each sample's subcluster will get its own master node.")
+                                  'the specified worker instance type. Defaults to 3 in mock mode')
+    pipeline_sp.add_argument('-f', '--file_size', default='100G' if not mock_mode() else '10M',
+                             help='Approximate size of the BAM files. Defaults to 10M in mock mode')
+    pipeline_sp.add_argument('-s', '--spark_nodes', type=int, default=(8 if not mock_mode() else 2) + 1,
+                             help="The number of Spark nodes, including the master, to allocate per sample. Relevant "
+                                  "with separate running against a standSpark cluster managed, the master will be "
+                                  "shared by all samples and the actual number of workers allocated per sample will be "
+                                  "one less than specified here. Otherwise, each sample's subcluster will get its own "
+                                  "master node. Default 9 in production mode, 3 in mock mode.")
     pipeline_sp.add_argument('-SD', '--sequence_dir', default='sequence',
                              help='Directory where raw sequences are.')
-    pipeline_sp.add_argument('-R', '--reference_genome', required=True,
+    pipeline_sp.add_argument('-R', '--reference_genome', default='GRCh38',
                              choices=['GRCh38', 'hg19'],
                              help='Reference genome to align and call against. Choose between GRCh38 and hg19.')
 
@@ -605,8 +612,9 @@ def main():
                              "domain for Toil's job store. The availability zone for spot instances may be chosen "
                              "independently from all zones in the region containing the specified zone.")
     for sp in cluster_sp, metric_sp:
-        sp.add_argument('-t', '--instance-type', default='r3.8xlarge',
-                        help='Worker instance type, e.g. m4.large or c3.8xlarge.')
+        sp.add_argument('-t', '--instance-type', default='r3.8xlarge' if not mock_mode() else 'c3.large',
+                        help='Worker instance type, e.g. m4.large or c3.8xlarge. Defaults to r3.8xlarge in production '
+                             'mode. Will always use c3.large in mock mode, regardless of input value.')
     for sp in metric_sp, cluster_sp:
         sp.add_argument('-etc', '--add-to-etc-hosts', default=None, required=False,
                         help='Deprecated. Optional entry to add to /etc/hosts on Toil workers. This should *not* be '
@@ -614,6 +622,9 @@ def main():
                              'Toil nodes. Use --master_ip=auto instead.')
 
     params = parser.parse_args()
+    
+    if params.command == 'launch-pipeline' and mock_mode() and params.master_ip:
+        params.spark_sample_slots = 1
 
     if params.command == 'launch-cluster':
         launch_cluster(params)
