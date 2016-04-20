@@ -19,7 +19,6 @@ _log = logging.getLogger(__name__)
 def start_spark_hdfs_cluster(job,
                              numWorkers,
                              executorMemory,
-                             sudo,
                              jFn,
                              jArgs = [],
                              jCores = None,
@@ -35,46 +34,44 @@ def start_spark_hdfs_cluster(job,
     if jDisk:
         jReqs['disk'] = jDisk
 
-    masterIP = start_spark_hdfs_master(job, executorMemory, sudo)
+    masterIP = start_spark_hdfs_master(job, executorMemory)
     job.addChildJobFn(start_spark_hdfs_workers,
                       masterIP,
                       numWorkers,
                       executorMemory,
-                      sudo,
                       jFn,
                       jArgs,
                       jReqs)
 
 
-def start_spark_hdfs_master(job, executorMemory, sudo):
+def start_spark_hdfs_master(job, executorMemory):
     """
     Starts the master service.
     """
 
     _log.info("Starting Spark master and HDFS namenode.")
 
-    masterIP = job.addService(MasterService(sudo, "%s G" % executorMemory))
+    masterIP = job.addService(MasterService("%s G" % executorMemory))
 
     _log.info("Spark Master and HDFS Namenode started.")
 
     return masterIP
 
-def start_spark_hdfs_workers(job, masterIP, numWorkers, executorMemory, sudo, jFn, jArgs, jReqs):
+def start_spark_hdfs_workers(job, masterIP, numWorkers, executorMemory, jFn, jArgs, jReqs):
     """
     Starts the worker services.
     """
     _log.info("Starting %d Spark workers and HDFS Datanodes.", numWorkers)
 
     for i in range(numWorkers):
-        job.addService(WorkerService(masterIP, sudo, "%s G" % executorMemory))
+        job.addService(WorkerService(masterIP, "%s G" % executorMemory))
 
     job.addChildJobFn(jFn, masterIP, *jArgs, **jReqs)
 
 class MasterService(Job.Service):
 
-    def __init__(self, sudo, memory):
+    def __init__(self,  memory):
 
-        self.sudo = sudo
         self.memory = memory
         self.cores = multiprocessing.cpu_count()
         Job.Service.__init__(self, memory = self.memory, cores = self.cores)
@@ -97,7 +94,6 @@ class MasterService(Job.Service):
                                                                  "-e", "SPARK_LOCAL_DIRS=/ephemeral/spark/local",
                                                                  "-e", "SPARK_WORKER_DIR=/ephemeral/spark/work"],
                                             rm=False,
-                                            sudo = self.sudo,
                                             check_output = True,
                                             mock = False)[:-1]
         _log.info("Started HDFS Datanode.")
@@ -106,7 +102,6 @@ class MasterService(Job.Service):
                                                                 "-d"],
                                            parameters = [self.IP],
                                            rm=False,
-                                           sudo = self.sudo,
                                            check_output = True,
                                            mock = False)[:-1]
         return self.IP
@@ -119,17 +114,13 @@ class MasterService(Job.Service):
         fileStore: Unused
         """
         
-        sudo = []
-        if self.sudo:
-            sudo = ["sudo"]
-
-        call(sudo + ["docker", "exec", self.sparkContainerID, "rm", "-r", "/ephemeral/spark"])
-        call(sudo + ["docker", "stop", self.sparkContainerID])
-        call(sudo + ["docker", "rm", self.sparkContainerID])
+        call(["docker", "exec", self.sparkContainerID, "rm", "-r", "/ephemeral/spark"])
+        call(["docker", "stop", self.sparkContainerID])
+        call(["docker", "rm", self.sparkContainerID])
         _log.info("Stopped Spark master.")
 
-        call(sudo + ["docker", "stop", self.hdfsContainerID])
-        call(sudo + ["docker", "rm", self.hdfsContainerID])
+        call(["docker", "stop", self.hdfsContainerID])
+        call(["docker", "rm", self.hdfsContainerID])
         _log.info("Stopped HDFS namenode.")
 
         return
@@ -150,9 +141,8 @@ SPARK_MASTER_PORT = "7077"
 
 class WorkerService(Job.Service):
     
-    def __init__(self, masterIP, sudo, memory):
+    def __init__(self, masterIP, memory):
         self.masterIP = masterIP
-        self.sudo = sudo
         self.memory = memory
         self.cores = multiprocessing.cpu_count()
         Job.Service.__init__(self, memory = self.memory, cores = self.cores)
@@ -173,7 +163,6 @@ class WorkerService(Job.Service):
                                                                  "-e", "SPARK_WORKER_DIR=/ephemeral/spark/work"],
                                             parameters = [self.masterIP+":"+SPARK_MASTER_PORT],
                                             rm=False,
-                                            sudo = self.sudo,
                                             check_output = True,
                                             mock = False)[:-1]
         self.__start_datanode()
@@ -240,7 +229,6 @@ class WorkerService(Job.Service):
                                                                 "-v", "/mnt/ephemeral/:/ephemeral/:rw"],
                                            parameters = [self.masterIP],
                                            rm=False,
-                                           sudo = self.sudo,
                                            check_output = True,
                                            mock = False)[:-1]
 
@@ -252,18 +240,14 @@ class WorkerService(Job.Service):
         fileStore: Unused
         """
 
-        sudo = []
-        if self.sudo:
-            sudo = ['sudo']
-
-        call(sudo + ["docker", "exec", self.sparkContainerID, "rm", "-r", "/ephemeral/spark"])
-        call(sudo + ["docker", "stop", self.sparkContainerID])
-        call(sudo + ["docker", "rm", self.sparkContainerID])
+        call(["docker", "exec", self.sparkContainerID, "rm", "-r", "/ephemeral/spark"])
+        call(["docker", "stop", self.sparkContainerID])
+        call(["docker", "rm", self.sparkContainerID])
         _log.info("Stopped Spark worker.")
 
-        call(sudo + ["docker", "exec", self.hdfsContainerID, "rm", "-r", "/ephemeral/hdfs"])
-        call(sudo + ["docker", "stop", self.hdfsContainerID])
-        call(sudo + ["docker", "rm", self.hdfsContainerID])
+        call(["docker", "exec", self.hdfsContainerID, "rm", "-r", "/ephemeral/hdfs"])
+        call(["docker", "stop", self.hdfsContainerID])
+        call(["docker", "rm", self.hdfsContainerID])
         _log.info("Stopped HDFS datanode.")
 
         return
