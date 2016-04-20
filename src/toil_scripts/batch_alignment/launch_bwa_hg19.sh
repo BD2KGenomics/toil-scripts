@@ -7,7 +7,7 @@ python -m toil_scripts.batch_alignment.bwa_alignment \
 /data/alignment-jobStore \
 --retryCount 2 \
 --config bwa-config.csv \
---lb KapaHyper \
+--library KapaHyper \
 --ref https://s3-us-west-2.amazonaws.com/cgl-pipeline-inputs/alignment/hg19.fa \
 --amb https://s3-us-west-2.amazonaws.com/cgl-pipeline-inputs/alignment/hg19.fa.amb \
 --ann https://s3-us-west-2.amazonaws.com/cgl-pipeline-inputs/alignment/hg19.fa.ann \
@@ -17,5 +17,4 @@ python -m toil_scripts.batch_alignment.bwa_alignment \
 --fai https://s3-us-west-2.amazonaws.com/cgl-pipeline-inputs/alignment/hg19.fa.fai \
 --workDir /data \
 --ssec /data/master.key \
---output_dir /data \
---use_bwakit
+--output-dir /data

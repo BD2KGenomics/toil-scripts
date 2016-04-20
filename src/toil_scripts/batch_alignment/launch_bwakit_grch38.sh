@@ -8,7 +8,7 @@ python -m toil_scripts.batch_alignment.bwa_alignment \
 /data/alignment-jobStore \
 --retryCount 2 \
 --config bwa-config.csv \
---lb LIB \
+--library LIB \
 --ref https://s3-us-west-2.amazonaws.com/cgl-pipeline-inputs/variant_grch38/GRCh38_full_analysis_set_plus_decoy_hla.fa \
 --amb https://s3-us-west-2.amazonaws.com/cgl-pipeline-inputs/variant_grch38/GRCh38_full_analysis_set_plus_decoy_hla.fa.amb \
 --ann https://s3-us-west-2.amazonaws.com/cgl-pipeline-inputs/variant_grch38/GRCh38_full_analysis_set_plus_decoy_hla.fa.ann \
@@ -17,6 +17,5 @@ python -m toil_scripts.batch_alignment.bwa_alignment \
 --sa https://s3-us-west-2.amazonaws.com/cgl-pipeline-inputs/variant_grch38/GRCh38_full_analysis_set_plus_decoy_hla.fa.sa \
 --fai https://s3-us-west-2.amazonaws.com/cgl-pipeline-inputs/variant_grch38/GRCh38_full_analysis_set_plus_decoy_hla.fa.fai \
 --alt https://s3-us-west-2.amazonaws.com/cgl-pipeline-inputs/variant_grch38/GRCh38_full_analysis_set_plus_decoy_hla.fa.alt \
---use_bwakit \
 --workDir /data \
---output_dir /data
+--output-dir /data
