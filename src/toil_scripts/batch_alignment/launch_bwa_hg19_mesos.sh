@@ -8,7 +8,7 @@ python -m toil_scripts.batch_alignment.bwa_alignment \
 aws:us-west-2:alignment-run-1 \
 --retryCount 2 \
 --config bwa-config.csv \
---lb KapaHyper \
+--library KapaHyper \
 --ref https://s3-us-west-2.amazonaws.com/cgl-pipeline-inputs/alignment/hg19.fa \
 --amb https://s3-us-west-2.amazonaws.com/cgl-pipeline-inputs/alignment/hg19.fa.amb \
 --ann https://s3-us-west-2.amazonaws.com/cgl-pipeline-inputs/alignment/hg19.fa.ann \
@@ -17,9 +17,8 @@ aws:us-west-2:alignment-run-1 \
 --sa https://s3-us-west-2.amazonaws.com/cgl-pipeline-inputs/alignment/hg19.fa.sa \
 --fai https://s3-us-west-2.amazonaws.com/cgl-pipeline-inputs/alignment/hg19.fa.fai \
 --ssec /home/mesosbox/shared/master.key \
---s3_dir cgl-driver-projects/test/alignment \
+--s3-dir cgl-driver-projects/test/alignment \
 --sseKey=/home/mesosbox/shared/master.key \
 --batchSystem="mesos" \
 --mesosMaster mesos-master:5050 \
---workDir=/var/lib/toil \
---use_bwakit
+--workDir=/var/lib/toil
