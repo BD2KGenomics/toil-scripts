@@ -40,7 +40,7 @@ from collections import OrderedDict
 from toil.job import Job
 
 from toil_scripts import download_from_s3_url
-from toil_scripts.batch_alignment.bwa_alignment import upload_to_s3
+from toil_scripts.lib.urls import s3am_upload
 from toil_scripts.lib.programs import docker_call
 
 def build_parser():
@@ -534,8 +534,10 @@ def upload_or_move_hc(work_dir, input_args, output):
         move_to_output_dir(work_dir, output_dir, output)
 
     elif input_args['s3_dir']:
-        
-        upload_to_s3(work_dir, input_args, output)
+
+        s3am_upload(fpath=os.path.join(work_dir, output),
+                    s3_dir=input_args['s3_dir'],
+                    s3_key_path=input_args['ssec'])
 
     else:
 
