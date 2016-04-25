@@ -29,7 +29,7 @@ from toil.job import Job
 
 from toil_scripts.lib.files import move_files
 from toil_scripts.lib.jobs import map_job
-from toil_scripts.lib.programs import docker_call, mock_mode
+from toil_scripts.lib.programs import docker_call
 from toil_scripts.lib.urls import download_url_job, s3am_upload
 
 
