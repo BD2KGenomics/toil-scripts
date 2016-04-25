@@ -28,7 +28,7 @@ def test_rnaseq_cgl(tmpdir):
         conn = S3Connection()
         b = Bucket(conn, 'cgl-driver-projects')
         k = Key(b)
-        k.key = 'test/ci/IMPROPERLY_PAIRED.ci_test.tar.gz'
+        k.key = 'test/ci/SINGLE-END.ci_test.tar.gz'
         k.delete()
 
 
