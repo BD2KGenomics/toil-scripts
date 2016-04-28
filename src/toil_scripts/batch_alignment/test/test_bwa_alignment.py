@@ -48,5 +48,5 @@ def create_config(path):
     fpath = os.path.join(path, 'config.txt')
     with open(fpath, 'w') as f:
         f.write('ci_test,'
-                'https://s3-us-west-2.amazonaws.com/cgl-pipeline-inputs/alignment/ci/r1.fq.gz,'
-                'https://s3-us-west-2.amazonaws.com/cgl-pipeline-inputs/alignment/ci/r2.fq.gz')
+                'https://s3-us-west-2.amazonaws.com/cgl-pipeline-inputs/alignment/ci/r1_trunc.fq.gz,'
+                'https://s3-us-west-2.amazonaws.com/cgl-pipeline-inputs/alignment/ci/r2_trunc.fq.gz')
