@@ -1,8 +1,4 @@
 # FIXME: replace with bd2k.util.iterables.flatten
-import os
-import shutil
-
-
 def flatten(x):
     """
     Flattens a nested array into a single list
@@ -36,7 +32,7 @@ def sizeof_fmt(num, suffix='B'):
     :return: Human-readable string
     :rtype: str
     """
-    for unit in ['','K','M','G','T','P','E','Z']:
+    for unit in ['', 'K', 'M', 'G', 'T', 'P', 'E', 'Z']:
         if abs(num) < 1024.0:
             return "%3.1f%s%s" % (num, unit, suffix)
         num /= 1024.0
@@ -61,16 +57,10 @@ def partitions(l, partition_size):
         yield l[i:i + partition_size]
 
 
-def copy_to_output_dir(output_dir, fpaths, uuid=None):
-    """
-    A list of files to move from work_dir to output_dir.
+class UserError(Exception):
+    pass
 
-    :param str output_dir: Directory to move files to
-    :param list fpaths: List of filepaths to move
-    :param str uuid: Optional UUID to tag files with
-    """
-    for fpath in fpaths:
-        if uuid is None:
-            shutil.copy(fpath, os.path.join(output_dir, os.path.basename(fpath)))
-        else:
-            shutil.copy(fpath, os.path.join(output_dir, '{}.{}'.format(uuid, os.path.basename(fpath))))
+
+def require(expression, message):
+    if not expression:
+        raise UserError('\n\n' + message + '\n\n')
