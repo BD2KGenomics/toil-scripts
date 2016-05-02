@@ -1,19 +1,19 @@
 ## University of California, Santa Cruz Genomics Institute
 ### Repository of Toil-based Genomic Pipelines
  
- This repository contains a collection of genomic pipelines developed by the UCSC Computational Genomics Lab.
- These pipelines are used on a regular basis in-house and are freely available to anyone who would like to use
- them.
+This repository contains a collection of genomic pipelines developed by the UCSC Computational Genomics Lab.
 
-Pipelines currently supported for the latest version of Toil:
+To install these pipelines, just type: `pip install toil-scripts`
+
+Entrypoints are supplied to pipelines that work with the current stable release of Toil:
     
-- Fastq to BAM alignment (GATK compatible format)
-- Exome variant pipeline
-- UNC best practices RNA-seq pipeline 
-- Our own best practices RNA-seq pipeline (STAR + RSEM, Kallisto)
-- Germline variant pipeline
+- Fastq to BAM alignment: `toil-bwa`
+- CGL RNA-seq Pipeline (hg38): `toil-rnaseq`
+- UNC best practices RNA-seq pipeline (hg19): `toil-rnaseq-unc` 
+- SplAdder alternative splicing pipeline: `toil-spladder`
+- GATK exome variant pipeline: `toil-variant`
 
-Each pipeline has its own README that provides explicit instructions on how to get up and running. 
+Each pipeline has its own README that provides instructions on how to get up and running. 
 The general dependencies for these pipelines are:
 
 1. [Toil](https://github.com/BD2KGenomics/toil)
