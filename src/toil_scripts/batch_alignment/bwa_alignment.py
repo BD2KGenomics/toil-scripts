@@ -29,7 +29,7 @@ from toil.job import Job
 
 from toil_scripts.lib.files import move_files
 from toil_scripts.lib.jobs import map_job
-from toil_scripts.lib.programs import docker_call, mock_mode
+from toil_scripts.lib.programs import docker_call
 from toil_scripts.lib.urls import download_url_job, s3am_upload
 
 
@@ -74,8 +74,7 @@ def parse_config(job, shared_ids, inputs):
                 samples.append((uuid, urls, mock_bam))
     inputs.cores = multiprocessing.cpu_count()
     job.fileStore.logToMaster('Parsed configuration file.')
-    job.addChildJobFn(map_job, download_sample, samples, inputs, shared_ids, cores=inputs.cores,
-                      memory='1M' if mock_mode() else '20 G', disk=inputs.file_size)
+    job.addChildJobFn(map_job, download_sample, samples, inputs, shared_ids, cores=1, disk=inputs.file_size)
 
 
 def download_sample(job, sample, inputs, ids):
@@ -188,6 +187,7 @@ def main():
     args = parser.parse_args()
     # Launch Pipeline
     Job.Runner.startToil(Job.wrapJobFn(download_shared_files, args), args)
+
 
 if __name__ == "__main__":
     main()
