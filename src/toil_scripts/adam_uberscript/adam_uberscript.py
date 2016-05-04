@@ -64,6 +64,7 @@ def launch_cluster(params):
                 '--ssh-opts',
                 '"StrictHostKeyChecking=no"'] +
                role_options(params) +
+               spot_options(params) +
                ['toil'])
     check_call(['cgcloud',
                 'rsync',
@@ -262,10 +263,13 @@ def update_cluster_size(domain, n):
         cluster_size.save()
 
 
-def grow_cluster(num_nodes, instance_type, cluster_name, cluster_type='toil', *options):
+def grow_cluster(num_nodes, instance_type, cluster_name, cluster_type='toil', options=None):
     """
     Grow a cluster by a given number of nodes
     """
+    if options is None:
+        options = []
+
     nodes = []
     num_nodes_left = num_nodes
     while num_nodes_left > 0:
@@ -276,7 +280,7 @@ def grow_cluster(num_nodes, instance_type, cluster_name, cluster_type='toil', *o
                 '--instance-type', instance_type,
                 '--num-workers', str(num_nodes_left),
                 '--cluster-name', cluster_name] +
-               list(options) +
+               options +
                [cluster_type])
         try:
             output = check_output(cmd)
@@ -318,6 +322,15 @@ def role_options(params):
     return options
 
 
+def spot_options(params):
+    """
+    :type params: argparse.Namespace
+    """
+    options = []
+    if params.spot_price:
+        options = ['--spot-bid', str(params.spot_price)]
+    return options
+
 @contextmanager
 def throttle(interval):
     """
@@ -345,7 +358,7 @@ def manage_toil_cluster(params, domain):
                              cluster_size,
                              desired_cluster_size)
                     num_nodes = desired_cluster_size - cluster_size
-                    grow_cluster(num_nodes, params.instance_type, params.cluster_name, *role_options(params))
+                    grow_cluster(num_nodes, params.instance_type, params.cluster_name, options=role_options(params) + spot_options(params))
                     update_cluster_size(domain, desired_cluster_size)
             cluster_size = len(list_nodes(params.cluster_name))
             log.info('Toil cluster is now at %i node(s).', cluster_size)
@@ -615,6 +628,8 @@ def main():
         sp.add_argument('-t', '--instance-type', default='r3.8xlarge' if not mock_mode() else 'c3.large',
                         help='Worker instance type, e.g. m4.large or c3.8xlarge. Defaults to r3.8xlarge in production '
                              'mode. Will always use c3.large in mock mode, regardless of input value.')
+        sp.add_argument('--spot-price', default=None, required=False,
+                        help='Instance spot price if desired.')
     for sp in metric_sp, cluster_sp:
         sp.add_argument('-etc', '--add-to-etc-hosts', default=None, required=False,
                         help='Deprecated. Optional entry to add to /etc/hosts on Toil workers. This should *not* be '
