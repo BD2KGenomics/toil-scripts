@@ -1,6 +1,8 @@
-/.project
 *.pyc
-*~
-*#*
 *.log
-
+/src/*.egg-info
+.cache/
+.eggs/
+test-report.xml
+__pycache__
+venv/
