@@ -28,7 +28,7 @@ def test_rnaseq_cgl(tmpdir):
         conn = S3Connection()
         b = Bucket(conn, 'cgl-driver-projects')
         k = Key(b)
-        k.key = 'test/ci/SINGLE-END.ci_test.tar.gz'
+        k.key = 'test/ci/IMPROPERLY_PAIRED.rnaseq_ci.tar.gz'
         k.delete()
 
 
@@ -36,5 +36,5 @@ def create_config(path):
     """Creates config file for test at path"""
     fpath = os.path.join(path, 'config.txt')
     with open(fpath, 'w') as f:
-        f.write('ci_test,'
-                'https://s3-us-west-2.amazonaws.com/cgl-pipeline-inputs/rnaseq_cgl/ci/test_sample_chr6.tar.gz')
+        f.write('rnaseq_ci,'
+                'https://s3-us-west-2.amazonaws.com/cgl-pipeline-inputs/rnaseq_cgl/ci/chr6_sample.tar.gz')
