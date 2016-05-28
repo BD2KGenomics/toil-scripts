@@ -4,7 +4,7 @@ import shutil
 from boto.s3.connection import S3Connection, Bucket, Key
 
 
-def test_rnaseq_cgl(tmpdir):
+def test_bwa(tmpdir):
     work_dir = str(tmpdir)
     create_config(work_dir)
     subdir = '/mnt/ephemeral/toil-scripts/bwa'

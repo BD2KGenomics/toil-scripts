@@ -54,11 +54,11 @@ be downloaded after creating an account which takes about 1 minute and is free.
     * `syn = synapseclient.Synapse()`
     * `syn.login('foo@bar.com', 'password')`
     * Get the RSEM reference (1 G)
-        * `syn.get('syn5889216')`
+        * `syn.get('syn5889216', downloadLocation='.')`
     * Get the Kallisto index (2 G)
-        * `syn.get('syn5886142')`
+        * `syn.get('syn5886142', downloadLocation='.')`
     * Get the STAR index (25 G)
-        * `syn.get('syn5886182')`
+        * `syn.get('syn5886182', downloadLocation='.')`
 
 
 ## General Usage
@@ -66,7 +66,7 @@ be downloaded after creating an account which takes about 1 minute and is free.
 1. Type `toil-rnaseq generate` to create an editable manifest and config in the current working directory.
 2. Parameterize the pipeline by editing the config.
 3. Fill in the manifest with information pertaining to your samples.
-4. Type "toil-rnaseq run [jobStore]" to execute the pipeline.
+4. Type `toil-rnaseq run [jobStore]` to execute the pipeline.
 
 ## Example Commands
 
@@ -89,21 +89,18 @@ Run a variety of samples locally
 ## Example Config
 
 ```
-{
-    'star-index': 's3://cgl-pipeline-inputs/rnaseq_cgl/ci/starIndex_chr6.tar.gz',
-    'kallisto-index': 's3://cgl-pipeline-inputs/rnaseq_cgl/kallisto_hg38.idx',
-    'rsem-ref': 's3://cgl-pipeline-inputs/rnaseq_cgl/ci/rsem_ref_chr6.tar.gz',
-    'output-dir': /data/my-toil-run,
-    's3-dir': 's3://cgl-driver-projects/test/ci',
-    'ssec': /data/master.key,
-    'gt-key': None,
-    'wiggle': True,
-    'save-bam': True,
-    'fwd-3pr-adapter': 'AGATCGGAAGAG',
-    'rev-3pr-adapter': 'AGATCGGAAGAG',
-    'sudo': None,
-    'ci-test': None
-}
+star-index: s3://cgl-pipeline-inputs/rnaseq_cgl/ci/starIndex_chr6.tar.gz
+kallisto-index: s3://cgl-pipeline-inputs/rnaseq_cgl/kallisto_hg38.idx
+rsem-ref: s3://cgl-pipeline-inputs/rnaseq_cgl/ci/rsem_ref_chr6.tar.gz
+output-dir: /data/my-toil-run
+s3-dir: s3://my-bucket/test/rnaseq
+ssec: 
+gt-key: 
+wiggle: true
+save-bam: true
+ci-test:
+fwd-3pr-adapter: AGATCGGAAGAG
+rev-3pr-adapter: AGATCGGAAGAG
 ```
 
 ## Distributed Run

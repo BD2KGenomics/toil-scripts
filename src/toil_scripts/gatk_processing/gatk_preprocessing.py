@@ -284,8 +284,7 @@ def create_reference_index(job, ref_id, sudo):
     docker_call(work_dir=work_dir, parameters=command,
                 tool='quay.io/ucsc_cgl/samtools:0.1.19--dd5ac549b95eb3e5d166a5e310417ef13651994e',
                 inputs=['ref.fa'],
-                outputs={'ref.fa.fai': None},
-                sudo=sudo)
+                outputs={'ref.fa.fai': None})
     output = os.path.join(work_dir, 'ref.fa.fai')
     assert os.path.exists(output)
     # Write to fileStore
@@ -409,8 +408,7 @@ def remove_supplementary_alignments(job, shared_ids, input_args):
     docker_call(work_dir=work_dir, parameters=command,
                 tool='quay.io/ucsc_cgl/samtools:1.3--256539928ea162949d8a65ca5c79a72ef557ce7c',
                 inputs=['sample.bam'],
-                outputs={'sample.nosuppl.bam': None},
-                sudo=sudo)
+                outputs={'sample.nosuppl.bam': None})
     shared_ids['sample.nosuppl.bam'] = job.fileStore.writeGlobalFile(outpath)
     job.addChildJobFn(sort_sample, shared_ids, input_args)
 
@@ -467,8 +465,7 @@ def mark_dups_sample(job, shared_ids, input_args):
                 env={'JAVA_OPTS':'-Xmx%sg' % input_args['memory']},
                 tool='quay.io/ucsc_cgl/picardtools:1.95--dd5ac549b95eb3e5d166a5e310417ef13651994e',
                 inputs=['sample.sorted.bam'],
-                outputs={'sample.mkdups.bam': None, 'sample.mkdups.bai': None},
-                sudo=sudo)
+                outputs={'sample.mkdups.bam': None, 'sample.mkdups.bai': None})
     shared_ids['sample.mkdups.bam'] = job.fileStore.writeGlobalFile(outpath)
 
     # picard writes the index for file.bam at file.bai, not file.bam.bai
@@ -551,7 +548,7 @@ def indel_realignment(job, shared_ids, input_args):
                         'sample.intervals', 'ref.fa.fai', 'ref.dict',
                         'sample.mkdups.bam.bai'],
                 outputs={'sample.indel.bam': None, 'sample.indel.bai': None},
-                env={'JAVA_OPTS':'-Xmx10g'}, sudo=sudo)
+                env={'JAVA_OPTS':'-Xmx10g'})
 
     # Write to fileStore
     shared_ids['sample.indel.bam'] = job.fileStore.writeGlobalFile(outpath)
@@ -629,7 +626,7 @@ def print_reads(job, shared_ids, input_args):
                 inputs=['ref.fa', 'sample.indel.bam', 'ref.fa.fai', 'ref.dict', 
                         'sample.indel.bam.bai', 'sample.recal.table'],
                 outputs={outfile: None, gatk_outfile_idx: None},
-                env={'JAVA_OPTS':'-Xmx%sg' % input_args['memory']}, sudo=sudo)
+                env={'JAVA_OPTS':'-Xmx%sg' % input_args['memory']})
     
     upload_or_move(job, work_dir, input_args, outfile)
     _move_bai(outpath)

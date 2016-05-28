@@ -11,7 +11,7 @@ import subprocess
 import sys
 import tarfile
 import textwrap
-from ast import literal_eval
+import yaml
 from contextlib import closing
 from subprocess import PIPE
 
@@ -31,8 +31,8 @@ def download_sample(job, sample, config):
     Download sample and store unique attributes
 
     :param JobFunctionWrappingJob job: passed automatically by Toil
-    :param tuple sample:
-    :param Namespace config:
+    :param list sample: Information pertaining to a sample: filetype, paired/unpaired, UUID, and URL
+    :param Namespace config: Argparse Namespace object containing argument inputs
     """
     # Create copy of config that is sample specific
     config = argparse.Namespace(**vars(config))
@@ -44,23 +44,23 @@ def download_sample(job, sample, config):
     # Download or locate local file and place in the jobStore
     tar_id, r1_id, r2_id = None, None, None
     if config.file_type == 'tar':
-        tar_id = job.addChildJobFn(download_url_job, config.url, cghub_key_path=config.gt_key,
+        tar_id = job.addChildJobFn(download_url_job, config.url, cghub_key_path=config.gtkey,
                                    s3_key_path=config.ssec, disk='20G').rv()
     else:
         if config.paired:
             require(len(config.url.split(',')==2), 'Fastq pairs must have 2 URLS separated by comma')
             r1_url, r2_url = config.url.split(',')
-            r1_id = job.addChildJobFn(download_url_job, r1_url, cghub_key_path=config.gt_key,
+            r1_id = job.addChildJobFn(download_url_job, r1_url, cghub_key_path=config.gtkey,
                                       s3_key_path=config.ssec, disk='20G').rv()
-            r2_id = job.addChildJobFn(download_url_job, r2_url, cghub_key_path=config.gt_key,
+            r2_id = job.addChildJobFn(download_url_job, r2_url, cghub_key_path=config.gtkey,
                                       s3_key_path=config.ssec, disk='20G').rv()
         else:
-            r1_id = job.addChildJobFn(download_url_job, config.url, cghub_key_path=config.gt_key,
+            r1_id = job.addChildJobFn(download_url_job, config.url, cghub_key_path=config.gtkey,
                                       s3_key_path=config.ssec, disk='20G').rv()
-    job.addFollowOnJobFn(statically_define_pipeline, config, tar_id, r1_id, r2_id)
+    job.addFollowOnJobFn(static_workflow_declaration, config, tar_id, r1_id, r2_id)
 
 
-def statically_define_pipeline(job, config, tar_id, r1_id, r2_id):
+def static_workflow_declaration(job, config, tar_id, r1_id, r2_id):
     """
     Statically define remainder of pipeline
 
@@ -161,8 +161,6 @@ def cutadapt(job, config, r1_id, r2_id):
                            '/data/R1.fastq', '/data/R2.fastq'])
     # Call: CutAdapt
     base_docker_call = 'docker run --log-driver=none --rm -v {}:/data'.format(work_dir).split()
-    if config.sudo:
-        base_docker_call = ['sudo'] + base_docker_call
     tool = 'quay.io/ucsc_cgl/cutadapt:1.9--6bd44edd2b8f8f17e25c5a268fedaab65fa851d2'
     p = subprocess.Popen(base_docker_call + [tool] + parameters, stderr=PIPE, stdout=PIPE)
     stdout, stderr = p.communicate()
@@ -227,7 +225,7 @@ def kallisto(job, config, r1_cut_id, r2_cut_id):
         parameters.extend(['/data/R1_cutadapt.fastq', '/data/R2_cutadapt.fastq'])
     # Call: Kallisto
     docker_call(tool='quay.io/ucsc_cgl/kallisto:0.42.4--35ac87df5b21a8e8e8d159f26864ac1e1db8cf86',
-                work_dir=work_dir, parameters=parameters, sudo=config.sudo)
+                work_dir=work_dir, parameters=parameters)
     # Tar output files together and store in fileStore
     output_files = [os.path.join(work_dir, x) for x in ['run_info.json', 'abundance.tsv', 'abundance.h5']]
     tarball_files(tar_name='kallisto.tar.gz', file_paths=output_files, output_dir=work_dir)
@@ -283,7 +281,7 @@ def star(job, config, r1_cut_id, r2_cut_id):
         parameters.extend(['--readFilesIn', '/data/R1_cutadapt.fastq', '/data/R2_cutadapt.fastq'])
     # Call: STAR Map
     docker_call(tool='quay.io/ucsc_cgl/star:2.4.2a--bcbd5122b69ff6ac4ef61958e47bde94001cfe80',
-                work_dir=work_dir, parameters=parameters, sudo=config.sudo)
+                work_dir=work_dir, parameters=parameters)
     # Write to fileStore
     bam_id = job.fileStore.writeGlobalFile(os.path.join(work_dir, 'rnaAligned.toTranscriptome.out.bam'))
     # Save Wiggle File
@@ -347,7 +345,7 @@ def rsem(job, config, bam_id):
     if not config.single:
         parameters = ['--paired-end'] + parameters
     docker_call(tool='quay.io/ucsc_cgl/rsem:1.2.25--d4275175cc8df36967db460b06337a14f40d2f21',
-                parameters=parameters, work_dir=work_dir, sudo=config.sudo)
+                parameters=parameters, work_dir=work_dir)
     os.rename(os.path.join(work_dir, output_prefix + '.genes.results'), os.path.join(work_dir, 'rsem_gene.tab'))
     os.rename(os.path.join(work_dir, output_prefix + '.isoforms.results'), os.path.join(work_dir, 'rsem_isoform.tab'))
     # Write to FileStore
@@ -377,7 +375,7 @@ def rsem_postprocess(job, config, rsem_gene_id, rsem_isoform_id):
     job.fileStore.readGlobalFile(rsem_gene_id, os.path.join(work_dir, 'rsem_gene.tab'))
     job.fileStore.readGlobalFile(rsem_isoform_id, os.path.join(work_dir, 'rsem_isoform.tab'))
     # Convert RSEM files into individual .tab files.
-    docker_call(tool='jvivian/rsem_postprocess', parameters=[config.uuid], work_dir=work_dir, sudo=config.sudo)
+    docker_call(tool='jvivian/rsem_postprocess', parameters=[config.uuid], work_dir=work_dir)
     os.rename(os.path.join(work_dir, 'rsem_gene.tab'), os.path.join(work_dir, 'rsem_genes.results'))
     os.rename(os.path.join(work_dir, 'rsem_isoform.tab'), os.path.join(work_dir, 'rsem_isoforms.results'))
     output_files = ['rsem.genes.norm_counts.tab', 'rsem.genes.raw_counts.tab', 'rsem.genes.norm_fpkm.tab',
@@ -388,7 +386,7 @@ def rsem_postprocess(job, config, rsem_gene_id, rsem_isoform_id):
     genes = [x for x in output_files if 'gene' in x]
     isoforms = [x for x in output_files if 'isoform' in x]
     command = ['-g'] + genes + ['-i'] + isoforms
-    docker_call(tool='jvivian/gencode_hugo_mapping', parameters=command, work_dir=work_dir, sudo=config.sudo)
+    docker_call(tool='jvivian/gencode_hugo_mapping', parameters=command, work_dir=work_dir)
     hugo_files = [os.path.splitext(x)[0] + '.hugo' + os.path.splitext(x)[1] for x in output_files]
     # Create tarballs for outputs
     tarball_files('rsem.tar.gz', file_paths=[os.path.join(work_dir, x) for x in output_files], output_dir=work_dir)
@@ -487,30 +485,27 @@ def parse_samples(path_to_manifest=None, sample_urls=None):
 
 def generate_config():
     return textwrap.dedent("""
-    {
         # RNA-seq CGL Pipeline configuration file
-        # This config file is formatted as a Python dictionary { key: value, key: value, ... }
+        # This configuration file is formatted in YAML. Simply write the value (at least one space) after the colon.
         # Edit the values in this configuration file and then rerun the pipeline: "toil-rnaseq run"
         # Just Kallisto or STAR/RSEM can be run by supplying only the inputs to those tools
-        # Comments (beginning with #) do not need to be removed
-        ###############################################################################################
-        'star-index': '',       # Required: URL (http, file, s3) to index tarball used by STAR
-                                # Example: 's3://cgl-pipeline-inputs/rnaseq_cgl/starIndex_hg38_no_alt.tar.gz'
-        'kallisto-index': '',   # Required: URL (http, file, s3) to kallisto index file.
-                                # Example: 's3://cgl-pipeline-inputs/rnaseq_cgl/kallisto_hg38.idx'
-        'rsem-ref': '',         # Required: URL (http, file, s3) to reference tarball used by RSEM
-                                # Example: 's3://cgl-pipeline-inputs/rnaseq_cgl/rsem_ref_hg38_no_alt.tar.gz',
-        'output-dir': None,     # Optional: Provide a full path to where results will appear
-        's3-dir': None,         # Optional: Provide an s3 path (s3://bucket/dir) where results will appear
-        'ssec': None,           # Optional: Provide a full path to a 32-byte key used for SSE-C Encryption in Amazon
-        'gt-key': None,         # Optional: Provide a full path to a CGHub Key used to access GNOS hosted data
-        'wiggle': None,         # Optional: If True, saves a "wiggle" file produced by STAR
-        'save-bam': None ,      # Optional: If True, saves the aligned bam (by coordinate) produced by STAR
-        'sudo': None,           # Optional: If True, will execute Docker with 'sudo' prepended.
-        'ci-test': None,        # Optional: If True, uses resource requirements appropriate for continuous integration
-        'fwd-3pr-adapter': 'AGATCGGAAGAG',  # Adapter sequence to trim. Defaults set for Illumina
-        'rev-3pr-adapter': 'AGATCGGAAGAG'   # Adapter sequence to trim. Defaults set for Illumina
-    }
+        # Comments (beginning with #) do not need to be removed. Optional parameters may be left blank.
+        ##############################################################################################################
+        star-index:             # Required: URL (http, file, s3) to index tarball used by STAR
+                                # Example: s3://cgl-pipeline-inputs/rnaseq_cgl/starIndex_hg38_no_alt.tar.gz\n
+        kallisto-index:         # Required: URL (http, file, s3) to kallisto index file.
+                                # Example: s3://cgl-pipeline-inputs/rnaseq_cgl/kallisto_hg38.idx\n
+        rsem-ref:               # Required: URL (http, file, s3) to reference tarball used by RSEM
+                                # Example: s3://cgl-pipeline-inputs/rnaseq_cgl/rsem_ref_hg38_no_alt.tar.gz\n
+        output-dir:             # Optional: Provide a full path to where results will appear\n
+        s3-dir:                 # Optional: Provide an s3 path (s3://bucket/dir) where results will appear\n
+        ssec:                   # Optional: Provide a full path to a 32-byte key used for SSE-C Encryption in Amazon\n
+        gtkey:                 # Optional: Provide a full path to a CGHub Key used to access GNOS hosted data\n
+        wiggle:                 # Optional: If true, saves a "wiggle" file produced by STAR\n
+        save-bam:               # Optional: If true, saves the aligned bam (by coordinate) produced by STAR\n
+        ci-test:                # Optional: If true, uses resource requirements appropriate for continuous integration\n
+        fwd-3pr-adapter: AGATCGGAAGAG   # Adapter sequence to trim. Defaults set for Illumina\n
+        rev-3pr-adapter: AGATCGGAAGAG   # Adapter sequence to trim. Defaults set for Illumina\n
     """[1:])
 
 
@@ -565,7 +560,7 @@ def main():
 
                   3 -- 4 -- 5
                  /          |
-      0 -- 1 -- 2 ---- 6 ---7 -- 8
+      0 -- 1 -- 2 ---- 6 -- 7
 
     0 = Download sample
     1 = Unpack/Merge fastqs
@@ -574,8 +569,7 @@ def main():
     4 = RSEM Quantification
     5 = RSEM Post-processing
     6 = Kallisto
-    7 = Consoliate output (into a tarball)
-    8 = upload results to S3 (optional)
+    7 = Consoliate output and upload to S3
     =======================================
     Dependencies
     Curl:       apt-get install curl
@@ -628,7 +622,7 @@ def main():
         else:
             samples = parse_samples(sample_urls=args.samples)
         # Parse config
-        parsed_config = {x.replace('-', '_'): y for x, y in literal_eval(open(args.config).read()).iteritems()}
+        parsed_config = {x.replace('-', '_'): y for x, y in yaml.load(open(args.config).read()).iteritems()}
         config = argparse.Namespace(**parsed_config)
         # Config sanity checks
         require(config.kallisto_index or config.star_index,

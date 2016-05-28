@@ -97,7 +97,6 @@ def call_conductor(masterIP, inputs, src, dst):
                  "--conf", "spark.driver.memory=%sg" % inputs["driverMemory"],
                  "--conf", "spark.executor.memory=%sg" % inputs["executorMemory"],
                  "--", "-C", src, dst],
-                sudo = inputs['sudo'],
                 mock=False)
 
 
@@ -117,7 +116,6 @@ def call_adam(masterIP, inputs, arguments):
                 tool = "quay.io/ucsc_cgl/adam:962-ehf--6e7085f8cac4b9a927dc9fb06b48007957256b80",
                 docker_parameters = masterIP.docker_parameters(["--net=host"]),
                 parameters = default_params + arguments,
-                sudo = inputs['sudo'],
                 mock=False)
 
 

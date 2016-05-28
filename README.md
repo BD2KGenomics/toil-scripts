@@ -11,7 +11,7 @@ Entrypoints are supplied to pipelines that work with the current stable release 
 - CGL RNA-seq Pipeline (hg38): `toil-rnaseq`
 - UNC best practices RNA-seq pipeline (hg19): `toil-rnaseq-unc` 
 - SplAdder alternative splicing pipeline: `toil-spladder`
-- GATK exome variant pipeline: `toil-variant`
+- GATK exome variant pipeline: `toil-exome`
 
 Each pipeline has its own README that provides instructions on how to get up and running. 
 The general dependencies for these pipelines are:

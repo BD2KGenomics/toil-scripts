@@ -37,10 +37,11 @@ def download_shared_files(job, inputs):
     """
     Downloads shared files that are used by all samples for alignment
 
+    :param JobFunctionWrappingJob job: passed automatically by Toil
     :param JobFunctionWrappingJob job: Passed by Toil automatically
     :param Namespace inputs: Input arguments (see main)
     """
-    job.fileStore.logToMaster('Downloading shared files for aligment.')
+    job.fileStore.logToMaster('Downloading shared files for alignment.')
 
     shared_files = [inputs.ref, inputs.amb, inputs.ann, inputs.bwt, inputs.pac, inputs.sa, inputs.fai]
     if inputs.alt:
@@ -133,7 +134,7 @@ def run_bwa(job, inputs, ids):
     outputs = {'aligned.aln.bam': inputs.mock_bam}
 
     docker_call(tool='quay.io/ucsc_cgl/bwakit:0.7.12--528bb9bf73099a31e74a7f5e6e3f2e0a41da486e',
-                parameters=parameters, inputs=file_names, outputs=outputs, work_dir=work_dir, sudo=inputs.sudo)
+                parameters=parameters, inputs=file_names, outputs=outputs, work_dir=work_dir)
 
     # BWA insists on adding an `*.aln.sam` suffix, so rename the output file
     output_file = os.path.join(work_dir, '{}.bam'.format(inputs.uuid))
@@ -165,9 +166,6 @@ def build_parser():
                         help='Alternate file for reference build (alt). Necessary for alt aware alignment')
     parser.add_argument('--ssec', default=None, help='Path to Key File for SSE-C Encryption')
     parser.add_argument('--output-dir', default=None, help='full path where final results will be output')
-    parser.add_argument('--sudo', dest='sudo', default=False, action='store_true',
-                        help='Docker usually needs sudo to execute locally, but not when running Mesos '
-                             'or when a member of a Docker group.')
     parser.add_argument('--s3-dir', default=None, help='S3 Directory, starting with bucket name. e.g.: '
                                                        'cgl-driver-projects/ckcc/rna-seq-samples/')
     parser.add_argument('--file-size', default='50G', help='Approximate input file size. Should be given as %d[TGMK], '
