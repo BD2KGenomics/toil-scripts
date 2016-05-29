@@ -104,7 +104,7 @@ def download_sample(job, sample, config):
     config.uuid = uuid
     config.normal = normal_url
     config.tumor = tumor_url
-    config.cores = int(multiprocessing.cpu_count())
+    config.cores = min(config.maxCores, int(multiprocessing.cpu_count()))
     disk = '1G' if config.ci_test else '20G'
     # Download sample bams and launch pipeline
     config.normal_bam = job.addChildJobFn(download_url_job, url=config.normal, s3_key_path=config.ssec,
@@ -359,7 +359,6 @@ def print_reads(job, cores, table, indel_bam, indel_bai, ref, ref_dict, fai, mem
                 work_dir=work_dir, parameters=parameters, env=dict(JAVA_OPTS='-Xmx{}'.format(mem)))
     # Write ouptut to file store
     bam_id = job.fileStore.writeGlobalFile(os.path.join(work_dir, 'sample.bqsr.bam'))
-    bai_id = job.fileStore.writeGlobalFile(os.path.join(work_dir, 'sample.bqsr.bai'))
     return bam_id
 
 
@@ -759,6 +758,7 @@ def main():
         # Parse config
         parsed_config = {x.replace('-', '_'): y for x, y in yaml.load(open(args.config).read()).iteritems()}
         config = argparse.Namespace(**parsed_config)
+        config.maxCores = int(args.maxCores) if args.maxCores else sys.maxint
         # Exome pipeline sanity checks
         if config.preprocessing:
             require(config.reference and config.phase and config.mills and config.dbsnp,
