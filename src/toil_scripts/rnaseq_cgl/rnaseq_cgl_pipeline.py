@@ -377,13 +377,11 @@ def rsem_postprocess(job, config, rsem_gene_id, rsem_isoform_id):
     docker_call(tool='jvivian/rsem_postprocess', parameters=[config.uuid], work_dir=work_dir)
     os.rename(os.path.join(work_dir, 'rsem_gene.tab'), os.path.join(work_dir, 'rsem_genes.results'))
     os.rename(os.path.join(work_dir, 'rsem_isoform.tab'), os.path.join(work_dir, 'rsem_isoforms.results'))
-    output_files = ['rsem.genes.norm_counts.tab', 'rsem.genes.raw_counts.tab', 'rsem.genes.norm_fpkm.tab',
-                    'rsem.genes.norm_tpm.tab', 'rsem.isoform.norm_counts.tab', 'rsem.isoform.raw_counts.tab',
-                    'rsem.isoform.norm_fpkm.tab', 'rsem.isoform.norm_tpm.tab', 'rsem_genes.results',
-                    'rsem_isoforms.results']
+    output_files = ['rsem.genes.norm_counts.tab', 'rsem.genes.raw_counts.tab', 'rsem.isoform.norm_counts.tab',
+                    'rsem.isoform.raw_counts.tab', 'rsem_genes.results', 'rsem_isoforms.results']
     # Perform HUGO gene / isoform name mapping
-    genes = [x for x in output_files if 'gene' in x]
-    isoforms = [x for x in output_files if 'isoform' in x]
+    genes = [x for x in output_files if 'gene.' in x]
+    isoforms = [x for x in output_files if 'isoform.' in x]
     command = ['-g'] + genes + ['-i'] + isoforms
     docker_call(tool='jvivian/gencode_hugo_mapping', parameters=command, work_dir=work_dir)
     hugo_files = [os.path.splitext(x)[0] + '.hugo' + os.path.splitext(x)[1] for x in output_files]
