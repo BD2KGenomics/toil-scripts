@@ -125,7 +125,7 @@ def index_bams(job, config):
     disk = '1G' if config.ci_test else '20G'
     config.normal_bai = job.addChildJobFn(index_bam, config.normal_bam, cores=1, disk=disk).rv()
     config.tumor_bai = job.addChildJobFn(index_bam, config.tumor_bam, cores=1, disk=disk).rv()
-    job.addFollowOnJobFn(pre_processing_declaration, config)
+    job.addFollowOnJobFn(preprocessing_declaration, config)
 
 
 def index_bam(job, bam_id):
@@ -147,7 +147,13 @@ def index_bam(job, bam_id):
     return job.fileStore.writeGlobalFile(os.path.join(work_dir, 'sample.bam.bai'))
 
 
-def pre_processing_declaration(job, config):
+def preprocessing_declaration(job, config):
+    """
+    Statically declare jobs related to preprocessing
+
+    :param JobFunctionWrappingJob job: passed automatically by Toil
+    :param Namespace config: Argparse Namespace object containing argument inputs
+    """
     if config.preprocessing:
         disk = '1G' if config.ci_test else '20G'
         mem = '2G' if config.ci_test else '10G'
@@ -617,9 +623,9 @@ def generate_config():
                             # Example: s3://cgl-pipeline-inputs/variant_hg19/dbsnp_138.hg19.vcf\n
     cosmic:                 # Required: URL to cosmic VCF
                             # Example: s3://cgl-pipeline-inputs/variant_hg19/cosmic.hg19.vcf\n\n
-    run-mutect: true        # Optional: If true, will run MuTect to do mutation calls
-    run-pindel: true        # Optional: Iff true, will run pindel to analyze indels
-    run-muse: true          # Optional: If true, will run MuSe to do mutation calls
+    run-mutect: true        # Optional: If true, will run MuTect to do mutation calls\n
+    run-pindel: true        # Optional: Iff true, will run pindel to analyze indel\n
+    run-muse: true          # Optional: If true, will run MuSe to do mutation calls\n
     preprocessing: true     # Optional: If true, will perform indel realignment and base quality score recalibration\n
     output-dir:             # Optional: Provide a full path to where results will appear\n
     s3-dir:                 # Optional: Provide an s3 path (s3://bucket/dir) where results will appear\n
@@ -658,7 +664,7 @@ def generate_file(file_path, generate_func):
 def main():
     """
     Computational Genomics Lab, Genomics Institute, UC Santa Cruz
-    Toil exome variant pipeline
+    Toil exome pipeline
 
     Perform variant analysis given a pair of tumor/normal BAM files.
     Samples are optionally preprocessed (indel realignment and base quality score recalibration)
@@ -666,10 +672,10 @@ def main():
     containing the output of output of MuTect.
 
     General usage:
-    1. Type "toil-variant generate" to create an editable manifest and config in the current working directory.
+    1. Type "toil-exome generate" to create an editable manifest and config in the current working directory.
     2. Parameterize the pipeline by editing the config.
     3. Fill in the manifest with information pertaining to your samples.
-    4. Type "toil-variant run [jobStore]" to execute the pipeline.
+    4. Type "toil-exome run [jobStore]" to execute the pipeline.
 
     Please read the README.md located in the source directory or at:
     https://github.com/BD2KGenomics/toil-scripts/tree/master/src/toil_scripts/exome_variant_pipeline
