@@ -1,92 +1,137 @@
 ## University of California, Santa Cruz Genomics Institute
-### Guide: Running Exome Variant Pipeline (GATK pre-processing, MuTect, MuSe, Pindel)
+### Guide: Running the CGL Exome Pipeline using Toil
 
 This guide attempts to walk the user through running this pipeline from start to finish. If there are any questions
 please contact John Vivian (jtvivian@gmail.com). If you find any errors or corrections please feel free to make a 
 pull request.  Feedback of any kind is appreciated.
 
 ## Overview
-This pipeline accepts a tumor/normal (T/N) pair of exome BAMFILES and produces a tarball (tar.gz) file for a
-given sample that contains:
 
-    MuTect output (.vcf, .cov, .out)
-    Pindel output (including .vcf conversions)
-    MuSe output
-    
-The output tarball is *stamped* with the UUID for the sample (e.g. UUID.tar.gz).
+A pair of Tumor/Normal exome BAMs are preprocessed (GATK), indels are found (Pindel), and variants are
+called with two mutation callers (MuTect and MuSe).  This pipeline is modular — any part of the 
+pipeline can be run on it's own. If preprocessing is selected, it will always occur before any of the other tools.
+
+This pipeline produces a tarball (tar.gz) file for a given sample that contains:
+
+    MuTect: Mutect.vcf, Mutect.cov, Mutect.out
+    Pindel: 
+    MuSe: Muse.vcf
+
+The output tarball is *stamped* with the UUID for the sample (e.g. UUID.tar.gz). 
+
+## Installation
+
+Toil-scripts is now pip installable! `pip install toil-scripts` for a toil-stable version 
+or `pip install --pre toil-scripts` for cutting edge development version.
+
+Type: `toil-exome` to get basic help menu and instructions
 
 ## Dependencies
+
 This pipeline has been tested on Ubuntu 14.04, but should also run on other unix based systems.  `apt-get` and `pip`
-often require `sudo` privilege, so if the below commands fail, try prepending `sudo`.  If you do not have sudo 
-privileges you will need to build these tools from source, or bug a sysadmin (they don't mind). 
+often require `sudo` privilege, so if the below commands fail, try prepending `sudo`.  If you do not have `sudo` 
+privileges you will need to build these tools from source, or bug a sysadmin about how to get them (they don't mind). 
 
 #### General Dependencies
+
     1. Python 2.7
     2. Curl         apt-get install curl
     3. Docker       http://docs.docker.com/engine/installation/
 
 #### Python Dependencies
+
     1. Toil         pip install toil
-    2. Boto         pip install boto (optional, only needed if uploading results to S3)
+    2. S3AM         pip install --pre s3am (optional, needed for uploading output to S3)
+
+## Inputs
+
+The CGL exome pipeline requires input files in order to run. These files are hosted on Synapse and can 
+be downloaded after creating an account which takes about 1 minute and is free. 
+
+* Register for a [Synapse account](https://www.synapse.org/#!RegisterAccount:0)
+* Either download the samples from the [website GUI](https://www.synapse.org/#!Synapse:syn5886029) or use the Python API
+* `pip install synapseclient`
+* `python`
+    * `import synapseclient`
+    * `syn = synapseclient.Synapse()`
+    * `syn.login('foo@bar.com', 'password')`
+    * Get the Reference Genome (3 G)
+        * `syn.get('syn6128232', downloadLocation='.')`
+    * Get the Phase VCF (0.3 G)
+        * `syn.get('syn6128233', downloadLocation='.')`
+    * Get the Mills VCF (0.1 G)
+        * `syn.get('syn6128236', downloadLocation='.')`
+    * Get the DBSNP VCF (10 G)
+        * `syn.get('syn6128237', downloadLocation='.')`
+    * Get the Cosmic VCF (0.01 G)
+        * `syn.get('syn6128235', downloadLocation='.')`
+
+
+## General Usage
  
-## Getting Started
-#### Running a single sample locally
-From the BD2KGenomics toil-scripts Github repository, download the following files to the same directory.
+1. Type `toil-exome generate` to create an editable manifest and config in the current working directory.
+2. Parameterize the pipeline by editing the config.
+3. Fill in the manifest with information pertaining to your samples.
+4. Type `toil-exome run [jobStore]` to execute the pipeline.
 
-    1. toil-scripts/exome_variant_pipeline/exome_variant_pipeline.py
-    2. toil-scripts/exome_variant_pipeline/launch_variant_hg19.sh
+## Example Commands
 
-The bash script `launch_variant_hg19.sh` contains all of the parameters required to run this pipeline, although you 
-will likely want to modify a couple lines as it assumes everything will be staged from your home directory.
+Run sample(s) locally using the manifest
+1. `toil-exome generate`
+2. Fill in config and manifest
+3. `toil-rnaseq run ./example-jobstore`
 
-| Parameter                 | Function                                                                                                                              |
-|---------------------------|---------------------------------------------------------------------------------------------------------------------------------------|
-| 1st argument (unlabelled) | Path to where the jobStore will exist.  The jobStore hosts intermediate files during runtime                                          |
-| `--config`                | Path to the config file. With the format:  UUID,Normal_URL,Tumor_URL                                                                  |
-| `--retryCount`            | OPTIONAL: Number of times a failed job will retried. Useful for non-systemic failures (HTTP requests, etc)                            |
-| `--ssec`                  | OPTIONAL: Path to a master key if input files are encrypted in S3                                                                     |
-| `--output_dir`            | OPTIONAL: Directory where final output of pipeline will be placed                                                                     |
-| `--s3_dir`                | OPTIONAL: S3 "Directory" (bucket + directories)                                                                                       |
-| `--workDir`               | OPTIONAL: Location where tmp files will be placed during pipeline run.,If not used, defaults to TMPDIR environment variable.          |
-| `--sudo`                  | OPTIONAL: Prepends "sudo" to all docker commands. Necessary if user is not a member of a docker group or does not have root privilege |
-| `--restart`               | OPTIONAL: Restarts pipeline after failure, requires presence of an existing jobStore.                                                 |
+Toil options can be appended to `toil-exome run`, for example:
+`toil-exome run ./example-jobstore --retryCount=1 --workDir=/data`
 
-The first argument (location of the jobStore) and the directory set in `--workDir`, need *plenty* of space to store 
-intermediate files during pipeline execution.  Change those parameters to point to the appropriate scratch space or
-wherever there exists sufficient storage. The servers I have tested on have 700GB of disk space, which is plenty,
-but ultimately this is contingent upon sample size.
+For a complete list of Toil options, just type `toil-exome run -h`
 
-#### Running a sample on a batch system (gridEngine, Parasol, etc).
-To run your pipeline using the gridEngine batch system, simply add the argument `--batchSystem=gridEngine` to the launch
-script.  We currently support Grid Engine, Parasol, and Mesos. 
- 
-#### Running batches of samples
-`--config` accepts a path to a CSV file that **must** follow the format of one sample 
-per line: UUID,url_to_fastq1,url_to_fastq2
+Run a variety of samples locally
+1. `toil-exome generate-config`
+2. Fill in config
+3. `toil-exome run ./example-jobstore --retryCount=1 --workDir=/data --samples \
+    s3://example-bucket/sample_1.tar file:///full/path/to/sample_2.tar https://sample-depot.com/sample_3.tar`
 
-# Advanced: Running the Pipeline on a Distributed Cloud Cluster (using Mesos)
-From the BD2KGenomics toil-scripts Github repository, download the following files which will run on the head node.
+## Example Config
 
-    1. toil-scripts/exome_variant_pipeline/exome_variant_pipeline.py
-    2. toil-scripts/exome_variant_pipeline/launch_variant_hg19_mesos.sh
-    3. toil-scripts/exome_variant_pipeline/exome_variant_config.csv
-    
-It is outside the scope of this guide to explain how to setup a distributed cloud cluster.  I recommend taking a 
-look at the BD2KGenomics tool: [CGCloud](https://github.com/BD2KGenomics/cgcloud), which can setup a distributed 
-cloud cluster using the Mesos batch system in AWS.  Please do not direct questions related to CGCloud or 
-setting up a distributed cluster to the author of this pipeline. 
+HG19
+```
+reference: s3://cgl-pipeline-inputs/variant_hg19/hg19.fa                     
+phase: s3://cgl-pipeline-inputs/variant_hg19/1000G_phase1.indels.hg19.sites.vcf                  
+mills: s3://cgl-pipeline-inputs/variant_hg19/Mills_and_1000G_gold_standard.indels.hg19.sites.vcf
+dbsnp: s3://cgl-pipeline-inputs/variant_hg19/dbsnp_138.hg19.vcf
+cosmic: s3://cgl-pipeline-inputs/variant_hg19/cosmic.hg19.vcf                 
+run-mutect: true        
+run-pindel: true        
+run-muse: true          
+preprocessing: true     
+output-dir: /data/my-toil-run          
+s3-dir: s3://my-bucket/test/exome
+ssec:                   
+gtkey:                  
+ci-test:
+```
 
-A launch script (`launch_variant_hg19_mesos.sh`) has been prepared that will run on the head node of the Mesos cluster, scheduling jobs to the worker
-nodes that exist within the cluster.
+B37
+```
+reference: https://s3-us-west-2.amazonaws.com/cgl-pipeline-inputs/variant_b37/Homo_sapiens_assembly19.fasta
+phase: https://s3-us-west-2.amazonaws.com/cgl-pipeline-inputs/variant_b37/1000G_phase1.indels.hg19.sites.fixed.vcf
+mills: https://s3-us-west-2.amazonaws.com/cgl-pipeline-inputs/variant_b37/Mills_and_1000G_gold_standard.indels.hg19.sites.fixed.vcf
+dbsnp: https://s3-us-west-2.amazonaws.com/cgl-pipeline-inputs/variant_b37/dbsnp_132_b37.leftAligned.vcf
+cosmic: https://s3-us-west-2.amazonaws.com/cgl-pipeline-inputs/variant_b37/b37_cosmic_v54_120711.vcf
+run-mutect: true        
+run-pindel: true        
+run-muse: true          
+preprocessing: true     
+output-dir:          
+s3-dir:                 
+ssec:                   
+gtkey:                  
+ci-test:
+```
 
-Explanation of additional parameters
+## Distributed Run
 
-| Parameter     | Function                                                                                                                 |
-|---------------|--------------------------------------------------------------------------------------------------------------------------|
-| 1st argument  | This now points to an AWS jobStore                                                                                       |
-| `--batchSystem` | Path to the config csv file OR the sample.tar.  UUID for the sample is based off the filename before the .tar extension. |
-| `--masterIP`    | A boilerplate argument that indicates what port to use                                                                   |
-| `--sseKey`      | OPTIONAL: Encrypts intermediate files when using cloud jobStore.
- 
-## Additional Information
-Launch scripts are provided for bams that have been aligned to b37, hg19, and hg38.
+To run on a distributed AWS cluster, see [CGCloud](https://github.com/BD2KGenomics/cgcloud) for instance provisioning, 
+then run `toil-exome run aws:us-west-2:example-jobstore-bucket --batchSystem=mesos --mesosMaster mesos-master:5050`
+to use the AWS job store and mesos batch system. 

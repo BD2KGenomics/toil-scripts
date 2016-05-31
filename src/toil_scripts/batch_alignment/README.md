@@ -38,7 +38,7 @@ It is likely that the job store positional argument, `--workDir`, and `--output-
 To run a pipeline after dependencies have been installed, simply:
 
 * `git clone https://github.com/BD2KGenomics/toil-scripts`
-* `/toil-scripts/src/toil_scripts/spladder_pipeline/launch_bwa_hg38_no_alt.sh`
+* `/toil-scripts/src/toil_scripts/batch_alignment/launch_bwa_hg38_no_alt.sh`
 
 Due to PYTHONPATH issues, help can be found by typing:
 

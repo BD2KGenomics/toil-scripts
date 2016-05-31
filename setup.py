@@ -32,7 +32,8 @@ kwargs = dict(
     install_requires=[
         'toil==' + toil_version,
         'boto==2.38.0', # FIXME: Make an extra
-        'tqdm==3.8.0'], # FIXME: Remove once ADAM stops using it (superfluous import)
+        'tqdm==3.8.0', # FIXME: Remove once ADAM stops using it (superfluous import)
+        'pyyaml==3.11'],
     tests_require=[
         'pytest==2.8.3'],
     package_dir={'': 'src'},
@@ -43,7 +44,7 @@ kwargs = dict(
             'toil-rnaseq = toil_scripts.rnaseq_cgl.rnaseq_cgl_pipeline:main',
             'toil-rnaseq-unc = toil_scripts.rnaseq_unc.rnaseq_unc_pipeline:main',
             'toil-spladder = toil_scripts.spladder_pipeline.spladder_pipeline:main',
-            'toil-variant = toil_scripts.exome_variant_pipeline.exome_variant_pipeline:main']})
+            'toil-exome = toil_scripts.exome_variant_pipeline.exome_variant_pipeline:main']})
 
 
 class PyTest(TestCommand):

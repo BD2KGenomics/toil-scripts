@@ -13,6 +13,7 @@ virtualenv venv
 . venv/bin/activate
 make develop
 make test
+make clean
 rm -rf bin s3am
 make pypi
 rm -rf venv

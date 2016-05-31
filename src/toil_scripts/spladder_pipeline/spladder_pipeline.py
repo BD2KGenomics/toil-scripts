@@ -217,10 +217,10 @@ def star(job, inputs, r1_cutadapt, r2_cutadapt):
                   '--readFilesIn', '/data/R1_cutadapt.fastq', '/data/R2_cutadapt.fastq']
     # Call: STAR Map
     docker_call(tool='quay.io/ucsc_cgl/star:2.4.2a--bcbd5122b69ff6ac4ef61958e47bde94001cfe80',
-                work_dir=work_dir, parameters=parameters, sudo=inputs.sudo)
+                work_dir=work_dir, parameters=parameters)
     # Call Samtools Index
     index_command = ['index', '/data/rnaAligned.sortedByCoord.out.bam']
-    docker_call(work_dir=work_dir, parameters=index_command, sudo=inputs.sudo,
+    docker_call(work_dir=work_dir, parameters=index_command,
                 tool='quay.io/ucsc_cgl/samtools:1.3--256539928ea162949d8a65ca5c79a72ef557ce7c')
     # fileStore
     bam_id = job.fileStore.writeGlobalFile(os.path.join(work_dir, 'rnaAligned.sortedByCoord.out.bam'))
@@ -271,7 +271,7 @@ def variant_calling_and_qc(job, inputs, bam_id, bai_id):
                   '-n', 'alignment.bam',
                   '-a', 'annotation.gtf',
                   '-m', 'annotation.m53']
-    docker_call(work_dir=work_dir, parameters=qc_command, sudo=inputs.sudo,
+    docker_call(work_dir=work_dir, parameters=qc_command,
                 tool='jvivian/checkbias:612f129--b08a1fb6526a620bbb0304b08356f2ae7c3c0ec3')
     # Write output to fileStore and return ids
     output_tsv = glob(os.path.join(work_dir, '*counts.tsv*'))[0]
