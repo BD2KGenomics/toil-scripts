@@ -38,8 +38,7 @@ def download_sample(job, sample, config):
     config = argparse.Namespace(**vars(config))
     config.file_type, config.paired, config.uuid, config.url = sample
     config.paired = True if config.paired == 'paired' else False
-    config.single = True if config.paired == 'single' else False
-    config.cores = min(config.maxCores, multiprocessing.cpu_count())
+    config.cores = multiprocessing.cpu_count()
     job.fileStore.logToMaster('Downloading sample: {}'.format(config.uuid))
     # Download or locate local file and place in the jobStore
     tar_id, r1_id, r2_id = None, None, None
@@ -193,35 +192,7 @@ def cutadapt(job, config, r1_id, r2_id):
     if config.kallisto_index:
         cores = min(config.cores, 16)
         kallisto_output = job.addChildJobFn(kallisto, config, r1_cut_id, r2_cut_id, cores=cores, disk=disk).rv()
-    fastqc_output = job.addChildJobFn(fastqc, config, r1_cut_id, r2_cut_id).rv()
-    return rsem_output, kallisto_output, fastqc_output, config.single, config.improper_pair
-
-
-def fastqc(job, config, r1_id, r2_id):
-    """
-    Run Fastqc on the input reads
-
-    :param JobFunctionWrappingJob job: passed automatically by Toil
-    :param Namespace config: Argparse Namespace object containing argument inputs
-    :param str r1_id: FileStoreID of fastq read 1
-    :param str r2_id: FileStoreID of fastq read 2
-    :return: FileStoreID of fastQC output (tarball)
-    :rtype: str
-    """
-    job.fileStore.logToMaster('FastQC: {}'.format(config.uuid))
-    work_dir = job.fileStore.getLocalTempDir()
-    job.fileStore.readGlobalFile(r1_id, os.path.join(work_dir, 'R1.fastq'))
-    parameters = ['/data/R1.fastq']
-    output_names = ['R1_fastqc.html']
-    if r2_id:
-        job.fileStore.readGlobalFile(r2_id, os.path.join(work_dir, 'R2.fastq'))
-        parameters.extend(['-t', '2', '/data/R2.fastq'])
-        output_names.append('R2_fastqc.html')
-    docker_call(tool='quay.io/ucsc_cgl/fastqc:0.11.5--be13567d00cd4c586edf8ae47d991815c8c72a49',
-                work_dir=work_dir, parameters=parameters)
-    output_files = [os.path.join(work_dir, x) for x in output_names]
-    tarball_files(tar_name='fastqc.tar.gz', file_paths=output_files, output_dir=work_dir)
-    return job.fileStore.writeGlobalFile(os.path.join(work_dir, 'fastqc.tar.gz'))
+    return rsem_output, kallisto_output, config.single, config.improper_pair
 
 
 def kallisto(job, config, r1_cut_id, r2_cut_id):
