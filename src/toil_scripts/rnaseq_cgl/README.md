@@ -24,6 +24,15 @@ or `pip install --pre toil-scripts` for cutting edge development version.
 
 Type: `toil-rnaseq` to get basic help menu and instructions
 
+Our software lead prefers installation of python projects into a virtualenv. 
+
+- `virtualenv --system-site-packages ~/toil-scripts` 
+- `source ~/toil-scripts/bin/activate`
+- `pip install toil-scripts`
+
+`--system-site-packages` is only needed as a flag if there are dependencies (like Mesos) installed on the system that 
+are needed by the pipeline. 
+
 ## Dependencies
 
 This pipeline has been tested on Ubuntu 14.04, but should also run on other unix based systems.  `apt-get` and `pip`
