@@ -223,21 +223,33 @@ def generate_config():
         # Just Kallisto or STAR/RSEM can be run by supplying only the inputs to those tools
         # Comments (beginning with #) do not need to be removed. Optional parameters may be left blank.
         ##############################################################################################################
-        star-index:             # Required: URL (http, file, s3) to index tarball used by STAR
-                                # Example: s3://cgl-pipeline-inputs/rnaseq_cgl/starIndex_hg38_no_alt.tar.gz\n
-        kallisto-index:         # Required: URL (http, file, s3) to kallisto index file.
-                                # Example: s3://cgl-pipeline-inputs/rnaseq_cgl/kallisto_hg38.idx\n
-        rsem-ref:               # Required: URL (http, file, s3) to reference tarball used by RSEM
-                                # Example: s3://cgl-pipeline-inputs/rnaseq_cgl/rsem_ref_hg38_no_alt.tar.gz\n
-        output-dir:             # Optional: Provide a full path to where results will appear\n
-        s3-dir:                 # Optional: Provide an s3 path (s3://bucket/dir) where results will appear\n
-        ssec:                   # Optional: Provide a full path to a 32-byte key used for SSE-C Encryption in Amazon\n
-        gtkey:                 # Optional: Provide a full path to a CGHub Key used to access GNOS hosted data\n
-        wiggle:                 # Optional: If true, saves a "wiggle" file produced by STAR\n
-        save-bam:               # Optional: If true, saves the aligned bam (by coordinate) produced by STAR\n
-        ci-test:                # Optional: If true, uses resource requirements appropriate for continuous integration\n
-        fwd-3pr-adapter: AGATCGGAAGAG   # Adapter sequence to trim. Defaults set for Illumina\n
-        rev-3pr-adapter: AGATCGGAAGAG   # Adapter sequence to trim. Defaults set for Illumina\n
+        # Required: URL (http, file, s3) to index tarball used by STAR
+        # Example: s3://cgl-pipeline-inputs/rnaseq_cgl/starIndex_hg38_no_alt.tar.gz
+        star-index: \n
+        # Required: URL (http, file, s3) to kallisto index file.
+        # Example: s3://cgl-pipeline-inputs/rnaseq_cgl/kallisto_hg38.idx
+        kallisto-index: \n
+        # Required: URL (http, file, s3) to reference tarball used by RSEM
+        # Example: s3://cgl-pipeline-inputs/rnaseq_cgl/rsem_ref_hg38_no_alt.tar.gz
+        rsem-ref: \n
+        # Optional: If true, will preprocess samples with cutadapt using adapter sequences.
+        cutadapt: true\n
+        # Adapter sequence to trim. Defaults set for Illumina
+        fwd-3pr-adapter: AGATCGGAAGAG \n
+        # Adapter sequence to trim (for reverse strand). Defaults set for Illumina
+        rev-3pr-adapter: AGATCGGAAGAG \n
+        # Optional: Provide a full path to where results will appear
+        output-dir: \n
+        # Optional: Provide an s3 path (s3://bucket/dir) where results will appear
+        s3-dir: \n
+        # Optional: Provide a full path to a 32-byte key used for SSE-C Encryption in Amazon
+        ssec: \n
+        # Optional: Provide a full path to a CGHub Key used to access GNOS hosted data
+        gtkey: \n
+        # Optional: If true, saves the aligned bam (by coordinate) produced by STAR
+        save-bam: \n
+        # Optional: If true, uses resource requirements appropriate for continuous integration
+        ci-test: \n
     """[1:])
 
 

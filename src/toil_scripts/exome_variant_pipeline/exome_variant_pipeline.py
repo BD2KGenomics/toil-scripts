@@ -613,25 +613,39 @@ def generate_config():
     # URLs can take the form: http://, file://, s3://, gnos://.
     # Comments (beginning with #) do not need to be removed. Optional parameters may be left blank
     ####################################################################################################################
-    reference:              # Required: URL to reference genome
-                            # Example: s3://cgl-pipeline-inputs/variant_hg19/hg19.fa\n
-    phase:                  # Required: URL to phase indels VCF
-                            # Example: s3://cgl-pipeline-inputs/variant_hg19/1000G_phase1.indels.hg19.sites.vcf\n
-    mills:                  # Required: URL to Mills indel VCF
-                            # Example: s3://cgl-pipeline-inputs/variant_hg19/Mills_and_1000G_gold_standard.indels.hg19.sites.vcf\n
-    dbsnp:                  # Required: URL to dbsnp VCF
-                            # Example: s3://cgl-pipeline-inputs/variant_hg19/dbsnp_138.hg19.vcf\n
-    cosmic:                 # Required: URL to cosmic VCF
-                            # Example: s3://cgl-pipeline-inputs/variant_hg19/cosmic.hg19.vcf\n\n
-    run-mutect: true        # Optional: If true, will run MuTect to do mutation calls\n
-    run-pindel: true        # Optional: Iff true, will run pindel to analyze indel\n
-    run-muse: true          # Optional: If true, will run MuSe to do mutation calls\n
-    preprocessing: true     # Optional: If true, will perform indel realignment and base quality score recalibration\n
-    output-dir:             # Optional: Provide a full path to where results will appear\n
-    s3-dir:                 # Optional: Provide an s3 path (s3://bucket/dir) where results will appear\n
-    ssec:                   # Optional: Provide a full path to a 32-byte key used for SSE-C Encryption in Amazon\n
-    gtkey:                  # Optional: Provide a full path to a CGHub Key used to access GNOS hosted data\n
-    ci-test:                # Optional: If true, uses resource requirements appropriate for continuous integration\n
+    # Required: URL to reference genome
+    # Example: s3://cgl-pipeline-inputs/variant_hg19/hg19.fa
+    reference: \n
+    # Required: URL to phase indels VCF
+    # Example: s3://cgl-pipeline-inputs/variant_hg19/1000G_phase1.indels.hg19.sites.vcf
+    phase: \n
+    # Required: URL to Mills indel VCF
+    # Example: s3://cgl-pipeline-inputs/variant_hg19/Mills_and_1000G_gold_standard.indels.hg19.sites.vcf
+    mills: \n
+    # Required: URL to dbsnp VCF
+    # Example: s3://cgl-pipeline-inputs/variant_hg19/dbsnp_138.hg19.vcf
+    dbsnp: \n
+    # Required: URL to cosmic VCF
+    # Example: s3://cgl-pipeline-inputs/variant_hg19/cosmic.hg19.vcf
+    cosmic: \n
+    # Optional: If true, will run MuTect to do mutation calls
+    run-mutect: true\n
+    # Optional: If true, will run pindel to analyze indel
+    run-pindel: true\n
+    # Optional: If true, will run MuSe to do mutation calls
+    run-muse: true\n
+    # Optional: If true, will perform indel realignment and base quality score recalibration
+    preprocessing: true\n
+    # Optional: Provide a full path to where results will appear
+    output-dir: \n
+    # Optional: Provide an s3 path (s3://bucket/dir) where results will appear
+    s3-dir: \n
+    # Optional: Provide a full path to a 32-byte key used for SSE-C Encryption in Amazon
+    ssec: \n
+    # Optional: Provide a full path to a CGHub Key used to access GNOS hosted data
+    gtkey: \n
+    # Optional: If true, uses resource requirements appropriate for continuous integration
+    ci-test: \n
     """[1:])
 
 
