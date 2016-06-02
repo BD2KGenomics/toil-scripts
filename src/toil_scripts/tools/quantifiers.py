@@ -116,11 +116,11 @@ def run_rsem_postprocess(job, uuid, rsem_gene_id, rsem_isoform_id):
     output_files = ['rsem.genes.norm_counts.tab', 'rsem.genes.raw_counts.tab', 'rsem.isoform.norm_counts.tab',
                     'rsem.isoform.raw_counts.tab', 'rsem_genes.results', 'rsem_isoforms.results']
     # Perform HUGO gene / isoform name mapping
-    genes = [x for x in output_files if 'gene.' in x]
-    isoforms = [x for x in output_files if 'isoform.' in x]
+    genes = [x for x in output_files if 'rsem.genes' in x]
+    isoforms = [x for x in output_files if 'rsem.isoform' in x]
     command = ['-g'] + genes + ['-i'] + isoforms
     docker_call(tool='jvivian/gencode_hugo_mapping', parameters=command, work_dir=work_dir)
-    hugo_files = [os.path.splitext(x)[0] + '.hugo' + os.path.splitext(x)[1] for x in output_files]
+    hugo_files = [os.path.splitext(x)[0] + '.hugo' + os.path.splitext(x)[1] for x in genes + isoforms]
     # Create tarballs for outputs
     tarball_files('rsem.tar.gz', file_paths=[os.path.join(work_dir, x) for x in output_files], output_dir=work_dir)
     tarball_files('rsem_hugo.tar.gz', [os.path.join(work_dir, x) for x in hugo_files], output_dir=work_dir)

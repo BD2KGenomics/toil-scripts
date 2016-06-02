@@ -1,6 +1,5 @@
 #!/usr/bin/env python2.7
 import argparse
-from glob import glob
 import multiprocessing
 import os
 import subprocess
@@ -8,6 +7,7 @@ import sys
 import tarfile
 import textwrap
 from contextlib import closing
+from glob import glob
 from urlparse import urlparse
 
 import yaml
@@ -416,7 +416,7 @@ def run_pindel(job, cores, normal_bam, normal_bai, tumor_bam, tumor_bai, ref, fa
     """
     Calls Pindel to compute indels / deletions
 
-    :param JobFunctionWrappingJob job: passed automatically by Toil
+    :param JobFunctionWrappingJob job: Passed automatically by Toil
     :param int cores: Maximum number of cores on host node
     :param str normal_bam: Normal BAM FileStoreID
     :param str normal_bai: Normal BAM index FileStoreID
@@ -680,10 +680,9 @@ def main():
     Computational Genomics Lab, Genomics Institute, UC Santa Cruz
     Toil exome pipeline
 
-    Perform variant analysis given a pair of tumor/normal BAM files.
+    Perform variant / indel analysis given a pair of tumor/normal BAM files.
     Samples are optionally preprocessed (indel realignment and base quality score recalibration)
-    before variant analysis is performed using MuTect.  The final output of this pipeline is a tarball
-    containing the output of output of MuTect.
+    The output of this pipeline is a tarball containing results from MuTect, MuSe, and Pindel.
 
     General usage:
     1. Type "toil-exome generate" to create an editable manifest and config in the current working directory.
@@ -739,10 +738,10 @@ def main():
     subparsers.add_parser('generate', help='Generates a config and manifest in the current working directory.')
     # Run subparser
     parser_run = subparsers.add_parser('run', help='Runs the CGL exome pipeline')
-    parser_run.add_argument('--config', default='toil-exome.config', type=str,
+    parser_run.add_argument('--config', default='config-toil-exome.yaml', type=str,
                             help='Path to the (filled in) config file, generated with "generate-config". '
                                  '\nDefault value: "%(default)s"')
-    parser_run.add_argument('--manifest', default='toil-exome-manifest.tsv', type=str,
+    parser_run.add_argument('--manifest', default='manifest-toil-exome.tsv', type=str,
                             help='Path to the (filled in) manifest file, generated with "generate-manifest". '
                             '\nDefault value: "%(default)s"')
     parser_run.add_argument('--normal', default=None, type=str,
@@ -763,9 +762,9 @@ def main():
     # Parse subparsers related to generation of config and manifest
     cwd = os.getcwd()
     if args.command == 'generate-config' or args.command == 'generate':
-        generate_file(os.path.join(cwd, 'toil-rnaseq.config'), generate_config)
+        generate_file(os.path.join(cwd, 'config-toil-exome.yaml'), generate_config)
     if args.command == 'generate-manifest' or args.command == 'generate':
-        generate_file(os.path.join(cwd, 'toil-rnaseq-manifest.tsv'), generate_manifest)
+        generate_file(os.path.join(cwd, 'manifest-toil-exome.tsv'), generate_manifest)
     # Pipeline execution
     elif args.command == 'run':
         require(os.path.exists(args.config), '{} not found. Please run '

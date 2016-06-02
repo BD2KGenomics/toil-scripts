@@ -26,7 +26,7 @@ or `pip install --pre toil-scripts` for cutting edge development version.
 
 Type: `toil-exome` to get basic help menu and instructions
 
-Our software lead prefers installation of python projects into a virtualenv. 
+To decrease the chance of versioning conflicts, install toil-scripts into a virtualenv:
 
 - `virtualenv --system-site-packages ~/toil-scripts` 
 - `source ~/toil-scripts/bin/activate`
