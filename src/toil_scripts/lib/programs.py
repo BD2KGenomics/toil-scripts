@@ -123,11 +123,12 @@ def docker_call(tool,
                 return subprocess.check_output(docker_call)
             else:
                 subprocess.check_call(docker_call)
-
-    except subprocess.CalledProcessError:
-        raise RuntimeError('docker command returned a non-zero exit status. Check error logs.')
-    except OSError:
-        raise RuntimeError('docker not found on system. Install on all nodes.')
+    finally:
+        # Fix root ownership of output files
+        base_docker_call.append('--entrypoint=chown')
+        stat = os.stat(work_dir)
+        command = base_docker_call + [tool] + ['-R', '{}:{}'.format(stat.st_uid, stat.st_gid), '/data']
+        subprocess.check_call(command)
 
     for filename in outputs.keys():
         if not os.path.isabs(filename):
