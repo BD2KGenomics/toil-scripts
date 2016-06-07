@@ -31,8 +31,8 @@ import logging
 import errno
 from toil.job import Job
 
-from toil_scripts import download_from_s3_url
 from toil_scripts.lib.urls import s3am_upload
+from toil_scripts.lib.urls import download_url_job
 from toil_scripts.lib.programs import docker_call
 
 _log = logging.getLogger(__name__)
@@ -50,7 +50,7 @@ def build_parser():
     parser.add_argument('-m', '--mills', required=True, help='Mills_and_1000G_gold_standard.indels.hg19.sites.vcf URL')
     parser.add_argument('-d', '--dbsnp', required=True, help='dbsnp_132_b37.leftAligned.vcf URL')
     parser.add_argument('-o', '--output_dir', default=None, help='Full path to final output dir')
-    parser.add_argument('-s', '--ssec', help='A key that can be used to fetch encrypted data')
+    parser.add_argument('-s', '--ssec', default=None, help='A key that can be used to fetch encrypted data')
     parser.add_argument('-3', '--s3_dir', default=None, help='S3 Directory, starting with bucket name. e.g.: '
                                                              'cgl-driver-projects/ckcc/rna-seq-samples/')
     parser.add_argument('-x', '--suffix', default=".bqsr", help='additional suffix, if any')
@@ -99,35 +99,6 @@ def generate_unique_key(master_key_path, url):
     new_key = hashlib.sha256(master_key + url).digest()
     assert len(new_key) == 32, 'New key is invalid and is not 32 characters: {}'.format(new_key)
     return new_key
-
-
-def download_encrypted_file(job, input_args, name):
-    """
-    Downloads encrypted files from S3 via header injection
-
-    input_args: dict    Input dictionary defined in main()
-    name: str           Symbolic name associated with file
-    """
-    work_dir = job.fileStore.getLocalTempDir()
-    key_path = input_args['ssec']
-    file_path = os.path.join(work_dir, name)
-    url = input_args[name]
-    with open(key_path, 'r') as f:
-        key = f.read()
-    if len(key) != 32:
-        raise RuntimeError('Invalid Key! Must be 32 bytes: {}'.format(key))
-    key = generate_unique_key(key_path, url)
-    encoded_key = base64.b64encode(key)
-    encoded_key_md5 = base64.b64encode(hashlib.md5(key).digest())
-    h1 = 'x-amz-server-side-encryption-customer-algorithm:AES256'
-    h2 = 'x-amz-server-side-encryption-customer-key:{}'.format(encoded_key)
-    h3 = 'x-amz-server-side-encryption-customer-key-md5:{}'.format(encoded_key_md5)
-    try:
-        subprocess.check_call(['curl', '-fs', '--retry', '5', '-H', h1, '-H', h2, '-H', h3, url, '-o', file_path])
-    except OSError:
-        raise RuntimeError('Failed to find "curl". Install via "apt-get install curl"')
-    assert os.path.exists(file_path)
-    return job.fileStore.writeGlobalFile(file_path)
 
 
 def move_to_output_dir(work_dir, output_dir, *filenames):
@@ -179,37 +150,6 @@ def upload_or_move(job, work_dir, input_args, output):
 
     else:
         raise ValueError('No output_directory or s3_dir defined. Cannot determine where to store %s' % output)
-
-def download_from_url_gatk(job, url, name):
-    """
-    Simple curl request made for a given url
-
-    url: str    URL to download
-    name: str   Name to give downloaded file
-    """
-    work_dir = job.fileStore.getLocalTempDir()
-    file_path = os.path.join(work_dir, name)
-    if not os.path.exists(file_path):
-        if url.startswith('s3:'):
-            download_from_s3_url(file_path, url)
-        else:
-            try:
-                if debug:
-                    debug_log = open('download_from_url', 'a')
-                    debug_log.write(file_path + '\n')
-                    debug_log.close()
-                    f = open(file_path, 'w')
-                    f.write('debug')
-                    f.close()
-                else:
-                    subprocess.check_call(['curl', '-fs', '--retry', '5', '--create-dir', url, '-o', file_path])
-            except subprocess.CalledProcessError:
-                raise RuntimeError(
-                    '\nNecessary file could not be acquired: {}. Check input URL'.format(url))
-            except OSError:
-                raise RuntimeError('Failed to find "curl". Install via "apt-get install curl"')
-    assert os.path.exists(file_path)
-    return job.fileStore.writeGlobalFile(file_path)
 
 
 def return_input_paths(job, work_dir, ids, *args):
@@ -317,7 +257,8 @@ def download_gatk_files(job, input_args):
     
     shared_ids = {}
     for fname in ['ref.fa', 'phase.vcf', 'mills.vcf', 'dbsnp.vcf']:
-        shared_ids[fname] = job.addChildJobFn(download_from_url_gatk, url=input_args[fname], name=fname).rv()
+        shared_ids[fname] = job.addChildJobFn(download_url_job, url=input_args[fname], name=fname,
+                                              s3_key_path=input_args['ssec']).rv()
     job.addFollowOnJobFn(reference_preprocessing, shared_ids, input_args)
 
 
@@ -378,10 +319,8 @@ def download_sample(job, shared_ids, input_args, sample):
     if input_args['output_dir']:
         input_args['output_dir'] = os.path.join(input_args['output_dir'], uuid)
     # Download sample bams and launch pipeline
-    if input_args['ssec']:
-        shared_ids['sample.bam'] = job.addChildJobFn(download_encrypted_file, input_args, 'sample.bam').rv()
-    else:
-        shared_ids['sample.bam'] = job.addChildJobFn(download_from_url_gatk, url=url, name='sample.bam').rv()
+    shared_ids['sample.bam'] = job.addChildJobFn(download_url_job, url=url, name='sample.bam',
+                                                 s3_key_path=input_args['ssec']).rv()
     job.addFollowOnJobFn(remove_supplementary_alignments, shared_ids, input_args)
 
 def remove_supplementary_alignments(job, shared_ids, input_args):

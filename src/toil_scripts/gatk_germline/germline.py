@@ -39,7 +39,7 @@ import sys
 from collections import OrderedDict
 from toil.job import Job
 
-from toil_scripts import download_from_s3_url
+from toil_scripts.lib.urls import download_url_job
 from toil_scripts.lib.urls import s3am_upload
 from toil_scripts.lib.programs import docker_call
 
@@ -75,32 +75,6 @@ def make_directory(path):
             pass
         else:
             raise
-
-def download_url(job, url, filename):
-    """
-    Downloads a file from a URL and places it in the jobStore
-
-    :param job: Job instance
-    :param url: data url, str
-    :param filename: name given to downloaded data, str
-
-    :return: fileStore promise
-    """
-    work_dir = job.fileStore.getLocalTempDir()
-    file_path = os.path.join(work_dir, filename)
-    if not os.path.exists(file_path):
-        if url.startswith('s3:'):
-            download_from_s3_url(file_path, url)
-        else:
-            try:
-                subprocess.check_call(['curl', '-fs', '--retry', '5', '--create-dir', url, '-o', file_path])
-            except subprocess.CalledProcessError as cpe:
-                raise RuntimeError(
-                    '\nNecessary file could not be acquired: %s. Got error "%s". Check input URL' % (url, cpe))
-            except OSError:
-                raise RuntimeError('Failed to find "curl". Install via "apt-get install curl"')
-    assert os.path.exists(file_path)
-    return job.fileStore.writeGlobalFile(file_path)
 
 
 def return_input_paths(job, work_dir, ids, *filenames):
@@ -185,7 +159,7 @@ def batch_start(job, input_args):
     shared_ids = {}
     for file_name in shared_files:
         url = input_args[file_name]
-        shared_ids[file_name] = job.addChildJobFn(download_url, url, file_name).rv()
+        shared_ids[file_name] = job.addChildJobFn(download_url_job, url, file_name, s3_key_path=input_args['ssec']).rv()
     job.addFollowOnJobFn(create_reference_index_hc, shared_ids, input_args)
 
 
@@ -292,14 +266,11 @@ def start(job, shared_ids, input_args, sample):
     if input_args['output_dir']:
         input_args['output_dir'] = os.path.join(input_args['output_dir'], uuid)
 
-    if input_args['ssec'] is None:
-        ids['toil.bam'] = job.addChildJobFn(download_url, url, 'toil.bam').rv()
-    else:
-        pass
+    ids['toil.bam'] = job.addChildJobFn(download_url_job, url, 'toil.bam', s3_key_path=input_args['ssec']).rv()
 
     cores = multiprocessing.cpu_count()
     if input_args['indexed']:
-        ids['toil.bam.bai'] = job.addChildJobFn(download_url, "%s.bai" % url, 'toil.bam.bai').rv()
+        ids['toil.bam.bai'] = job.addChildJobFn(download_url_job, "%s.bai" % url, 'toil.bam.bai').rv()
         job.addFollowOnJobFn(haplotype_caller, ids, input_args, cores = cores)
     else:
         job.addFollowOnJobFn(index, ids, input_args)
