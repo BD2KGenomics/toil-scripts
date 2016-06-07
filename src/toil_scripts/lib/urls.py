@@ -38,6 +38,7 @@ def download_url(url, work_dir='.', name=None, s3_key_path=None, cghub_key_path=
 def download_url_job(job, url, name=None, s3_key_path=None, cghub_key_path=None):
     """Job version of `download_url`"""
     work_dir = job.fileStore.getLocalTempDir()
+    url = url.strip()
     fpath = download_url(url, work_dir=work_dir, name=name,
                          s3_key_path=s3_key_path, cghub_key_path=cghub_key_path)
     return job.fileStore.writeGlobalFile(fpath)

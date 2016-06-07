@@ -23,8 +23,6 @@ import collections
 import multiprocessing
 import os
 import hashlib
-import base64
-import subprocess
 import shutil
 import sys
 import logging

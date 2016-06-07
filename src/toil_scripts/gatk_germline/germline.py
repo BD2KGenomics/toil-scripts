@@ -33,7 +33,6 @@ import argparse
 import errno
 import shutil
 import os
-import subprocess
 import multiprocessing
 import sys
 from collections import OrderedDict
@@ -289,12 +288,12 @@ def index(job, shared_ids, input_args):
     output_path = os.path.join(work_dir, 'toil.bam.bai')
     # Call: index the normal.bam
     parameters = ['index', 'toil.bam']
-    inputs=['toil.bam']
+    input_path = return_input_paths(job, work_dir, shared_ids, 'toil.bam')
     outputs={'toil.bam.bai': None}
     docker_call(work_dir = work_dir,
                 parameters = parameters,
                 tool = 'quay.io/ucsc_cgl/samtools',
-                inputs=inputs,
+                inputs=input_path,
                 outputs=outputs)
     cores = multiprocessing.cpu_count()
     # Update FileStore and call child
