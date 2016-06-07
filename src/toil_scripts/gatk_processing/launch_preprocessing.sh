@@ -2,7 +2,7 @@
 data=/mnt/ephemeral/toil
 mkdir -p $data/tmp
 export TMPDIR=$data/tmp
-python gatk_preprocessing.py \
+python -m toil_scripts.gatk_processing.gatk_preprocessing \
 $data/store \
 --config "config.txt" \
 --reference "https://s3-us-west-2.amazonaws.com/cgl-pipeline-inputs/germline/hs37d5.fa" \

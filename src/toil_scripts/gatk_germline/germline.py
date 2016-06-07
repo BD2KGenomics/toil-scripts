@@ -201,19 +201,16 @@ def create_reference_index_hc(job, shared_ids, input_args):
     # Unpack convenience variables for job
     work_dir = job.fileStore.getLocalTempDir()
     # Retrieve file path
-    # FIXME: unused variable
     ref_path = return_input_paths(job, work_dir, shared_ids, 'ref.fa')
     faidx_output = os.path.join(work_dir, 'ref.fa.fai')
     # Call: Samtools
     faidx_command = ['faidx', 'ref.fa']
-    inputs= ref_path
     outputs={'ref.fa.fai': None}
     docker_call(work_dir = work_dir,
                 parameters = faidx_command,
                 tool = 'quay.io/ucsc_cgl/samtools',
-                inputs=inputs,
-                outputs=outputs,
-                sudo = input_args['sudo'])
+                inputs=ref_path,
+                outputs=outputs)
     # Update fileStore for output
     shared_ids['ref.fa.fai'] = job.fileStore.writeGlobalFile(faidx_output)
     job.addChildJobFn(create_reference_dict_hc, shared_ids, input_args)
@@ -231,20 +228,17 @@ def create_reference_dict_hc(job, shared_ids, input_args):
     # Unpack convenience variables for job
     work_dir = job.fileStore.getLocalTempDir()
     # Retrieve file path
-    # FIXME: unused variable
-    ref_path = return_input_paths(job, work_dir, shared_ids, 'ref.fa')
     # Call: picardtools
     picard_output = os.path.join(work_dir, 'ref.dict')
     command = ['CreateSequenceDictionary', 'R=ref.fa', 'O=ref.dict']
-    inputs=['ref.fa']
-    outputs={picard_output: None}
+    ref_path = return_input_paths(job, work_dir, shared_ids, 'ref.fa')
+    outputs={'ref.dict': None}
     docker_call(work_dir = work_dir,
                 env={'JAVA_OPTS':'-Xmx%sg' % input_args['memory']},
                 parameters = command,
                 tool = 'quay.io/ucsc_cgl/picardtools',
-                inputs=inputs,
-                outputs=outputs,
-                sudo = input_args['sudo'])
+                inputs=ref_path,
+                outputs=outputs)
     # Update fileStore for output
     shared_ids['ref.dict'] = job.fileStore.writeGlobalFile(picard_output)
     job.addChildJobFn(spawn_batch_variant_calling, shared_ids, input_args)
@@ -638,7 +632,6 @@ if __name__ == '__main__':
               'uuid': None,
               'file_size': args.file_size,
               'ssec': None,
-              'sudo': False,
               'indexed': False, # FIXME: should be parametrized
               'memory': '15'}
     

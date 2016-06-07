@@ -12,4 +12,5 @@ $data/store \
 --dbsnp "https://s3-us-west-2.amazonaws.com/cgl-pipeline-inputs/germline/dbsnp_138.b37.vcf" \
 --hapmap "https://s3-us-west-2.amazonaws.com/cgl-pipeline-inputs/germline/hapmap_3.3.b37.vcf" \
 --omni "https://s3-us-west-2.amazonaws.com/cgl-pipeline-inputs/germline/1000G_omni2.5.b37.vcf" \
--o /home/$USER/ \
+--restart \
+-o /home/$USER/

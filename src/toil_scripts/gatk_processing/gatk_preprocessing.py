@@ -459,7 +459,8 @@ def mark_dups_sample(job, shared_ids, input_args):
     # picard writes the index for file.bam at file.bai, not file.bam.bai
     _move_bai(outpath)
     shared_ids['sample.mkdups.bam.bai'] = job.fileStore.writeGlobalFile(outpath + ".bai")
-    job.addChildJobFn(realigner_target_creator, shared_ids, input_args, cores = input_args['cpu_count'])
+    cores = multiprocessing.cpu_count()
+    job.addChildJobFn(realigner_target_creator, shared_ids, input_args, cores = cores)
 
 
 def realigner_target_creator(job, shared_ids, input_args):
@@ -477,10 +478,11 @@ def realigner_target_creator(job, shared_ids, input_args):
 
     # Output file path
     output = os.path.join(work_dir, 'sample.intervals')
+    cores = multiprocessing.cpu_count()
     # Call: GATK -- RealignerTargetCreator
     parameters = ['-U', 'ALLOW_SEQ_DICT_INCOMPATIBILITY', # RISKY! (?) See #189
                   '-T', 'RealignerTargetCreator',
-                  '-nt', str(input_args['cpu_count']),
+                  '-nt', str(cores),
                   '-R', 'ref.fa',
                   '-I', 'sample.mkdups.bam',
                   '-known', 'phase.vcf',
@@ -539,7 +541,8 @@ def indel_realignment(job, shared_ids, input_args):
     shared_ids['sample.indel.bam'] = job.fileStore.writeGlobalFile(outpath)
     _move_bai(outpath)
     shared_ids['sample.indel.bam.bai'] = job.fileStore.writeGlobalFile(outpath + ".bai")
-    job.addChildJobFn(base_recalibration, shared_ids, input_args, cores = input_args['cpu_count'])
+    cores = multiprocessing.cpu_count()
+    job.addChildJobFn(base_recalibration, shared_ids, input_args, cores = cores)
 
 
 def base_recalibration(job, shared_ids, input_args):
@@ -558,9 +561,10 @@ def base_recalibration(job, shared_ids, input_args):
     # Output file path
     output = os.path.join(work_dir, 'sample.recal.table')
     # Call: GATK -- IndelRealigner
+    cores = multiprocessing.cpu_count()
     parameters = ['-U', 'ALLOW_SEQ_DICT_INCOMPATIBILITY', # RISKY! (?) See #189
                   '-T', 'BaseRecalibrator',
-                  '-nct', str(input_args['cpu_count']),
+                  '-nct', str(cores),
                   '-R', 'ref.fa',
                   '-I', 'sample.indel.bam',
                   '-knownSites', 'dbsnp.vcf',
@@ -573,7 +577,7 @@ def base_recalibration(job, shared_ids, input_args):
                 env={'JAVA_OPTS':'-Xmx%sg' % input_args['memory']})
     # Write to fileStore
     shared_ids['sample.recal.table'] = job.fileStore.writeGlobalFile(output)
-    job.addChildJobFn(print_reads, shared_ids, input_args, cores = input_args['cpu_count'])
+    job.addChildJobFn(print_reads, shared_ids, input_args, cores = cores)
 
 
 def print_reads(job, shared_ids, input_args):
@@ -595,10 +599,11 @@ def print_reads(job, shared_ids, input_args):
     gatk_outfile_idx = '{}{}.bai'.format(uuid, suffix)
     outfile_idx = '{}{}.bam.bai'.format(uuid, suffix)
     outpath = os.path.join(work_dir, outfile)
+    cores = multiprocessing.cpu_count()
     # Call: GATK -- PrintReads
     parameters = ['-U', 'ALLOW_SEQ_DICT_INCOMPATIBILITY', # RISKY! (?) See #189
                   '-T', 'PrintReads',
-                  '-nct', str(input_args['cpu_count']),
+                  '-nct', str(cores),
                   '-R', 'ref.fa',
                   '--emit_original_quals',
                   '-I', 'sample.indel.bam',
@@ -633,7 +638,6 @@ def main():
               's3_dir': pargs.s3_dir,
               'ssec': pargs.ssec,
               'suffix': pargs.suffix,
-              'cpu_count': multiprocessing.cpu_count(), # FIXME: should not be called from toil-leader, see #186
               'memory': '15'}
 
     # Launch Pipeline
