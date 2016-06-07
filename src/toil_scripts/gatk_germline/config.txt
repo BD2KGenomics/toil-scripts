@@ -1,1 +1,1 @@
-test_uuid, File:///home/mesosbox/test_uuid/test_uuid.bqsr.bam
+test_uuid,file:///home/mesosbox/test_uuid/test_uuid.bqsr.bam
