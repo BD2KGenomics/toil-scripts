@@ -11,6 +11,7 @@ export PATH=$PATH:${PWD}/bin
 # Create Toil venv
 virtualenv venv
 . venv/bin/activate
+pip install toil==3.1.4
 make develop
 make test
 make clean

@@ -46,7 +46,6 @@ red=\033[0;31m
 develop: check_venv
 	$(pip) install -e .$(extras)
 clean_develop: check_venv
-	- $(pip) uninstall -y toil
 	- rm -rf src/*.egg-info
 
 
