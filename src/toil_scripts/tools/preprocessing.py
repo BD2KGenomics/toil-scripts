@@ -363,22 +363,28 @@ def run_realigner_target_creator(job, cores, bam, bai, ref, ref_dict, fai, phase
     :rtype: str
     """
     work_dir = job.fileStore.getLocalTempDir()
-    file_ids = [ref, fai, ref_dict, bam, bai, phase, mills]
-    inputs = ['ref.fasta', 'ref.fasta.fai', 'ref.dict', 'sample.bam', 'sample.bam.bai',
-              'phase.vcf', 'mills.vcf']
-    for file_store_id, name in zip(file_ids, inputs):
+    inputs = {'ref.fasta': ref,
+              'ref.fasta.fai': fai,
+              'ref.dict': ref_dict,
+              'input.bam': bam,
+              'input.bai': bai,
+              'phase.vcf': phase,
+              'mills.vcf': mills}
+    for name, file_store_id in inputs.iteritems():
         job.fileStore.readGlobalFile(file_store_id, os.path.join(work_dir, name))
+
     # Call: GATK -- RealignerTargetCreator
     parameters = ['-T', 'RealignerTargetCreator',
-                  '-nt', str(cores),
+                  '-nt', '4',                     # Does not support -nct
                   '-R', '/data/ref.fasta',
-                  '-I', '/data/sample.bam',
+                  '-I', '/data/input.bam',
                   '-known', '/data/phase.vcf',
                   '-known', '/data/mills.vcf',
                   '--downsampling_type', 'NONE',
                   '-o', '/data/sample.intervals']
     if unsafe:
         parameters.extend(['-U', 'ALLOW_SEQ_DICT_INCOMPATIBILITY'])
+
     docker_call(tool='quay.io/ucsc_cgl/gatk:3.5--dba6dae49156168a909c43330350c6161dc7ecc2',
                 inputs=inputs,
                 outputs={'sample.intervals': None},
@@ -409,38 +415,43 @@ def run_indel_realignment(job, intervals, bam, bai, ref, ref_dict, fai, phase, m
     :rtype: tuple(str, str)
     """
     work_dir = job.fileStore.getLocalTempDir()
-    file_ids = [ref, fai, ref_dict, intervals, bam, bai, phase, mills]
-    inputs = ['ref.fasta', 'ref.fasta.fai', 'ref.dict', 'sample.intervals',
-              'sample.bam', 'sample.bam.bai', 'phase.vcf', 'mills.vcf']
-    for file_store_id, name in zip(file_ids, inputs):
+    inputs = {'ref.fasta': ref,
+              'ref.fasta.fai': fai,
+              'ref.dict': ref_dict,
+              'input.bam': bam,
+              'input.bai': bai,
+              'target.intervals': intervals,
+              'phase.vcf': phase,
+              'mills.vcf': mills}
+    for name, file_store_id in inputs.iteritems():
         job.fileStore.readGlobalFile(file_store_id, os.path.join(work_dir, name))
 
     # Call: GATK -- IndelRealigner
     parameters = ['-T', 'IndelRealigner',
                   '-R', '/data/ref.fasta',
-                  '-I', '/data/sample.bam',
+                  '-I', '/data/input.bam',
                   '-known', '/data/phase.vcf',
                   '-known', '/data/mills.vcf',
-                  '-targetIntervals', '/data/sample.intervals',
+                  '-targetIntervals', '/data/target.intervals',
                   '--downsampling_type', 'NONE',
                   '-maxReads', str(720000), # Taken from MC3 pipeline
                   '-maxInMemory', str(5400000), # Taken from MC3 pipeline
-                  '-o', '/data/sample.indel.bam']
+                  '-o', '/data/output.bam']
     if unsafe:
         parameters.extend(['-U', 'ALLOW_SEQ_DICT_INCOMPATIBILITY'])
     docker_call(tool='quay.io/ucsc_cgl/gatk:3.5--dba6dae49156168a909c43330350c6161dc7ecc2',
                 inputs=inputs,
-                outputs={'sample.indel.bam': None, 'sample.indel.bai': None},
+                outputs={'output.bam': None, 'output.bai': None},
                 work_dir=work_dir,
                 parameters=parameters,
                 env=dict(JAVA_OPTS='-Djava.io.tmpdir=/data/ -Xmx{}'.format(mem)))
     # Write to fileStore
-    indel_bam = job.fileStore.writeGlobalFile(os.path.join(work_dir, 'sample.indel.bam'))
-    indel_bai = job.fileStore.writeGlobalFile(os.path.join(work_dir, 'sample.indel.bai'))
+    indel_bam = job.fileStore.writeGlobalFile(os.path.join(work_dir, 'output.bam'))
+    indel_bai = job.fileStore.writeGlobalFile(os.path.join(work_dir, 'output.bai'))
     return indel_bam, indel_bai
 
 
-def run_base_recalibration(job, cores, indel_bam, indel_bai, ref, ref_dict, fai, dbsnp, mills,
+def run_base_recalibration(job, cores, bam, bai, ref, ref_dict, fai, dbsnp, mills,
                            mem=10737418240, unsafe=False):
     """
     Creates recal table used in Base Quality Score Recalibration
@@ -461,16 +472,21 @@ def run_base_recalibration(job, cores, indel_bam, indel_bai, ref, ref_dict, fai,
     :rtype: str
     """
     work_dir = job.fileStore.getLocalTempDir()
-    file_ids = [ref, fai, ref_dict, indel_bam, indel_bai, dbsnp, mills]
-    inputs = ['ref.fasta', 'ref.fasta.fai', 'ref.dict', 'sample.bam', 'sample.bai',
-              'dbsnp.vcf', 'mills.vcf']
-    for file_store_id, name in zip(file_ids, inputs):
+    inputs = {'ref.fasta': ref,
+              'ref.fasta.fai': fai,
+              'ref.dict': ref_dict,
+              'input.bam': bam,
+              'input.bai': bai,
+              'dbsnp.vcf': dbsnp,
+              'mills.vcf': mills}
+    for name, file_store_id in inputs.iteritems():
         job.fileStore.readGlobalFile(file_store_id, os.path.join(work_dir, name))
+
     # Call: GATK -- BaseRecalibrator
     parameters = ['-T', 'BaseRecalibrator',
                   '-nct', str(cores),
                   '-R', '/data/ref.fasta',
-                  '-I', '/data/sample.bam',
+                  '-I', '/data/input.bam',
                   '-knownSites', '/data/dbsnp.vcf',
                   '-knownSites', '/data/mills.vcf',
                   '-o', '/data/recal_data.table']
@@ -487,8 +503,7 @@ def run_base_recalibration(job, cores, indel_bam, indel_bai, ref, ref_dict, fai,
     return job.fileStore.writeGlobalFile(os.path.join(work_dir, 'recal_data.table'))
 
 
-def run_print_reads(job, cores, table, indel_bam, indel_bai, ref, ref_dict, fai, mem,
-                    unsafe=False):
+def run_print_reads(job, cores, table, bam, bai, ref, ref_dict, fai, mem, unsafe=False):
     """
     Creates BAM that has had the base quality scores recalibrated
 
@@ -506,28 +521,32 @@ def run_print_reads(job, cores, table, indel_bam, indel_bai, ref, ref_dict, fai,
     :rtype: tuple(str, str)
     """
     work_dir = job.fileStore.getLocalTempDir()
-    file_ids = [ref, fai, ref_dict, table, indel_bam, indel_bai]
-    inputs = ['ref.fasta', 'ref.fasta.fai', 'ref.dict', 'sample.recal.table',
-              'sample.indel.bam', 'sample.indel.bai']
-    for file_store_id, name in zip(file_ids, inputs):
+    inputs = {'ref.fasta': ref,
+              'ref.fasta.fai': fai,
+              'ref.dict': ref_dict,
+              'recal.table': table,
+              'input.bam': bam,
+              'input.bai': bai}
+    for name, file_store_id in inputs.iteritems():
         job.fileStore.readGlobalFile(file_store_id, os.path.join(work_dir, name))
+
     # Call: GATK -- PrintReads
     parameters = ['-T', 'PrintReads',
                   '-nct', str(cores),
                   '-R', '/data/ref.fasta',
                   '--emit_original_quals',
-                  '-I', '/data/sample.indel.bam',
-                  '-BQSR', '/data/sample.recal.table',
-                  '-o', '/data/sample.bqsr.bam']
+                  '-I', '/data/input.bam',
+                  '-BQSR', '/data/recal.table',
+                  '-o', '/data/bqsr.bam']
     if unsafe:
         parameters.extend(['-U', 'ALLOW_SEQ_DICT_INCOMPATIBILITY'])
     docker_call(tool='quay.io/ucsc_cgl/gatk:3.5--dba6dae49156168a909c43330350c6161dc7ecc2',
                 inputs=inputs,
-                outputs={'sample.bqsr.bam': None, 'sample.bqsr.bai': None},
+                outputs={'bqsr.bam': None, 'bqsr.bai': None},
                 work_dir=work_dir,
                 parameters=parameters,
                 env=dict(JAVA_OPTS='-Djava.io.tmpdir=/data/ -Xmx{}'.format(mem)))
     # Write ouptut to file store
-    bam_id = job.fileStore.writeGlobalFile(os.path.join(work_dir, 'sample.bqsr.bam'))
-    bai_id = job.fileStore.writeGlobalFile(os.path.join(work_dir, 'sample.bqsr.bai'))
+    bam_id = job.fileStore.writeGlobalFile(os.path.join(work_dir, 'bqsr.bam'))
+    bai_id = job.fileStore.writeGlobalFile(os.path.join(work_dir, 'bqsr.bai'))
     return bam_id, bai_id

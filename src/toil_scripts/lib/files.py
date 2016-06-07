@@ -1,5 +1,6 @@
 from contextlib import closing
 import errno
+import gzip
 import os
 import shutil
 import tarfile
@@ -163,3 +164,44 @@ def get_files_from_filestore(job, work_dir, input_dict):
             file_path = untargz(file_path, work_dir)
         input_dict[name] = file_path
     return input_dict
+
+
+def gunzip(input_gzip_file, block_size=1024):
+    """
+    Gunzips the input file to the same directory
+    :param input_gzip_file: File to be gunzipped
+    :return: path to the gunzipped file
+    """
+    assert os.path.splitext(input_gzip_file)[1] == '.gz'
+    assert is_gzipfile(input_gzip_file)
+    with gzip.open(input_gzip_file) as infile:
+        with open(os.path.splitext(input_gzip_file)[0], 'w') as outfile:
+            while True:
+                block = infile.read(block_size)
+                if block == '':
+                    break
+                else:
+                    outfile.write(block)
+    return outfile.name
+
+
+def is_gzipfile(filename):
+    """
+    Attempts to ascertain the gzip status of a file based on the "magic signatures" of
+    the file.
+
+    :param str filename: path to file
+    :return: bool
+
+    This was taken from the stack overflow
+    http://stackoverflow.com/questions/13044562/python-mechanism-to-identify-compressed-file-type\
+        -and-uncompress
+    """
+    assert os.path.exists(filename), 'Input {} does not '.format(filename) + \
+                                     'point to a file.'
+    with open(filename, 'rb') as in_f:
+        start_of_file = in_f.read(3)
+        if start_of_file == '\x1f\x8b\x08':
+            return True
+        else:
+            return False

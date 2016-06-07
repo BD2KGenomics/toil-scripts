@@ -75,7 +75,8 @@ kwargs = dict(
     url="https://github.com/BD2KGenomics/toil-scripts",
     install_requires=[
         'tqdm==3.8.0',  # FIXME: Remove once ADAM stops using it (superfluous import)
-        'pyyaml==3.11'],
+        'pyyaml==3.11',
+        'synapseclient==1.5.1'],
     tests_require=[
         'pytest==2.8.3'],
     package_dir={'': 'src'},

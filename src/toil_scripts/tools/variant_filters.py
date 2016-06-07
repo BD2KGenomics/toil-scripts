@@ -1,5 +1,5 @@
-import multiprocessing
 import os
+import subprocess
 
 from toil_scripts.lib.files import get_files_from_filestore
 from toil_scripts.lib.programs import docker_call
@@ -21,14 +21,14 @@ def gatk_genotype_gvcf(job, gvcf_ids, config, emit_threshold=10.0, call_threshol
     """
     job.fileStore.logToMaster('Running GATK GenotypeGVCF')
     work_dir = job.fileStore.getLocalTempDir()
-    inputs = {'genome.fa': config.genome_fasta, 'genome.fa.fai': config.genome_fai,
+    inputs = {'genome.fa': config.genome_fasta,
+              'genome.fa.fai': config.genome_fai,
               'genome.dict': config.genome_dict}
     inputs.update(gvcf_ids)
     get_files_from_filestore(job, work_dir, inputs)
 
-    cores = multiprocessing.cpu_count()
     command = ['-T', 'GenotypeGVCFs',
-               '-nt', str(cores),
+               '-nt', str(config.cores),
                '-R', 'genome.fa',
                '--out', 'joint.vcf',
                '-stand_emit_conf', str(emit_threshold),
@@ -47,9 +47,9 @@ def gatk_genotype_gvcf(job, gvcf_ids, config, emit_threshold=10.0, call_threshol
 
     outputs = {'joint.vcf': None}
     docker_call(work_dir = work_dir,
-                env={'JAVA_OPTS':'-Djava.io.tmpdir=/data/ -Xmx{}'.format(config.xmx)},
-                parameters = command,
-                tool = 'quay.io/ucsc_cgl/gatk:3.5--dba6dae49156168a909c43330350c6161dc7ecc2',
+                env={'JAVA_OPTS': '-Djava.io.tmpdir=/data/ -Xmx{}'.format(config.xmx)},
+                parameters=command,
+                tool='quay.io/ucsc_cgl/gatk:3.5--dba6dae49156168a909c43330350c6161dc7ecc2',
                 inputs=inputs.keys(),
                 outputs=outputs)
     return job.fileStore.writeGlobalFile(os.path.join(work_dir, 'joint.vcf'))
@@ -68,8 +68,10 @@ def gatk_select_variants(job, mode, vcf_id, config):
     """
     job.fileStore.logToMaster('Running GATK SelectVariants: %s' % mode)
     work_dir = job.fileStore.getLocalTempDir()
-    inputs = {'genome.fa': config.genome_fasta, 'genome.fa.fai': config.genome_fai,
-              'genome.dict': config.genome_dict, 'input.vcf': vcf_id}
+    inputs = {'genome.fa': config.genome_fasta,
+              'genome.fa.fai': config.genome_fai,
+              'genome.dict': config.genome_dict,
+              'input.vcf': vcf_id}
     get_files_from_filestore(job, work_dir, inputs)
 
     output = "raw_%s.vcf" % mode
@@ -82,9 +84,9 @@ def gatk_select_variants(job, mode, vcf_id, config):
 
     outputs = {output: None}
     docker_call(work_dir = work_dir,
-                env={'_JAVA_OPTIONS':'-Djava.io.tmpdir=/data/ -Xmx{}'.format(config.xmx)},
-                parameters = command,
-                tool = 'quay.io/ucsc_cgl/gatk:3.5--dba6dae49156168a909c43330350c6161dc7ecc2',
+                env={'JAVA_OPTS': '-Djava.io.tmpdir=/data/ -Xmx{}'.format(config.xmx)},
+                parameters=command,
+                tool='quay.io/ucsc_cgl/gatk:3.5--dba6dae49156168a909c43330350c6161dc7ecc2',
                 inputs=inputs.keys(),
                 outputs=outputs)
     return job.fileStore.writeGlobalFile(os.path.join(work_dir, output))
@@ -110,8 +112,10 @@ def gatk_variant_filtration(job, mode, vcf_id, config):
     """
     job.fileStore.logToMaster('Apply %s Filter' % mode)
     work_dir = job.fileStore.getLocalTempDir()
-    inputs = {'genome.fa': config.genome_fasta, 'genome.fa.fai': config.genome_fai,
-              'genome.dict': config.genome_dict, 'input.vcf': vcf_id}
+    inputs = {'genome.fa': config.genome_fasta,
+              'genome.fa.fai': config.genome_fai,
+              'genome.dict': config.genome_dict,
+              'input.vcf': vcf_id}
     get_files_from_filestore(job, work_dir, inputs)
 
     # Recommended GATK hard filters:
@@ -136,12 +140,18 @@ def gatk_variant_filtration(job, mode, vcf_id, config):
 
     outputs = {'filtered_variants.vcf': None}
     docker_call(work_dir = work_dir,
-                env={'_JAVA_OPTIONS':'-Djava.io.tmpdir=/data/ -Xmx{}'.format(config.xmx)},
+                env={'JAVA_OPTS':'-Djava.io.tmpdir=/data/ -Xmx{}'.format(config.xmx)},
                 parameters = command,
                 tool = 'quay.io/ucsc_cgl/gatk:3.5--dba6dae49156168a909c43330350c6161dc7ecc2',
                 inputs=inputs.keys(),
                 outputs=outputs)
-    return job.fileStore.writeGlobalFile(os.path.join(work_dir, 'filtered_variants.vcf'))
+
+    outpath = os.path.join(work_dir, 'filtered_variants.vcf')
+
+    # Fix extra quotation marks in FILTER line
+    sed_cmd = 's/"{}"/{}/'.format(expression, expression)
+    subprocess.call(['sed', '-i', sed_cmd, outpath])
+    return job.fileStore.writeGlobalFile(outpath)
 
 
 def gatk_variant_recalibrator(job, mode, vcf_id, config):
@@ -160,10 +170,11 @@ def gatk_variant_recalibrator(job, mode, vcf_id, config):
         raise ValueError('Variant recalibration mode must be INDEL or SNP, got %s' % mode)
 
     job.fileStore.logToMaster('Running GATK VariantRecalibrator ({} Mode)'.format(mode.upper()))
-    cores = multiprocessing.cpu_count()
     work_dir = job.fileStore.getLocalTempDir()
-    inputs = {'genome.fa': config.genome_fasta, 'genome.fa.fai': config.genome_fai,
-              'genome.dict': config.genome_dict, 'input.vcf': vcf_id}
+    inputs = {'genome.fa': config.genome_fasta,
+              'genome.fa.fai': config.genome_fai,
+              'genome.dict': config.genome_dict,
+              'input.vcf': vcf_id}
 
     # GATK recommended parameters:
     # https://software.broadinstitute.org/gatk/documentation/article?id=1259
@@ -172,7 +183,7 @@ def gatk_variant_recalibrator(job, mode, vcf_id, config):
     command = ['-T', 'VariantRecalibrator',
                '-R', 'genome.fa',
                '-input', 'input.vcf',
-               '-nt', str(cores),
+               '-nt', str(config.cores),
                '--maxGaussians', '4',
                '-an', 'QualByDepth',
                '-an', 'FisherStrand',
@@ -238,7 +249,6 @@ def gatk_apply_variant_recalibration(job, mode, vcf_id, recal_id, tranches_id, c
     """
     mode = mode.upper()
     job.fileStore.logToMaster('Running GATK ApplyRecalibration ({} Mode): {}'.format(mode, config.uuid))
-    cores = multiprocessing.cpu_count()
     work_dir = job.fileStore.getLocalTempDir()
     inputs = {'genome.fa': config.genome_fasta, 'genome.fa.fai': config.genome_fai,
               'genome.dict': config.genome_dict, 'input.vcf': vcf_id,
@@ -248,7 +258,7 @@ def gatk_apply_variant_recalibration(job, mode, vcf_id, recal_id, tranches_id, c
     # GATK recommended parameters:
     # https://software.broadinstitute.org/gatk/documentation/article?id=2805
     command = ['-T', 'ApplyRecalibration',
-               '-nt', str(cores),
+               '-nt', str(config.cores),
                '-R', 'genome.fa',
                '-input', 'input.vcf',
                '-o', 'vqsr.vcf',
@@ -268,3 +278,39 @@ def gatk_apply_variant_recalibration(job, mode, vcf_id, recal_id, tranches_id, c
                 inputs=inputs.keys(),
                 outputs=outputs)
     return job.fileStore.writeGlobalFile(os.path.join(work_dir, 'vqsr.vcf'))
+
+
+def gatk_combine_variants(job, vcfs, config):
+    """
+    Combine a dictionary of VCF FileStoreIDs
+
+    :param JobFunctionWrappingJob job: Toil Job instance
+    :param dict vcfs: Dictionary of VCF FileStoreIDs
+    :param Namespace config: Pipeline configuration options and shared files
+    :return: Merged VCF FileStoreID
+    :rtype: str
+    """
+    job.fileStore.logToMaster('Running GATK CombineVariants')
+    work_dir = job.fileStore.getLocalTempDir()
+
+    inputs = {'genome.fa': config.genome_fasta, 'genome.fa.fai': config.genome_fai,
+              'genome.dict': config.genome_dict}
+
+    command = ['-T', 'CombineVariants',
+               '-R', 'genome.fa',
+               '-o', 'merged.vcf',
+               '-genotypeMergeOptions', 'UNIQUIFY']
+
+    for uuid, vcf_id in vcfs.iteritems():
+        inputs[uuid] = vcf_id
+        command.extend(['--variant', uuid])
+
+    get_files_from_filestore(job, work_dir, inputs)
+    outputs={'merged.vcf': None}
+    docker_call(work_dir = work_dir,
+                env={'JAVA_OPTS':'-Djava.io.tmpdir=/data/ -Xmx{}'.format(config.xmx)},
+                parameters = command,
+                tool = 'quay.io/ucsc_cgl/gatk:3.5--dba6dae49156168a909c43330350c6161dc7ecc2',
+                inputs=inputs.keys(),
+                outputs=outputs)
+    return job.fileStore.writeGlobalFile(os.path.join(work_dir, 'merged.vcf'))

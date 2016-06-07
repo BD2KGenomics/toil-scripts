@@ -77,6 +77,7 @@ def run_bwakit(job, config, threads, sort=True, trim=False):
         The config must have:
         config.r1               FileStoreID for 1st fastq file
         config.r2               FileStoreID for 2nd fastq file (or None if single-ended)
+        config.samples          List of FileStoreIDs
         config.ref              FileStoreID for the reference genome
         config.fai              FileStoreID for the reference index file
         config.amb              FileStoreID for the reference amb file
@@ -105,28 +106,43 @@ def run_bwakit(job, config, threads, sort=True, trim=False):
     :rtype: str
     """
     work_dir = job.fileStore.getLocalTempDir()
-    file_names = ['r1.fq.gz', 'ref.fa.fai', 'ref.fa', 'ref.fa.amb', 'ref.fa.ann',
-                  'ref.fa.bwt', 'ref.fa.pac', 'ref.fa.sa']
-    ids = [config.r1, config.ref, config.fai, config.amb, config.ann, config.bwt, config.pac, config.sa]
+    inputs = {'ref.fa': config.ref,
+              'ref.fa.fai': config.fai,
+              'ref.fa.amb': config.amb,
+              'ref.fa.ann': config.ann,
+              'ref.fa.bwt': config.bwt,
+              'ref.fa.pac': config.pac,
+              'ref.fa.sa': config.sa}
+    samples = []
     # If a fastq pair was provided
+    if getattr(config, 'r1', None):
+        inputs['file1'] = config.r1
+        samples.append('file1')
     if getattr(config, 'r2', None):
-        file_names.insert(1, 'r2.fq.gz')
-        ids.insert(1, config.r2)
+        inputs['file2'] = config.r1
+        samples.append('file2')
+    if getattr(config, 'samples', None):
+        for sample_id in config.samples:
+            sample_name = 'file%s' % (len(samples) + 1)
+            inputs[sample_name] = sample_id
+            samples.append(sample_name)
     # If an alt file was provided
     if getattr(config, 'alt', None):
-        file_names.append('ref.fa.alt')
-        ids.append(config.alt)
-    for fileStoreID, name in zip(ids, file_names):
+        inputs['ref.fa.alt'] = config.alt
+    for name, fileStoreID in inputs.iteritems():
         job.fileStore.readGlobalFile(fileStoreID, os.path.join(work_dir, name))
     # If a read group line was provided
     if getattr(config, 'rg_line', None):
         rg = config.rg_line
     # Otherwise, generate a read group line to place in the BAM.
-    else:
+    elif all(getattr(config, elem, None) for elem in ['library', 'platform', 'program_unit']):
         rg = "@RG\\tID:{0}".format(config.uuid)  # '\' character is escaped so bwakit gets passed '\t' properly
         rg_attributes = [config.library, config.platform, config.program_unit, config.uuid]
         for tag, info in zip(['LB', 'PL', 'PU', 'SM'], rg_attributes):
             rg += '\\t{0}:{1}'.format(tag, info)
+    else:
+        rg = None
+
     # BWA Options
     opt_args = []
     if sort:
@@ -134,18 +150,18 @@ def run_bwakit(job, config, threads, sort=True, trim=False):
     if trim:
         opt_args.append('-a')
     # Call: bwakit
-    parameters = (['-t', str(threads),
-                   '-R', rg] +
-                  opt_args +
-                  ['-o', '/data/aligned',
-                   '/data/ref.fa',
-                   '/data/r1.fq.gz'])
-    if getattr(config, 'r2', None):  # If a fastq pair was provided
-        parameters.append('/data/r2.fq.gz')
+    parameters = ['-t', str(threads)] + opt_args + ['-o', '/data/aligned', '/data/ref.fa']
+    if rg is not None:
+        parameters = ['-R', rg] + parameters
+    for sample in samples:
+        parameters.append('/data/{}'.format(sample))
     mock_bam = config.uuid + '.bam'
     outputs = {'aligned.aln.bam': mock_bam}
+
+    job.fileStore.logToMaster(repr(parameters))
+
     docker_call(tool='quay.io/ucsc_cgl/bwakit:0.7.12--528bb9bf73099a31e74a7f5e6e3f2e0a41da486e',
-                parameters=parameters, inputs=file_names, outputs=outputs, work_dir=work_dir)
+                parameters=parameters, inputs=inputs.keys(), outputs=outputs, work_dir=work_dir)
 
     # Either write file to local output directory or upload to S3 cloud storage
     job.fileStore.logToMaster('Aligned sample: {}'.format(config.uuid))

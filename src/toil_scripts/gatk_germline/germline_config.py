@@ -8,79 +8,97 @@ def generate_config():
         # Edit the values in this configuration file and then rerun the pipeline
         # Comments (beginning with #) do not need to be removed. Optional parameters may be left blank.
         ##############################################################################################################
-        # Required: Reference Genome URL (hg19.fa)
+        # Required: Reference Genome URL
         genome-fasta:
 
-        # Optional: Reference Genome Index URL (hg19.fa.fai)
+        # Required: Reference assembly (i.e. hg19)
+        assembly:
+
+        # Optional: Reference Genome Index URL
         genome-fai:
 
-        # Optional: Reference Genome Sequence Dictionary (hg19.dict)
+        # Optional: Reference Genome Sequence Dictionary URL
         genome-dict:
 
-        # Optional: URL (1000G_phase1.indels.hg19.sites.fixed.vcf)
+        # Optional: 1000G INDELs URL
         phase:
 
-        # Optional: URL (Mills_and_1000G_gold_standard.indels.hg19.sites.vcf)
+        # Optional: Mills INDELs URL
         mills:
 
-        # Optional: URL (dbsnp_138.hg19.excluding_sites_after_129.vcf)
+        # Optional: dbSNP URL
         dbsnp:
 
-        # Optional: URL (hapmap_3.3.hg19.sites.vcf)
+        # Optional: HapMap URL
         hapmap:
 
-        # Optional: URL (1000G_omni2.5.hg19.sites.vcf)
+        # Optional: Omni URL
         omni:
 
-        # Optional: (boolean) Run BWA on fastqs
+        # Optional: Run BWA (Boolean)
         run-bwa:
 
-        # Optional. If true, BWA trims adapters
+        # Optional. BWA trims adapters (Boolean)
         trim: True
 
-        # Optional: Reference fasta file (amb) -- if not present will be generated
+        # Optional: BWA Index amb URL
         amb:
 
-        # Optional: Reference fasta file (ann) -- If not present will be generated
+        # Optional: BWA Index ann URL
         ann:
 
-        # Optional: Reference fasta file (bwt) -- If not present will be generated
+        # Optional: BWA Index bwt URL
         bwt:
 
-        # Optional: Reference fasta file (pac) -- If not present will be generated
+        # Optional: BWA Index pac URL
         pac:
 
-        # Optional: Reference fasta file (sa) -- If not present will be generated
+        # Optional: BWA Index sa URL
         sa:
 
-        # Optional: Alternate file for reference build (alt). Necessary for alt aware alignment
+        # Optional: BWA Index alt URL
         alt:
 
-        # Optional: (boolean) Run GATK Preprocessing
+        # Optional: Run GATK Preprocessing (Boolean)
         preprocess:
 
-        # Optional: (boolean) Run GATK VQSR
+        # Optional: Run GATK VQSR (Boolean)
         run-vqsr:
 
-        # Optional: (boolean) Joint Calling
+        # Optional: Joint Calling (Boolean)
         joint:
 
-        # Optional: Approximate input file size
-        file-size: 50G
+        # Optional: Run Oncotator (Boolean)
+        run-oncotator:
 
-        # Memory allocation for Java option Xmx
-        xmx: 100G
+        # Optional: Oncotator Database URL
+        oncotator-db:
 
-        # Optional: (string) Suffix to be added to final output
+        # Optional: Approximate input file size (Default: 10G)
+        file-size:
+
+        # BAM file is already sorted (Boolean)
+        sorted:
+
+        # Number of cores per job (Default: 8)
+        cores:
+
+        # Java heap size (Default: 10G)
+        xmx:
+
+        # Optional: Suffix to be added to output filename (i.e. .toil)
         suffix:
 
-        # Optional: (string) Path to output directory
+        # Optional: Path to output directory (PATH/URL)
         output-dir:
 
-        # Optional: (string) Path to Key File for SSE-C Encryption
+        # Optional: Path to CSV file containing Synapse username and password
+        synapse_credentials:
+
+        # Optional: Path to key file for SSE-C Encryption
         ssec:
 
-        # Optional: (boolean) Set to True to allow seq dict incompatibility
+        # Optional: Allow seq dict incompatibility (Boolean)
         unsafe-mode:
         """[1:])
 

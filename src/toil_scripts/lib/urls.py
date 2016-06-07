@@ -8,7 +8,7 @@ from toil_scripts.lib import require
 from toil_scripts.lib.programs import docker_call
 
 
-def download_url(url, work_dir='.', name=None, s3_key_path=None, cghub_key_path=None):
+def download_url(url, work_dir='.', name=None, synapse_login=None, s3_key_path=None, cghub_key_path=None):
     """
     Downloads URL, can pass in file://, http://, s3://, or ftp://, gnos://cghub/analysisID, or gnos:///analysisID
 
@@ -20,26 +20,32 @@ def download_url(url, work_dir='.', name=None, s3_key_path=None, cghub_key_path=
     :return: Path to the downloaded file
     :rtype: str
     """
+    parsed_url = urlparse(url)
     file_path = os.path.join(work_dir, name) if name else os.path.join(work_dir, os.path.basename(url))
     if cghub_key_path:
         _download_with_genetorrent(url, file_path, cghub_key_path)
-    elif urlparse(url).scheme == 's3':
+    elif parsed_url.scheme == 's3':
         _s3am_with_retry(num_cores=1, file_path=file_path, s3_url=url, mode='download',
-
                          s3_key_path=s3_key_path)
-    elif urlparse(url).scheme == 'file':
+    elif parsed_url.scheme == 'file':
         shutil.copy(urlparse(url).path, file_path)
+    elif url.startswith('syn'):
+        if synapse_login:
+            stored_file = synapse_login.get(url, downloadLocation=work_dir)
+            file_path = stored_file.path
+        else:
+            raise ValueError('Synapse login was not provided!')
     else:
         subprocess.check_call(['curl', '-fs', '--retry', '5', '--create-dir', url, '-o', file_path])
     assert os.path.exists(file_path)
     return file_path
 
 
-def download_url_job(job, url, name=None, s3_key_path=None, cghub_key_path=None):
+def download_url_job(job, url, name=None, synapse_login=None, s3_key_path=None, cghub_key_path=None):
     """Job version of `download_url`"""
     work_dir = job.fileStore.getLocalTempDir()
     fpath = download_url(url, work_dir=work_dir, name=name, s3_key_path=s3_key_path,
-                         cghub_key_path=cghub_key_path)
+                         cghub_key_path=cghub_key_path, synapse_login=synapse_login)
     return job.fileStore.writeGlobalFile(fpath)
 
 
