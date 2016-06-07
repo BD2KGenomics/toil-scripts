@@ -54,9 +54,6 @@ def build_parser():
     parser.add_argument('-3', '--s3_dir', default=None, help='S3 Directory, starting with bucket name. e.g.: '
                                                              'cgl-driver-projects/ckcc/rna-seq-samples/')
     parser.add_argument('-x', '--suffix', default=".bqsr", help='additional suffix, if any')
-    parser.add_argument('-u', '--sudo', dest='sudo', action='store_true', help='Docker usually needs sudo to execute '
-                                                                               'locally, but not''when running Mesos '
-                                                                               'or when a member of a Docker group.')
     return parser
 
 # Convenience functions used in the pipeline
@@ -172,8 +169,7 @@ def upload_or_move(job, work_dir, input_args, output):
     if input_args['output_dir']:
         # get output path and
         output_dir = input_args['output_dir']
-        # FIXME: undefined function
-        make_directory(output_dir)
+        mkdir_p(output_dir)
         move_to_output_dir(work_dir, output_dir, output)
 
     elif input_args['s3_dir']:
@@ -258,12 +254,11 @@ def docker_path(file_path):
     return os.path.join('/data', os.path.basename(file_path))
 
 
-def create_reference_index(job, ref_id, sudo):
+def create_reference_index(job, ref_id):
     """
     Uses Samtools to create reference index file (.fasta.fai)
 
     ref_id: str     The fileStore ID of the reference
-    sudo: bool      Boolean item to determine whether to invoke sudo with docker
     """
     work_dir = job.fileStore.getLocalTempDir()
     # Retrieve file path to reference
@@ -298,7 +293,6 @@ def create_reference_dict(job, ref_id, input_args):
     ref_id: str     The fileStore ID of the reference
     input_args: dict        Dictionary of input arguments (from main())
     """
-    sudo = input_args['sudo']
     work_dir = job.fileStore.getLocalTempDir()
     # Retrieve file path
     ref_path = job.fileStore.readGlobalFile(ref_id, os.path.join(work_dir, 'ref.fa'))
@@ -308,8 +302,7 @@ def create_reference_dict(job, ref_id, input_args):
                 env={'JAVA_OPTS':'-Xmx%sg' % input_args['memory']},
                 tool='quay.io/ucsc_cgl/picardtools:1.95--dd5ac549b95eb3e5d166a5e310417ef13651994e',
                 inputs=['ref.fa'],
-                outputs={'ref.dict': None},
-                sudo=sudo)
+                outputs={'ref.dict': None})
     # Write to fileStore
     return job.fileStore.writeGlobalFile(os.path.join(work_dir, 'ref.dict'))
 
@@ -340,8 +333,7 @@ def reference_preprocessing(job, shared_ids, input_args):
         sys.stderr.write("shared_ids['ref.fa'] is a dict. %s['ref_id'] = %s." % (shared_ids, ref_id))
         ref_id = ref_id['ref.fa']
 
-    sudo = input_args['sudo']
-    shared_ids['ref.fa.fai'] = job.addChildJobFn(create_reference_index, ref_id, sudo).rv()
+    shared_ids['ref.fa.fai'] = job.addChildJobFn(create_reference_index, ref_id).rv()
     shared_ids['ref.dict'] = job.addChildJobFn(create_reference_dict, ref_id, input_args).rv()
     job.addFollowOnJobFn(spawn_batch_preprocessing, shared_ids, input_args)
 
@@ -404,7 +396,6 @@ def remove_supplementary_alignments(job, shared_ids, input_args):
                '-F', '0x800',
                '/data/sample.bam']
                
-    sudo = input_args['sudo']
     docker_call(work_dir=work_dir, parameters=command,
                 tool='quay.io/ucsc_cgl/samtools:1.3--256539928ea162949d8a65ca5c79a72ef557ce7c',
                 inputs=['sample.bam'],
@@ -434,13 +425,11 @@ def sort_sample(job, shared_ids, input_args):
                'OUTPUT=sample.sorted.bam',
                'SORT_ORDER=coordinate',
                'CREATE_INDEX=true']
-    sudo = input_args['sudo']
     docker_call(work_dir=work_dir, parameters=command,
                 env={'JAVA_OPTS':'-Xmx%sg' % input_args['memory']},
                 tool='quay.io/ucsc_cgl/picardtools:1.95--dd5ac549b95eb3e5d166a5e310417ef13651994e',
                 inputs=['sample.nosuppl.bam'],
-                outputs={'sample.sorted.bam': None, 'sample.sorted.bai': None},
-                sudo=sudo)
+                outputs={'sample.sorted.bam': None, 'sample.sorted.bai': None})
     shared_ids['sample.sorted.bam'] = job.fileStore.writeGlobalFile(outpath)
     job.addChildJobFn(mark_dups_sample, shared_ids, input_args)
 
@@ -449,7 +438,6 @@ def mark_dups_sample(job, shared_ids, input_args):
     """
     Uses picardtools MarkDuplicates
     """
-    sudo = input_args['sudo']
     work_dir = job.fileStore.getLocalTempDir()
     # Retrieve file path
     read_from_filestore(job, work_dir, shared_ids, 'sample.sorted.bam')
@@ -482,7 +470,6 @@ def realigner_target_creator(job, shared_ids, input_args):
     sample: str         Either "normal" or "tumor" to track which one is which
     """
     work_dir = job.fileStore.getLocalTempDir()
-    sudo = input_args['sudo']
     # Retrieve input file paths
     read_from_filestore(job, work_dir, shared_ids, 'ref.fa',
                         'sample.mkdups.bam', 'ref.fa.fai', 'ref.dict',
@@ -506,8 +493,7 @@ def realigner_target_creator(job, shared_ids, input_args):
                 inputs=['ref.fa','sample.mkdups.bam', 'ref.fa.fai', 'ref.dict',
                         'sample.mkdups.bam.bai', 'phase.vcf', 'mills.vcf'],
                 outputs={'sample.intervals': None},
-                env={'JAVA_OPTS':'-Xmx%sg' % input_args['memory']},
-                sudo=sudo)
+                env={'JAVA_OPTS':'-Xmx%sg' % input_args['memory']})
     shared_ids['sample.intervals'] = job.fileStore.writeGlobalFile(output)
     job.addChildJobFn(indel_realignment, shared_ids, input_args)
 
@@ -521,7 +507,6 @@ def indel_realignment(job, shared_ids, input_args):
     """
     # Unpack convenience variables for job
     work_dir = job.fileStore.getLocalTempDir()
-    sudo = input_args['sudo']
     # Retrieve input file paths
     return_input_paths(job, work_dir, shared_ids, 'ref.fa',
                        'sample.mkdups.bam', 'phase.vcf', 'mills.vcf',
@@ -566,7 +551,6 @@ def base_recalibration(job, shared_ids, input_args):
     """
     # Unpack convenience variables for job
     work_dir = job.fileStore.getLocalTempDir()
-    sudo = input_args['sudo']
     # Retrieve input file paths
     return_input_paths(job, work_dir, shared_ids, 'ref.fa', 'sample.indel.bam',
                        'dbsnp.vcf', 'ref.fa.fai',
@@ -586,7 +570,7 @@ def base_recalibration(job, shared_ids, input_args):
                 inputs=['ref.fa', 'sample.indel.bam', 'dbsnp.vcf', 'ref.fa.fai',
                         'ref.dict', 'sample.indel.bam.bai'],
                 outputs={'sample.recal.table': None},
-                env={'JAVA_OPTS':'-Xmx%sg' % input_args['memory']}, sudo=sudo)
+                env={'JAVA_OPTS':'-Xmx%sg' % input_args['memory']})
     # Write to fileStore
     shared_ids['sample.recal.table'] = job.fileStore.writeGlobalFile(output)
     job.addChildJobFn(print_reads, shared_ids, input_args, cores = input_args['cpu_count'])
@@ -603,7 +587,6 @@ def print_reads(job, shared_ids, input_args):
     uuid = input_args['uuid']
     suffix = input_args['suffix']
     work_dir = job.fileStore.getLocalTempDir()
-    sudo = input_args['sudo']
     # Retrieve input file paths
     return_input_paths(job, work_dir, shared_ids, 'ref.fa', 'sample.indel.bam',
                        'ref.fa.fai', 'ref.dict', 'sample.indel.bam.bai', 'sample.recal.table')
@@ -648,7 +631,6 @@ def main():
               'dbsnp.vcf': pargs.dbsnp,
               'output_dir': pargs.output_dir,
               's3_dir': pargs.s3_dir,
-              'sudo': pargs.sudo,
               'ssec': pargs.ssec,
               'suffix': pargs.suffix,
               'cpu_count': multiprocessing.cpu_count(), # FIXME: should not be called from toil-leader, see #186

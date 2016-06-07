@@ -303,9 +303,10 @@ def start(job, shared_ids, input_args, sample):
     else:
         pass
 
+    cores = multiprocessing.cpu_count()
     if input_args['indexed']:
         ids['toil.bam.bai'] = job.addChildJobFn(download_url, "%s.bai" % url, 'toil.bam.bai').rv()
-        job.addFollowOnJobFn(haplotype_caller, ids, input_args, cores = input_args['cpu_count'])
+        job.addFollowOnJobFn(haplotype_caller, ids, input_args, cores = cores)
     else:
         job.addFollowOnJobFn(index, ids, input_args)
 
@@ -320,8 +321,6 @@ def index(job, shared_ids, input_args):
     """
     work_dir = job.fileStore.getLocalTempDir()
     # Retrieve file path
-    # FIXME: unused variable
-    bam_path = return_input_paths(job, work_dir, shared_ids, 'toil.bam')
     output_path = os.path.join(work_dir, 'toil.bam.bai')
     # Call: index the normal.bam
     parameters = ['index', 'toil.bam']
@@ -331,11 +330,11 @@ def index(job, shared_ids, input_args):
                 parameters = parameters,
                 tool = 'quay.io/ucsc_cgl/samtools',
                 inputs=inputs,
-                outputs=outputs,
-                sudo = input_args['sudo'])
+                outputs=outputs)
+    cores = multiprocessing.cpu_count()
     # Update FileStore and call child
     shared_ids['toil.bam.bai'] = job.fileStore.writeGlobalFile(output_path)
-    job.addChildJobFn(haplotype_caller, shared_ids, input_args, cores = input_args['cpu_count'])
+    job.addChildJobFn(haplotype_caller, shared_ids, input_args, cores = cores)
 
 
 def haplotype_caller(job, shared_ids, input_args):
@@ -352,10 +351,11 @@ def haplotype_caller(job, shared_ids, input_args):
     read_from_filestore_hc(job, work_dir, shared_ids, *input_files)
     output = '%s.raw.BOTH%s.gvcf' % (input_args['uuid'],
                                      input_args['suffix'])
-    
+
+    cores = multiprocessing.cpu_count()
     # Call GATK -- HaplotypeCaller
     command = ['-U', 'ALLOW_SEQ_DICT_INCOMPATIBILITY', # RISKY! (?) See #189
-               '-nct', str(input_args['cpu_count']),
+               '-nct', str(cores),
                '-R', 'ref.fa',
                '-T', 'HaplotypeCaller',
                '--genotyping_mode', 'Discovery',
@@ -376,8 +376,7 @@ def haplotype_caller(job, shared_ids, input_args):
                     parameters = command,
                     tool = 'quay.io/ucsc_cgl/gatk:3.5--dba6dae49156168a909c43330350c6161dc7ecc2',
                     inputs=inputs,
-                    outputs=outputs,
-                    sudo = input_args['sudo'])
+                    outputs=outputs)
     except:
         sys.stderr.write("Running haplotype caller with %s in %s failed." % (
             " ".join(command), work_dir))
@@ -389,8 +388,9 @@ def haplotype_caller(job, shared_ids, input_args):
     # upload gvcf
     upload_or_move_hc(work_dir, input_args, output)
 
+    cores = multiprocessing.cpu_count()
     # call variants prior to vqsr
-    job.addChildJobFn(genotype_gvcf, shared_ids, input_args, cores = input_args['cpu_count'])
+    job.addChildJobFn(genotype_gvcf, shared_ids, input_args, cores = cores)
 
 
 def genotype_gvcf(job, shared_ids, input_args):
@@ -409,9 +409,10 @@ def genotype_gvcf(job, shared_ids, input_args):
                    'ref.fa', 'ref.fa.fai', 'ref.dict']
     read_from_filestore_hc(job, work_dir, shared_ids, *input_files)
     output = 'unified.raw.BOTH.gatk.vcf'
-    
+
+    cores = multiprocessing.cpu_count()
     command = ['-U', 'ALLOW_SEQ_DICT_INCOMPATIBILITY', # RISKY! (?) See #189
-               '-nt', str(input_args['cpu_count']),
+               '-nt', str(cores),
                '-R', 'ref.fa',
                '-T', 'GenotypeGVCFs',
                '--variant', '%s.raw.BOTH.gatk.gvcf' % input_args['uuid'],
@@ -427,8 +428,7 @@ def genotype_gvcf(job, shared_ids, input_args):
                     parameters = command,
                     tool = 'quay.io/ucsc_cgl/gatk:3.5--dba6dae49156168a909c43330350c6161dc7ecc2',
                     inputs=inputs,
-                    outputs=outputs,
-                    sudo = input_args['sudo'])
+                    outputs=outputs)
     except:
         sys.stderr.write("Running GenotypeGVCFs with %s in %s failed." % (
             " ".join(command), work_dir))
@@ -437,9 +437,10 @@ def genotype_gvcf(job, shared_ids, input_args):
     # Update fileStore and spawn child job
     shared_ids[output] = job.fileStore.writeGlobalFile(os.path.join(work_dir, output))
 
+    cores = multiprocessing.cpu_count()
     # run vqsr
-    job.addChildJobFn(vqsr_snp, shared_ids, input_args, cores = input_args['cpu_count'])
-    job.addChildJobFn(vqsr_indel, shared_ids, input_args, cores = input_args['cpu_count'])
+    job.addChildJobFn(vqsr_snp, shared_ids, input_args, cores = cores)
+    job.addChildJobFn(vqsr_indel, shared_ids, input_args, cores = cores)
 
 
 def vqsr_snp(job, shared_ids, input_args):
@@ -454,13 +455,14 @@ def vqsr_snp(job, shared_ids, input_args):
     work_dir = job.fileStore.getLocalTempDir()
     input_files = ['ref.fa', 'ref.fa.fai', 'ref.dict', 'unified.raw.BOTH.gatk.vcf',
                    'hapmap.vcf', 'omni.vcf', 'dbsnp.vcf', 'phase.vcf']
+    cores = multiprocessing.cpu_count()
     read_from_filestore_hc(job, work_dir, shared_ids, *input_files)
     outputs = ['HAPSNP.recal', 'HAPSNP.tranches', 'HAPSNP.plots']
     command = ['-U', 'ALLOW_SEQ_DICT_INCOMPATIBILITY', # RISKY! (?) See #189
                '-T', 'VariantRecalibrator',
                '-R', 'ref.fa',
                '-input', 'unified.raw.BOTH.gatk.vcf',
-               '-nt', str(input_args['cpu_count']),
+               '-nt', str(cores),
                '-resource:hapmap,known=false,training=true,truth=true,prior=15.0', 'hapmap.vcf',
                '-resource:omni,known=false,training=true,truth=false,prior=12.0', 'omni.vcf',
                '-resource:dbsnp,known=true,training=false,truth=false,prior=2.0', 'dbsnp.vcf',
@@ -477,8 +479,7 @@ def vqsr_snp(job, shared_ids, input_args):
                 parameters = command,
                 tool ='quay.io/ucsc_cgl/gatk:3.5--dba6dae49156168a909c43330350c6161dc7ecc2',
                 inputs=inputs,
-                outputs=outputD,
-                sudo = input_args['sudo'])
+                outputs=outputD)
     shared_ids = write_to_filestore(job, work_dir, shared_ids, *outputs)
     job.addChildJobFn(apply_vqsr_snp, shared_ids, input_args)
 
@@ -517,8 +518,7 @@ def apply_vqsr_snp(job, shared_ids, input_args):
                 parameters = command,
                 tool = 'quay.io/ucsc_cgl/gatk:3.5--dba6dae49156168a909c43330350c6161dc7ecc2',
                 inputs=inputs,
-                outputs=outputs,
-                sudo = input_args['sudo'])
+                outputs=outputs)
 
     upload_or_move_hc(work_dir, input_args, output)
 
@@ -556,12 +556,13 @@ def vqsr_indel(job, shared_ids, input_args):
     work_dir = job.fileStore.getLocalTempDir()
     input_files = ['ref.fa', 'ref.fa.fai', 'ref.dict', 'unified.raw.BOTH.gatk.vcf', 'mills.vcf']
     read_from_filestore_hc(job, work_dir, shared_ids, *input_files)
+    cores = multiprocessing.cpu_count()
     outputs = ['HAPINDEL.recal', 'HAPINDEL.tranches', 'HAPINDEL.plots']
     command = ['-U', 'ALLOW_SEQ_DICT_INCOMPATIBILITY', # RISKY! (?) See #189
                '-T', 'VariantRecalibrator',
                '-R', 'ref.fa',
                '-input', 'unified.raw.BOTH.gatk.vcf',
-               '-nt', str(input_args['cpu_count']),
+               '-nt', str(cores),
                '-resource:mills,known=true,training=true,truth=true,prior=12.0', 'mills.vcf',
                '-an', 'DP', '-an', 'FS', '-an', 'ReadPosRankSum',
                '-mode', 'INDEL',
@@ -577,8 +578,7 @@ def vqsr_indel(job, shared_ids, input_args):
                 parameters = command,
                 tool ='quay.io/ucsc_cgl/gatk:3.5--dba6dae49156168a909c43330350c6161dc7ecc2',
                 inputs=inputs,
-                outputs=outputD,
-                sudo = input_args['sudo'])
+                outputs=outputD)
     shared_ids = write_to_filestore(job, work_dir, shared_ids, *outputs)
     job.addChildJobFn(apply_vqsr_indel, shared_ids, input_args)
 
@@ -616,8 +616,7 @@ def apply_vqsr_indel(job, shared_ids, input_args):
                 parameters = command,
                 tool = 'quay.io/ucsc_cgl/gatk:3.5--dba6dae49156168a909c43330350c6161dc7ecc2',
                 inputs = inputs,
-                outputs = outputs,
-                sudo = input_args['sudo'])
+                outputs = outputs)
 
     upload_or_move_hc(work_dir, input_args, output)
 
@@ -637,7 +636,6 @@ if __name__ == '__main__':
               'output_dir': args.output_dir,
               'suffix': args.suffix,
               'uuid': None,
-              'cpu_count': multiprocessing.cpu_count(), # FIXME: should not be called from toil-leader, see #186
               'file_size': args.file_size,
               'ssec': None,
               'sudo': False,
