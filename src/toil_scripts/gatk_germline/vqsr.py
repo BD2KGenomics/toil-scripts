@@ -1,12 +1,12 @@
 #!/usr/bin/env python2.7
 from __future__ import print_function
-import multiprocessing
 import os
+from itertools import islice
 
 from toil.job import PromisedRequirement
 from bd2k.util.humanize import human2bytes
 
-from toil_scripts.tools.variant_filters import gatk_genotype_gvcf, \
+from toil_scripts.tools.variant_filters import gatk_genotype_gvcfs, \
     gatk_variant_recalibrator, gatk_apply_variant_recalibration
 from toil_scripts.lib.files import upload_or_move_job
 
@@ -23,32 +23,33 @@ def vqsr_pipeline(job, gvcfs, config):
     4: Apply INDELS
     5: Write VCF to output directory
 
+    :param JobFunctionWrappingJob job: Toil Job instance
     :param dict gvcfs: Dictionary of UUIDs and GVCF FileStoreIDs
     :param Namespace config: Input parameters
     :return: SNP and INDEL VQSR VCF FileStoreID
     :rtype: str
     """
-    cores = multiprocessing.cpu_count()
     genotype_gvcf_disk = PromisedRequirement(
-        lambda lst: 2*sum(x.size for x in lst)+human2bytes('5G'), gvcfs.values())
-    genotype_gvcf = job.wrapJobFn(gatk_genotype_gvcf,
+        lambda lst: 2*sum(x.size for x in lst)+human2bytes('5G'),
+        gvcfs.values())
+    genotype_gvcf = job.wrapJobFn(gatk_genotype_gvcfs,
                                   gvcfs,
                                   config,
-                                  disk=genotype_gvcf_disk, cores=cores)
+                                  disk=genotype_gvcf_disk, cores=config.cores)
 
     snp_recal_disk = PromisedRequirement(lambda x: 2*x.size+human2bytes('10G'), genotype_gvcf.rv())
     snp_recal = job.wrapJobFn(gatk_variant_recalibrator,
                               'SNP',
                               genotype_gvcf.rv(),
                               config,
-                              disk=snp_recal_disk, cores=cores/2)
+                              disk=snp_recal_disk, cores=config.cores/2)
 
     indel_recal_disk = PromisedRequirement(lambda x: 2*x.size+human2bytes('10G'), genotype_gvcf.rv())
     indel_recal = job.wrapJobFn(gatk_variant_recalibrator,
                                 'INDEL',
                                 genotype_gvcf.rv(),
                                 config,
-                                disk=indel_recal_disk, cores=cores/2)
+                                disk=indel_recal_disk, cores=config.cores/2)
 
     apply_snp_recal_disk = PromisedRequirement(
         lambda x,y,z: 2*(x.size + y.size + z.size) + human2bytes('5G'),
@@ -60,7 +61,7 @@ def vqsr_pipeline(job, gvcfs, config):
                                     genotype_gvcf.rv(),
                                     snp_recal.rv(0), snp_recal.rv(1),
                                     config,
-                                    disk=apply_snp_recal_disk, cores=cores)
+                                    disk=apply_snp_recal_disk, cores=config.cores)
 
     apply_indel_recal_disk = PromisedRequirement(
         lambda x,y,z: 2*(x.size + y.size + z.size) + human2bytes('5G'),
@@ -70,17 +71,18 @@ def vqsr_pipeline(job, gvcfs, config):
                                       apply_snp_recal.rv(),
                                       indel_recal.rv(0), indel_recal.rv(1),
                                       config,
-                                      disk=apply_indel_recal_disk, cores=cores)
+                                      disk=apply_indel_recal_disk, cores=config.cores)
+
 
     job.addFollowOn(genotype_gvcf)
     genotype_gvcf.addChild(snp_recal)
     genotype_gvcf.addChild(indel_recal)
     job.addFollowOn(apply_snp_recal)
     apply_snp_recal.addFollowOn(apply_indel_recal)
-    output_dir = os.path.join(config.output_dir)
 
+    output_dir = config.output_dir
     if len(gvcfs) == 1:
-        uuid, _ = gvcfs.items()[0]
+        uuid = gvcfs.keys()[0]
         output_dir = os.path.join(output_dir, uuid)
         vqsr_name = '{}.vqsr{}.vcf'.format(uuid, config.suffix)
     # Output joint recalibrated VCF
