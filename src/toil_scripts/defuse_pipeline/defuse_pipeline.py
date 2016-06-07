@@ -208,6 +208,10 @@ def run_simple_filter(job, tsvID):
     return job.fileStore.writeGlobalFile(outpath)
 
 
+def run_exon_filter():
+
+
+
 def writeToDebug(msgs, outfile='/tmp/toil_debug'):
     if isinstance(msgs, str):
         msgs = [msgs]
