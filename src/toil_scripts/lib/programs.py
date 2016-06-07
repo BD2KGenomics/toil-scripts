@@ -1,6 +1,8 @@
+from __future__ import print_function
 import os
 import subprocess
 import logging
+
 from bd2k.util.exceptions import panic
 
 _log = logging.getLogger(__name__)
@@ -59,7 +61,7 @@ def docker_call(tool,
         assert(os.path.isfile(os.path.join(work_dir, filename)))
 
     if mock:
-        for filename, url in outputs.items():
+        for filename, url in outputs.iteritems():
             file_path = os.path.join(work_dir, filename)
             if url is None:
                 # create mock file

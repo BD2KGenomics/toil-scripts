@@ -84,7 +84,8 @@ kwargs = dict(
         'console_scripts': [
             'toil-bwa = toil_scripts.bwa_alignment.bwa_alignment:main',
             'toil-rnaseq = toil_scripts.rnaseq_cgl.rnaseq_cgl_pipeline:main',
-            'toil-exome = toil_scripts.exome_variant_pipeline.exome_variant_pipeline:main']})
+            'toil-exome = toil_scripts.exome_variant_pipeline.exome_variant_pipeline:main',
+            'toil-germline = toil_scripts.gatk_germline.germline:main']})
 
 
 class PyTest(TestCommand):

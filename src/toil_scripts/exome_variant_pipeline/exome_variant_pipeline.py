@@ -20,7 +20,7 @@ from toil_scripts.lib.urls import download_url_job, s3am_upload
 from toil_scripts.tools.mutation_callers import run_muse
 from toil_scripts.tools.mutation_callers import run_mutect
 from toil_scripts.tools.mutation_callers import run_pindel
-from toil_scripts.tools.preprocessing import run_gatk_preprocessing
+from toil_scripts.tools.preprocessing import run_germline_preprocessing
 from toil_scripts.tools.preprocessing import run_picard_create_sequence_dictionary
 from toil_scripts.tools.preprocessing import run_samtools_faidx
 from toil_scripts.tools.preprocessing import run_samtools_index
@@ -108,10 +108,10 @@ def preprocessing_declaration(job, config):
         job.fileStore.logToMaster('Ran preprocessing: ' + config.uuid)
         disk = '1G' if config.ci_test else '20G'
         mem = '2G' if config.ci_test else '10G'
-        processed_normal = job.wrapJobFn(run_gatk_preprocessing, config.cores, config.normal_bam, config.normal_bai,
+        processed_normal = job.wrapJobFn(run_germline_preprocessing, config.cores, config.normal_bam, config.normal_bai,
                                          config.reference, config.dict, config.fai, config.phase, config.mills,
                                          config.dbsnp, mem, cores=1, memory=mem, disk=disk)
-        processed_tumor = job.wrapJobFn(run_gatk_preprocessing, config.cores, config.tumor_bam, config.tumor_bai,
+        processed_tumor = job.wrapJobFn(run_germline_preprocessing, config.cores, config.tumor_bam, config.tumor_bai,
                                         config.reference, config.dict, config.fai, config.phase, config.mills,
                                         config.dbsnp, mem, cores=1, memory=mem, disk=disk)
         static_workflow = job.wrapJobFn(static_workflow_declaration, config, processed_normal.rv(0),

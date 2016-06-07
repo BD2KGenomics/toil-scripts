@@ -24,7 +24,9 @@ def download_url(url, work_dir='.', name=None, s3_key_path=None, cghub_key_path=
     if cghub_key_path:
         _download_with_genetorrent(url, file_path, cghub_key_path)
     elif urlparse(url).scheme == 's3':
-        _s3am_with_retry(num_cores=1, file_path=file_path, s3_url=url, mode='download', s3_key_path=s3_key_path)
+        _s3am_with_retry(num_cores=1, file_path=file_path, s3_url=url, mode='download',
+
+                         s3_key_path=s3_key_path)
     elif urlparse(url).scheme == 'file':
         shutil.copy(urlparse(url).path, file_path)
     else:
@@ -36,8 +38,8 @@ def download_url(url, work_dir='.', name=None, s3_key_path=None, cghub_key_path=
 def download_url_job(job, url, name=None, s3_key_path=None, cghub_key_path=None):
     """Job version of `download_url`"""
     work_dir = job.fileStore.getLocalTempDir()
-    fpath = download_url(url, work_dir=work_dir, name=name,
-                         s3_key_path=s3_key_path, cghub_key_path=cghub_key_path)
+    fpath = download_url(url, work_dir=work_dir, name=name, s3_key_path=s3_key_path,
+                         cghub_key_path=cghub_key_path)
     return job.fileStore.writeGlobalFile(fpath)
 
 
