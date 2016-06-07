@@ -1,8 +1,11 @@
 from contextlib import closing
+from bd2k.util.files import mkdir_p
 import os
 import tarfile
 import shutil
+import errno
 
+from toil_scripts.lib.urls import s3am_upload
 
 def tarball_files(tar_name, file_paths, output_dir='.', prefix=''):
     """
@@ -33,6 +36,49 @@ def move_files(file_paths, output_dir):
             raise ValueError('Path provided is relative not absolute.')
         dest = os.path.join(output_dir, os.path.basename(file_path))
         shutil.move(file_path, dest)
+
+
+def copy_to(filename, output_dir, work_dir=None):
+    """
+    Moves files from the working directory to the output directory.
+
+    :param work_dir: the working directory
+    :param output_dir: the output directory
+    :param filenames: remaining arguments are filenames
+    """
+    if os.path.isabs(filename):
+        origin = filename
+        filename = os.path.basename(filename)
+    elif work_dir is None:
+        origin = os.path.abspath(filename)
+    else:
+        origin = os.path.join(work_dir, filename)
+    dest = os.path.join(output_dir, filename)
+    try:
+        shutil.copytree(origin, dest)
+    except OSError as e:
+        if e.errno == errno.ENOTDIR:
+            mkdir_p(output_dir)
+            shutil.copy(origin, dest)
+        else:
+            raise e
+    assert os.path.exists(dest)
+
+
+def upload_or_move_job(job, filename, file_id, output_dir, ssec=None):
+    job.fileStore.logToMaster('Writing {} to {}'.format(filename, output_dir))
+    work_dir = job.fileStore.getLocalTempDir()
+    filepath = job.fileStore.readGlobalFile(file_id, os.path.join(work_dir, filename))
+    # are we moving this into a local dir, or up to s3?
+    if output_dir.startswith('s3://'):
+        s3am_upload(fpath=os.path.join(work_dir, filepath),
+                    s3_dir=output_dir,
+                    s3_key_path=ssec)
+    elif not os.path.exists(os.path.join(output_dir, filename)):
+        mkdir_p(output_dir)
+        copy_to(filepath, output_dir, work_dir)
+    else:
+        job.fileStore.logToMaster("File already exists: {}".format(filename))
 
 
 def consolidate_tarballs_job(job, fname_to_id):

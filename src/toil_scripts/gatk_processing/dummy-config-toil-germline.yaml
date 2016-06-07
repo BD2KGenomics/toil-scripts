@@ -1,0 +1,40 @@
+# CGL Germline Variant Pipeline configuration file
+# This configuration file is formatted in YAML. Simply write the value (at least one space) after the colon.
+# Edit the values in this configuration file and then rerun the pipeline: "toil-variant run"
+# URLs can take the form: http://, file://, s3://, gnos://.
+# Comments (beginning with #) do not need to be removed. Optional parameters may be left blank
+####################################################################################################################
+# Required: URL to reference genome
+genome: file:///home/jacob/code/toil-scripts/src/toil_scripts/gatk_processing/dummy.file 
+
+# Required: URL to phase indels VCF
+phase: file:///home/jacob/code/toil-scripts/src/toil_scripts/gatk_processing/dummy.file 
+
+# Required: URL to Mills indel VCF
+mills: file:///home/jacob/code/toil-scripts/src/toil_scripts/gatk_processing/dummy.file
+
+# Required: URL to dbsnp VCF
+dbsnp: file:///home/jacob/code/toil-scripts/src/toil_scripts/gatk_processing/dummy.file
+
+# Required: URL to cosmic VCF
+cosmic: file:///home/jacob/code/toil-scripts/src/toil_scripts/gatk_processing/dummy.file
+
+# Optional: Provide a full path to where results will appear
+output-dir: /home/jacob/test
+
+# Optional: Provide an s3 path (s3://bucket/dir) where results will appear
+s3-dir:
+
+# Optional: Provide a full path to a 32-byte key used for SSE-C Encryption in Amazon
+ssec:
+
+# Optional: Provide a full path to a CGHub Key used to access GNOS hosted data
+gtkey:
+
+# Optional: Provide a suffix for naming output files
+suffix:
+
+# Optional: Provide boolean value to run pipeline in mock mode
+mock: True
+
+memory: 15

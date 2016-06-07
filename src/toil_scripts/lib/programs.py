@@ -1,3 +1,5 @@
+from __future__ import print_function
+
 import os
 import subprocess
 import logging
@@ -45,6 +47,7 @@ def docker_call(tool,
                       the environment variable.
     """
     from toil_scripts.lib.urls import download_url
+    import sys
 
     if mock is None:
         mock = mock_mode()
@@ -59,7 +62,7 @@ def docker_call(tool,
         assert(os.path.isfile(os.path.join(work_dir, filename)))
 
     if mock:
-        for filename, url in outputs.items():
+        for filename, url in outputs.iteritems():
             file_path = os.path.join(work_dir, filename)
             if url is None:
                 # create mock file

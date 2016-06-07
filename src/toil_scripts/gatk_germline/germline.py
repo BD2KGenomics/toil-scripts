@@ -1,456 +1,264 @@
 #!/usr/bin/env python2.7
 
-""" 
-GATK HaplotypeCaller Genotyping Mode
-
-            Tree Structure of GATK Pipeline
-            0 --> 1 --> 2 --> 3 --> 4
-                                    |
-                                    5
-                                   / \
-                                  6   7
-                                 /     \
-                                8       9
-0 = Start Node
-1 = Download Reference
-2 = Index Reference
-3 = Reference Dictionary
-4 = Index Samples
-5 = HaplotypeCaller SNP & Indel
-6 = VariantRecalibrator SNPs
-7 = VariantRecalibrator Indels
-8 = ApplyRecalibration SNPs
-9 = ApplyRecalibration Indels
-
-===================================================================
-:Dependencies:
-curl            - apt-get install curl
-docker          - apt-get install docker (or 'docker.io' for linux)
-toil            - pip install --pre toil
-"""
 from __future__ import print_function
-
 import argparse
-import errno
 import multiprocessing
 import os
-import shutil
-import subprocess
-import sys
 import textwrap
-from collections import OrderedDict
-
 import yaml
+from copy import deepcopy
+from urlparse import urlparse
+from bd2k.util.processes import which
+
 from toil.job import Job
-from toil_scripts import download_from_s3_url
+from toil_scripts.lib.urls import download_url_job
 from toil_scripts.lib import require
 from toil_scripts.lib.programs import docker_call
-from toil_scripts.lib.urls import s3am_upload
+from toil_scripts.lib.files import upload_or_move_job
 from toil_scripts.rnaseq_cgl.rnaseq_cgl_pipeline import generate_file
+from toil_scripts.gatk_processing.gatk_preprocessing import samtools_faidx, picard_create_sequence_dictionary
 
 
-# Convenience functions used in the pipeline
-def make_directory(path):
+def gatk_germline_pipeline(job, uuid, url, config, bai_url=None):
     """
-    Makes a directory if it does not already exist.
+    Runs GATK Germline Pipeline on a single sample. Writes gvcf and vqsr.vcf to output directory.
 
-    :param path: path to output directory
+    :param job: Toil Job instance
+    :param uuid str: Unique identifier for the sample
+    :param url str: URL to sample bam
+    :param config dict: Configuration options for pipeline
     """
-    try:
-        os.makedirs(path)
-    except OSError as exc:  # Python >2.5
-        if exc.errno == errno.EEXIST and os.path.isdir(path):
-            pass
-        else:
-            raise
+    config = deepcopy(config)
+    config['uuid'] = uuid
 
-def download_url(job, url, filename):
-    """
-    Downloads a file from a URL and places it in the jobStore
+    if config ['xmx'] is None:
+        config['xmx'] = os.sysconf('SC_PAGE_SIZE') * os.sysconf('SC_PHYS_PAGES') / (1024 ** 3)
+    download_bam = job.wrapJobFn(download_url_job, url, name='toil.bam', s3_key_path=config['ssec'])
 
-    :param job: Job instance
-    :param url: data url, str
-    :param filename: name given to downloaded data, str
-
-    :return: fileStore promise
-    """
-    work_dir = job.fileStore.getLocalTempDir()
-    file_path = os.path.join(work_dir, filename)
-    if not os.path.exists(file_path):
-        if url.startswith('s3:'):
-            download_from_s3_url(file_path, url)
-        else:
-            try:
-                subprocess.check_call(['curl', '-fs', '--retry', '5', '--create-dir', url, '-o', file_path])
-            except subprocess.CalledProcessError as cpe:
-                raise RuntimeError(
-                    '\nNecessary file could not be acquired: %s. Got error "%s". Check input URL' % (url, cpe))
-            except OSError:
-                raise RuntimeError('Failed to find "curl". Install via "apt-get install curl"')
-    assert os.path.exists(file_path)
-    return job.fileStore.writeGlobalFile(file_path)
-
-
-def return_input_paths(job, work_dir, ids, *filenames):
-    """
-    Given one or more filenames, reads the file from the fileStore and
-    copies it (or makes a hard link) into the working directory.
-
-    :param job: Job instance
-    :param work_dir: working directory, str
-    :param ids: dictionary of shared file ids
-    :param filenames: remaining arguments are filenames
-
-    :returns: list of paths to files
-    """
-    paths = OrderedDict()
-    for filename in filenames:
-        if not os.path.exists(os.path.join(work_dir, filename)):
-            file_path = job.fileStore.readGlobalFile(ids[filename], os.path.join(work_dir, filename))
-        else:
-            file_path = os.path.join(work_dir, filename)
-        paths[filename] = file_path
-
-    return paths.values()
-
-
-def write_to_filestore(job, work_dir, ids, *filenames):
-    """
-    Given one or more file names in working directory, writes
-    files to filestore and stores the filestore promise in a dictionary
-
-    :param job: Job instance
-    :param work_dir: working directory
-    :param ids: shared file promises, dict
-    :param filenames: remaining arguments are keys for ids
-
-    :returns: shared ids dictionary
-    """
-    for filename in filenames:
-        ids[filename] = job.fileStore.writeGlobalFile(os.path.join(work_dir, filename))
-    return ids
-
-
-def read_from_filestore_hc(job, work_dir, ids, *filenames):
-    """
-    Reads file from fileStore and writes it to working directory.
-
-    :param job: Job instance
-    :param work_dir: working directory
-    :param ids: shared file promises, dict
-    :param filenames: remaining arguments are filenames
-    """
-    for filename in filenames:
-        if not os.path.exists(os.path.join(work_dir, filename)):
-            job.fileStore.readGlobalFile(ids[filename], os.path.join(work_dir, filename))
-
-
-def move_to_output_dir(work_dir, output_dir, *filenames):
-    """`
-    Moves files from the working directory to the output directory.
-
-    :param work_dir: the working directory
-    :param output_dir: the output directory
-    :param filenames: remaining arguments are filenames
-    """
-    for filename in filenames:
-        origin = os.path.join(work_dir, filename)
-        dest = os.path.join(output_dir, filename)
-        shutil.move(origin, dest)
-
-
-def batch_start(job, input_args, sample, output_dir, suffix=''):
-    """ 
-    Downloads reference data and stores fileStore promises,
-    spawns next step in pipeline - reference indexing
-
-    :param job: Job instance
-    :param input_args: command line arguments, dict
-
-    :returns: None
-    """
-    input_args.sample = sample
-    input_args.output_dir = output_dir
-    input_args.suffix = suffix
-    shared_file_names = ['phase.vcf', 'omni.vcf', 'dbsnp.vcf', 'hapmap.vcf', 'mills.vcf']
-    shared_files = [input_args.phase, input_args.omni, input_args.dbsnp, input_args.hapmap, input_args.mills]
-    shared_ids = {}
-    shared_ids['ref.fa'] = job.addChildJobFn(download_url, input_args.ref, 'ref.fa').rv()
-    for file_name,url in zip(shared_file_names, shared_files):
-        shared_ids[file_name] = job.addChildJobFn(download_url, url, file_name).rv()
-    job.addFollowOnJobFn(create_reference_index_hc, shared_ids, input_args)
-
-
-def create_reference_index_hc(job, shared_ids, input_args):
-    """
-    Uses samtools to create reference index file in working directory,
-    spawns next job in pipeline - create reference dictionary
-
-    :param job: Job instance
-    :param shared_ids: dictionary of shared file promises
-    :param input_args: dictionary of input arguments
-    """
-    # Unpack convenience variables for job
-    work_dir = job.fileStore.getLocalTempDir()
-    # Retrieve file path
-    # FIXME: unused variable
-    ref_path = return_input_paths(job, work_dir, shared_ids, 'ref.fa')
-    faidx_output = os.path.join(work_dir, 'ref.fa.fai')
-    # Call: Samtools
-    faidx_command = ['faidx', 'ref.fa']
-    inputs= ref_path
-    outputs={'ref.fa.fai': None}
-    docker_call(work_dir = work_dir,
-                parameters = faidx_command,
-                tool = 'quay.io/ucsc_cgl/samtools',
-                inputs=inputs,
-                outputs=outputs)
-    # Update fileStore for output
-    shared_ids['ref.fa.fai'] = job.fileStore.writeGlobalFile(faidx_output)
-    job.addChildJobFn(create_reference_dict_hc, shared_ids, input_args)
-
-
-def create_reference_dict_hc(job, shared_ids, input_args):
-    """
-    Uses Picardtools to create sequence dictionary for reference genome.
-    Calls next step in pipeline - spawn batch jobs
-
-    :param job: Job instance
-    :param shared_ids: dictionary of shared file promises
-    :param input_args: dictionary of input arguments
-    """
-    # Unpack convenience variables for job
-    work_dir = job.fileStore.getLocalTempDir()
-    # Retrieve file path
-    # FIXME: unused variable
-    ref_path = return_input_paths(job, work_dir, shared_ids, 'ref.fa')
-    # Call: picardtools
-    picard_output = os.path.join(work_dir, 'ref.dict')
-    command = ['CreateSequenceDictionary', 'R=ref.fa', 'O=ref.dict']
-    inputs=['ref.fa']
-    outputs={picard_output: None}
-    docker_call(work_dir = work_dir,
-                env={'JAVA_OPTS':'-Xmx%sg' % input_args.memory},
-                parameters = command,
-                tool = 'quay.io/ucsc_cgl/picardtools',
-                inputs=inputs,
-                outputs=outputs)
-    # Update fileStore for output
-    shared_ids['ref.dict'] = job.fileStore.writeGlobalFile(picard_output)
-    job.addChildJobFn(spawn_batch_variant_calling, shared_ids, input_args)
-
-
-def spawn_batch_variant_calling(job, shared_ids, input_args):
-    """
-    Reads config file and dynamically starts a job for each sample.
-
-    :param job: Job instance
-    :param shared_ids: dictionary of shared file promises
-    :param input_args: dictionary of input arguments
-    """
-
-    if input_args.sample:
-        samples = [input_args.sample]
+    if bai_url:
+        bam_index = job.wrapJobFn(download_url_job, bai_url, name='toil.bam.bai', s3_key_path=config['ssec'])
+        download_bam.addChild(bam_index)
     else:
-        # Names for every input file used in the pipeline by each sample
-        samples = []
+        bam_index = job.wrapJobFn(samtools_index, download_bam.rv(), config)
+        download_bam.addChild(bam_index)
 
-        # does the config file exist locally? if not, try to read from job store
-        if not os.path.exists(input_args.manifest):
-            work_dir = job.fileStore.getLocalTempDir()
-            samples_path = os.path.join(work_dir, 'config.txt')
-            job.fileStore.readGlobalFile(input_args.manifest, samples_path)
-            samples_file = samples_path
+    haplotype_caller = job.wrapJobFn(gatk_haplotype_caller, download_bam.rv(), bam_index.rv(), config)
+    genotype_gvcf = job.wrapJobFn(gatk_genotype_gvcf, haplotype_caller.rv(), config)
+
+    snp_recal = job.wrapJobFn(gatk_variant_recalibrator_snp, genotype_gvcf.rv(), config)
+    apply_snp_recal = job.wrapJobFn(gatk_apply_variant_recalibration_snp, genotype_gvcf.rv(),
+                                    snp_recal.rv(0), snp_recal.rv(1), config)
+
+    indel_recal = job.wrapJobFn(gatk_variant_recalibrator_indel, genotype_gvcf.rv(), config)
+    apply_indel_recal = job.wrapJobFn(gatk_apply_variant_recalibration_indel, apply_snp_recal.rv(),
+                                      indel_recal.rv(0), indel_recal.rv(1), config)
+    # Output vcfs
+    raw_name = '{}.raw{}.gvcf'.format(uuid, config['suffix'])
+    vqsr_name = '{}.vqsr{}.vcf'.format(uuid, config['suffix'])
+    output_raw = job.wrapJobFn(upload_or_move_job, raw_name, genotype_gvcf.rv(), config['output_dir'])
+    output_vqsr = job.wrapJobFn(upload_or_move_job, vqsr_name, apply_indel_recal.rv(), config['output_dir'])
+
+    # Create DAG
+    job.addChild(download_bam)
+    # Wait for bam index
+    download_bam.addFollowOn(haplotype_caller)
+    haplotype_caller.addChild(genotype_gvcf)
+    genotype_gvcf.addChild(snp_recal)
+    genotype_gvcf.addChild(indel_recal)
+    genotype_gvcf.addChild(output_raw)
+    genotype_gvcf.addFollowOn(apply_snp_recal)
+    apply_snp_recal.addChild(apply_indel_recal)
+    apply_indel_recal.addChild(output_vqsr)
+
+
+def get_files_from_filestore(job, work_dir, input_dict):
+    """
+    Copies files from the file store to a work directory
+
+    :param job: Toil Job instance
+    :param work_dir: current working directory
+    :param input_dict: {filename: fileStoreID}
+    :return dict: {filename: filepath}
+    """
+    for name, fileStoreID in input_dict.iteritems():
+        if not os.path.exists(os.path.join(work_dir, name)):
+            file_path = job.fileStore.readGlobalFile(fileStoreID, os.path.join(work_dir, name))
         else:
-            samples_file = input_args.manifest
-
-        with open(samples_file, 'r') as f:
-            for line in f.readlines():
-                if not line.isspace() and not line.startswith('#'):
-                    samples.append(line.strip().split('\t'))
+            file_path = name
+        input_dict[name] = file_path
+    return input_dict
 
 
-    for sample in samples:
-        job.addChildJobFn(start, shared_ids, input_args, sample)
-
-
-def start(job, shared_ids, input_args, sample):
+def download_shared_files(job, config):
     """
-    Configures parameters for sample and calls next step in
-    pipeline - index sample bam
+    Downloads reference files shared by all samples in the pipeline
+
+    :param config dict: pipeline configuration options
+    :return dict: updated config dictionary with shared fileStoreIDS
+    """
+    job.fileStore.logToMaster('Downloading shared reference files')
+    reference_names = ['genome.fa', 'phase.vcf', 'mills.vcf', 'dbsnp.vcf', 'hapmap.vcf', 'omni.vcf']
+    for name in reference_names:
+        key, _ = name.split('.')
+        config[name] = job.addChildJobFn(download_url_job, config[key], name=name,
+                                         s3_key_path=config['ssec']).rv()
+    return config
+
+
+def reference_preprocessing(job, config, mock=False):
+    """
+    Creates a genome.fa.fai and genome.dict file for reference genome.fa
+    if one is not already present in the config dictionary
+
+    :param config dict: pipeline configuration options and shared files
+                        requires a key called 'genome.fa'
+    :return dict: updated config dictionary with reference index files
+    """
+    job.fileStore.logToMaster('Preparing Reference Files')
+    genome_id = config['genome.fa']
+    if 'genome.fa.fai' not in config:
+        config['genome.fa.fai'] = job.addChildJobFn(samtools_faidx, genome_id, mock=mock).rv()
+    if 'genome.dict' not in config:
+        config['genome.dict'] = job.addChildJobFn(picard_create_sequence_dictionary, genome_id, mock=mock).rv()
+    return config
+
+
+def samtools_index(job, bam_id, config):
+    """
+    Index sample bam using samtools index
 
     :param job: Job instance
-    :param shared_ids: dictionary of shared file promises
-    :param input_args: dictionary of input arguments
-    :param sample: tuple with uuid and file url
-    """
-    uuid, url = sample
-    ids = shared_ids.copy()
-    # Update input
-    input_args.uuid = uuid
-    # Sample bam file holds a url?
-    input_args.bam_url = url
-
-    if not input_args.output_dir.startswith('s3://'):
-        output_dir = os.path.join(input_args.output_dir, uuid)
-
-    if input_args.ssec is None:
-        ids['toil.bam'] = job.addChildJobFn(download_url, url, 'toil.bam').rv()
-    else:
-        pass
-
-    if input_args.indexed:
-        ids['toil.bam.bai'] = job.addChildJobFn(download_url, "%s.bai" % url, 'toil.bam.bai').rv()
-        job.addFollowOnJobFn(haplotype_caller, ids, input_args, cores = input_args.cpu_count)
-    else:
-        job.addFollowOnJobFn(index, ids, input_args)
-
-
-def index(job, shared_ids, input_args):
-    """
-    Index sample bam using samtools, calls haplotypeCaller.
-
-    :param job: Job instance
-    :param shared_ids: dictionary of shared file promises
-    :param input_args: dictionary of input arguments
+    :param bam_id str: bam file store ID
+    :param config dict: pipeline configuration options and shared files
+    :return:
     """
     work_dir = job.fileStore.getLocalTempDir()
     # Retrieve file path
-    bam_path = return_input_paths(job, work_dir, shared_ids, 'toil.bam')
-    output_path = os.path.join(work_dir, 'toil.bam.bai')
+    inputs = {'toil.bam': bam_id}
+    outputs={'toil.bam.bai': None}
+    get_files_from_filestore(job, work_dir, inputs)
     # Call: index the normal.bam
     parameters = ['index', 'toil.bam']
-    inputs=['toil.bam']
-    outputs={'toil.bam.bai': None}
     docker_call(work_dir = work_dir,
                 parameters = parameters,
-                tool = 'quay.io/ucsc_cgl/samtools',
-                inputs=inputs,
-                outputs=outputs)
-    # Update FileStore and call child
-    shared_ids['toil.bam.bai'] = job.fileStore.writeGlobalFile(output_path)
-    job.addChildJobFn(haplotype_caller, shared_ids, input_args, cores = input_args.cpu_count)
+                tool = 'quay.io/ucsc_cgl/samtools:1.3--256539928ea162949d8a65ca5c79a72ef557ce7c',
+                inputs=inputs.keys(),
+                outputs=outputs,
+                mock=config['mock_mode'])
+    output_path = os.path.join(work_dir, 'toil.bam.bai')
+    return job.fileStore.writeGlobalFile(output_path)
 
 
-def haplotype_caller(job, shared_ids, input_args):
+def gatk_haplotype_caller(job, bam_id, bai_id, config):
     """
     Uses GATK HaplotypeCaller to identify SNPs and Indels and writes a gVCF.
-    Calls per-sample genotyper to genotype gVCF.
 
     :param job: Job instance
-    :param shared_ids: dictionary of shared file promises
-    :param input_args: dictionary of input arguments
+    :param bam_id str: bam file store ID
+    :param bai_id str: bai file store ID
+    :param config dict: pipeline configuration options and shared files
+    :return str: gvcf file store ID
     """
+    job.fileStore.logToMaster('Running GATK HaplotypeCaller: {}'.format(config['uuid']))
     work_dir = job.fileStore.getLocalTempDir()
-    input_files = ['ref.fa', 'ref.fa.fai', 'ref.dict', 'toil.bam', 'toil.bam.bai']
-    read_from_filestore_hc(job, work_dir, shared_ids, *input_files)
-    output = '%s.raw.BOTH%s.gvcf' % (input_args.uuid, input_args.suffix)
+    cores = multiprocessing.cpu_count()
+    references = ['genome.fa', 'genome.fa.fai', 'genome.dict']
+    inputs = {key: config[key] for key in references}
+    inputs['toil.bam'] = bam_id
+    inputs['toil.bam.bai'] = bai_id
+    get_files_from_filestore(job, work_dir, inputs)
 
     # Call GATK -- HaplotypeCaller
-    command = ['-U', 'ALLOW_SEQ_DICT_INCOMPATIBILITY', # RISKY! (?) See #189
-               '-nct', str(input_args.cpu_count),
-               '-R', 'ref.fa',
+    command = ['-nct', str(cores),
+               '-R', 'genome.fa',
                '-T', 'HaplotypeCaller',
                '--genotyping_mode', 'Discovery',
                '--emitRefConfidence', 'GVCF',
                '-I', 'toil.bam',
-               '-o', output,
+               '-o', 'toil.gvcf',
                '-variant_index_type', 'LINEAR',
                '-variant_index_parameter', '128000',
                '--annotation', 'QualByDepth',
                '--annotation', 'DepthPerSampleHC',
                '--annotation', 'FisherStrand',
                '--annotation', 'ReadPosRankSumTest']
-    try:
-        inputs=input_files
-        outputs={output: None}
-        docker_call(work_dir = work_dir,
-                    env={'JAVA_OPTS':'-Xmx%sg' % input_args.memory},
-                    parameters = command,
-                    tool = 'quay.io/ucsc_cgl/gatk:3.5--dba6dae49156168a909c43330350c6161dc7ecc2',
-                    inputs=inputs,
-                    outputs=outputs)
-    except:
-        sys.stderr.write("Running haplotype caller with %s in %s failed." % (
-            " ".join(command), work_dir))
-        raise
 
-    # Update fileStore and spawn child job
-    shared_ids[output] = job.fileStore.writeGlobalFile(os.path.join(work_dir, output))
+    if config['unsafe_mode']:
+        command = ['-U', 'ALLOW_SEQ_DICT_INCOMPATIBILITY'] + command
 
-    # upload gvcf
-    upload_or_move_hc(work_dir, input_args.output_dir, output, ssec=None)
+    outputs={'toil.gvcf': None}
+    docker_call(work_dir = work_dir,
+                env={'JAVA_OPTS':'-Xmx%sg' % config['xmx']},
+                parameters = command,
+                tool = 'quay.io/ucsc_cgl/gatk:3.5--dba6dae49156168a909c43330350c6161dc7ecc2',
+                inputs=inputs.keys(),
+                outputs=outputs,
+                mock=config['mock_mode'])
 
-    # call variants prior to vqsr
-    job.addChildJobFn(genotype_gvcf, shared_ids, input_args, cores = input_args.cpu_count)
+    return job.fileStore.writeGlobalFile(os.path.join(work_dir, 'toil.gvcf'))
 
 
-def genotype_gvcf(job, shared_ids, input_args):
+def gatk_genotype_gvcf(job, gvcf_id, config):
     """
-    Genotypes the gVCF generated by the HaplotypeCaller.
-    Calls variant quality score recalibration functions.
+    Genotypes the gVCF generated by HaplotypeCaller.
 
     :param job: Job instance
-    :param shared_ids: dictionary of shared file promises
-    :param input_args: dictionary of input arguments
+    :param gvcf_id str: file store ID for gvcf
+    :param config dict: pipeline configuration options and shared files
+    :return str: vcf file store ID
     """
-
+    job.fileStore.logToMaster('Running GATK GenotypeGVCFs: {}'.format(config['uuid']))
     work_dir = job.fileStore.getLocalTempDir()
-    input_files = ['%s.raw.BOTH%s.gvcf' % (input_args.uuid, input_args.suffix),
-                   'ref.fa', 'ref.fa.fai', 'ref.dict']
-    read_from_filestore_hc(job, work_dir, shared_ids, *input_files)
-    output = 'unified.raw.BOTH.gatk.vcf'
-    
-    command = ['-U', 'ALLOW_SEQ_DICT_INCOMPATIBILITY', # RISKY! (?) See #189
-               '-nt', str(input_args.cpu_count),
-               '-R', 'ref.fa',
+    cores = multiprocessing.cpu_count()
+    references = ['genome.fa', 'genome.fa.fai', 'genome.dict']
+    inputs = {key: config[key] for key in references}
+    inputs['toil.vcf'] = gvcf_id
+    get_files_from_filestore(job, work_dir, inputs)
+
+    command = ['-nt', str(cores),
+               '-R', 'genome.fa',
                '-T', 'GenotypeGVCFs',
-               '--variant', '%s.raw.BOTH.gatk.gvcf' % input_args.uuid,
-               '--out', output,
+               '--variant', 'toil.vcf',
+               '--out', 'toil.vcf',
                '-stand_emit_conf', '10.0',
                '-stand_call_conf', '30.0']
 
-    try:
-        inputs=input_files
-        outputs={output: None}
-        docker_call(work_dir = work_dir,
-                    env={'JAVA_OPTS':'-Xmx%sg' % input_args.memory},
-                    parameters = command,
-                    tool = 'quay.io/ucsc_cgl/gatk:3.5--dba6dae49156168a909c43330350c6161dc7ecc2',
-                    inputs=inputs,
-                    outputs=outputs)
-    except:
-        sys.stderr.write("Running GenotypeGVCFs with %s in %s failed." % (
-            " ".join(command), work_dir))
-        raise
+    if config['unsafe_mode']:
+        command = ['-U', 'ALLOW_SEQ_DICT_INCOMPATIBILITY'] + command
 
-    # Update fileStore and spawn child job
-    shared_ids[output] = job.fileStore.writeGlobalFile(os.path.join(work_dir, output))
+    outputs = {'toil.vcf': None}
+    docker_call(work_dir = work_dir,
+                env={'JAVA_OPTS':'-Xmx%sg' % config['xmx']},
+                parameters = command,
+                tool = 'quay.io/ucsc_cgl/gatk:3.5--dba6dae49156168a909c43330350c6161dc7ecc2',
+                inputs=inputs.keys(),
+                outputs=outputs,
+                mock=config['mock_mode'])
 
-    # run vqsr
-    job.addChildJobFn(vqsr_snp, shared_ids, input_args, cores = input_args.cpu_count)
-    job.addChildJobFn(vqsr_indel, shared_ids, input_args, cores = input_args.cpu_count)
+    return job.fileStore.writeGlobalFile(os.path.join(work_dir, 'toil.vcf'))
 
 
-def vqsr_snp(job, shared_ids, input_args):
+def gatk_variant_recalibrator_snp(job, vcf_id, config):
     """
     Variant quality score recalibration for SNP variants.
-    Calls next step in pipeline - apply SNP recalibration
 
     :param job: Job instance
-    :param shared_ids: dictionary of shared file promises
-    :param input_args: dictionary of input arguments
+    :param vcf_id str: vcf file store ID
+    :param config dict: pipeline configuration options and shared files
+    :return tuple: recalibration table, tranches file, plots file
     """
+    job.fileStore.logToMaster('Running GATK VariantRecalibrator (SNP Mode): {}'.format(config['uuid']))
+    cores = multiprocessing.cpu_count()
     work_dir = job.fileStore.getLocalTempDir()
-    input_files = ['ref.fa', 'ref.fa.fai', 'ref.dict', 'unified.raw.BOTH.gatk.vcf',
-                   'hapmap.vcf', 'omni.vcf', 'dbsnp.vcf', 'phase.vcf']
-    read_from_filestore_hc(job, work_dir, shared_ids, *input_files)
-    outputs = ['HAPSNP.recal', 'HAPSNP.tranches', 'HAPSNP.plots']
-    command = ['-U', 'ALLOW_SEQ_DICT_INCOMPATIBILITY', # RISKY! (?) See #189
-               '-T', 'VariantRecalibrator',
-               '-R', 'ref.fa',
-               '-input', 'unified.raw.BOTH.gatk.vcf',
-               '-nt', str(input_args.cpu_count),
+    references = ['genome.fa', 'genome.fa.fai', 'genome.dict', 'hapmap.vcf', 'omni.vcf', 'dbsnp.vcf', 'phase.vcf']
+    inputs = {key: config[key] for key in references}
+    inputs['toil.vcf'] = vcf_id
+    get_files_from_filestore(job, work_dir, inputs)
+
+    command = ['-T', 'VariantRecalibrator',
+               '-R', 'genome.fa',
+               '-input', 'toil.vcf',
+               '-nt', str(cores),
                '-resource:hapmap,known=false,training=true,truth=true,prior=15.0', 'hapmap.vcf',
                '-resource:omni,known=false,training=true,truth=false,prior=12.0', 'omni.vcf',
                '-resource:dbsnp,known=true,training=false,truth=false,prior=2.0', 'dbsnp.vcf',
@@ -460,90 +268,90 @@ def vqsr_snp(job, shared_ids, input_args):
                '-recalFile', 'HAPSNP.recal',
                '-tranchesFile', 'HAPSNP.tranches',
                '-rscriptFile', 'HAPSNP.plots']
-    inputs=input_files + ['hapmap.vcf','omni.vcf', 'dbsnp.vcf', 'phase.vcf']
-    outputD={'HAPSNP.recal': None, 'HAPSNP.tranches': None, 'HAPSNP.plots': None}
+
+    if config['unsafe_mode']:
+        command = ['-U', 'ALLOW_SEQ_DICT_INCOMPATIBILITY'] + command
+
+    outputs = {'HAPSNP.recal': None, 'HAPSNP.tranches': None, 'HAPSNP.plots': None}
     docker_call(work_dir = work_dir,
-                env={'JAVA_OPTS':'-Xmx%sg' % input_args.memory},
+                env={'JAVA_OPTS':'-Xmx%sg' % config['xmx']},
                 parameters = command,
                 tool ='quay.io/ucsc_cgl/gatk:3.5--dba6dae49156168a909c43330350c6161dc7ecc2',
-                inputs=inputs,
-                outputs=outputD)
-    shared_ids = write_to_filestore(job, work_dir, shared_ids, *outputs)
-    job.addChildJobFn(apply_vqsr_snp, shared_ids, input_args)
+                inputs=inputs.keys(),
+                outputs=outputs,
+                mock=config['mock_mode'])
+
+    recal_id = job.fileStore.writeGlobalFile(os.path.join(work_dir, 'HAPSNP.recal'))
+    tranches_id = job.fileStore.writeGlobalFile(os.path.join(work_dir, 'HAPSNP.tranches'))
+    plots_id = job.fileStore.writeGlobalFile(os.path.join(work_dir, 'HAPSNP.plots'))
+    return recal_id, tranches_id, plots_id
 
 
-def apply_vqsr_snp(job, shared_ids, input_args):
+def gatk_apply_variant_recalibration_snp(job, vcf_id, recal_id, tranches_id, config):
     """
     Apply variant quality score recalibration for SNP variants.
-    Writes vcf file to output directory
 
     :param job: Job instance
-    :param shared_ids: dictionary of shared file promises
-    :param input_args: dictionary of input arguments
+    :param vcf_id str: vcf file store ID
+    :param recal_id: recalibration table file store ID
+    :param tranches_id: tranches file store ID
+    :param config dict: pipeline configuration options and shared files
+    :return str: SNP recalibrated VCF file store ID
     """
+    job.fileStore.logToMaster('Running GATK ApplyRecalibration (SNP Mode): {}'.format(config['uuid']))
     work_dir = job.fileStore.getLocalTempDir()
+    references = ['genome.fa', 'genome.fa.fai', 'genome.dict']
+    inputs = {'toil.vcf': vcf_id,
+              'HAPSNP.tranches': tranches_id,
+              'HAPSNP.recal': recal_id}
+    inputs.update({key: config[key] for key in references})
+    get_files_from_filestore(job, work_dir, inputs)
 
-    uuid = input_args.uuid
-    suffix = input_args.suffix
-    input_files = ['ref.fa', 'ref.fa.fai', 'ref.dict', 'unified.raw.BOTH.gatk.vcf',
-                   'HAPSNP.tranches', 'HAPSNP.recal']
-    read_from_filestore_hc(job, work_dir, shared_ids, *input_files)
-    output = '{}.HAPSNP.vqsr.SNP{}.vcf'.format(uuid, suffix)
-    command = ['-U', 'ALLOW_SEQ_DICT_INCOMPATIBILITY', # RISKY! (?) See #189
-               '-T', 'ApplyRecalibration',
-               '-input', 'unified.raw.BOTH.gatk.vcf',
-               '-o', output,
-               '-R', 'ref.fa',
+    command = ['-T', 'ApplyRecalibration',
+               '-input', 'toil.vcf',
+               '-o', 'toil.vqsr.vcf',
+               '-R', 'genome.fa',
                '-nt', '1',
                '-ts_filter_level', '99.0',
                '-tranchesFile', 'HAPSNP.tranches',
                '-recalFile', 'HAPSNP.recal',
                '-mode', 'SNP']
-    inputs=input_files
-    outputs={output: None}
+
+    if config['unsafe_mode']:
+        command = ['-U', 'ALLOW_SEQ_DICT_INCOMPATIBILITY'] + command
+
+    outputs={'toil.vqsr.vcf': None}
     docker_call(work_dir = work_dir,
-                env={'JAVA_OPTS':'-Xmx%sg' % input_args.memory},
+                env={'JAVA_OPTS':'-Xmx%sg' % config['xmx']},
                 parameters = command,
                 tool = 'quay.io/ucsc_cgl/gatk:3.5--dba6dae49156168a909c43330350c6161dc7ecc2',
-                inputs=inputs,
-                outputs=outputs)
-
-    upload_or_move_hc(work_dir, input_args.output_dir, output, ssec=None)
-
-
-def upload_or_move_hc(work_dir, output_dir, output, ssec=None):
-    # are we moving this into a local dir, or up to s3?
-    if output_dir.startswith('s3://'):
-        #if ssec is None:
-        #    raise ValueError('s3 output_dir provided, but ssec is missing')
-        s3am_upload(fpath=os.path.join(work_dir, output),
-                    s3_dir=output_dir,
-                    s3_key_path=ssec)
-    else:
-        # FIXME: undefined function                                                                                                  
-        make_directory(output_dir)
-        move_to_output_dir(work_dir, output_dir, output)
+                inputs=inputs.keys(),
+                outputs=outputs,
+                mock=config['mock_mode'])
+    return job.fileStore.writeGlobalFile(os.path.join(work_dir, 'toil.vqsr.vcf'))
 
 
-# Indel Recalibration
-def vqsr_indel(job, shared_ids, input_args):
+def gatk_variant_recalibrator_indel(job, vcf_id, config):
     """
-    Variant quality score recalibration for Indel variants.
-    Calls next step in pipeline - apply indel recalibration
+    Variant quality score recalibration for INDEL variants.
 
     :param job: Job instance
-    :param shared_ids: dictionary of shared file promises
-    :param input_args: dictionary of input arguments
+    :param vcf_id str: vcf file store ID
+    :param config dict: pipeline configuration options and shared files
+    :return tuple: recalibration table, tranches file, plots file
     """
+    job.fileStore.logToMaster('Running GATK VariantRecalibrator (INDEL Mode): {}'.format(config['uuid']))
+    cores = multiprocessing.cpu_count()
     work_dir = job.fileStore.getLocalTempDir()
-    input_files = ['ref.fa', 'ref.fa.fai', 'ref.dict', 'unified.raw.BOTH.gatk.vcf', 'mills.vcf']
-    read_from_filestore_hc(job, work_dir, shared_ids, *input_files)
-    outputs = ['HAPINDEL.recal', 'HAPINDEL.tranches', 'HAPINDEL.plots']
-    command = ['-U', 'ALLOW_SEQ_DICT_INCOMPATIBILITY', # RISKY! (?) See #189
-               '-T', 'VariantRecalibrator',
-               '-R', 'ref.fa',
-               '-input', 'unified.raw.BOTH.gatk.vcf',
-               '-nt', str(input_args.cpu_count),
+    references = ['genome.fa', 'genome.fa.fai', 'genome.dict', 'mills.vcf']
+    inputs = {key: config[key] for key in references}
+    inputs['toil.vcf'] = vcf_id
+    get_files_from_filestore(job, work_dir, inputs)
+
+    command = ['-T', 'VariantRecalibrator',
+               '-R', 'genome.fa',
+               '-input', 'toil.vcf',
+               '-nt', str(cores),
                '-resource:mills,known=true,training=true,truth=true,prior=12.0', 'mills.vcf',
                '-an', 'DP', '-an', 'FS', '-an', 'ReadPosRankSum',
                '-mode', 'INDEL',
@@ -552,74 +360,108 @@ def vqsr_indel(job, shared_ids, input_args):
                '-tranchesFile', 'HAPINDEL.tranches',
                '-rscriptFile', 'HAPINDEL.plots',
                '--maxGaussians', '4']
-    inputs=input_files
-    outputD={'HAPINDEL.recal': None, 'HAPINDEL.tranches': None, 'HAPINDEL.plots': None}
+
+    if config['unsafe_mode']:
+        command = ['-U', 'ALLOW_SEQ_DICT_INCOMPATIBILITY'] + command
+
+    outputs = {'HAPINDEL.recal': None, 'HAPINDEL.tranches': None, 'HAPINDEL.plots': None}
     docker_call(work_dir = work_dir,
-                env={'JAVA_OPTS':'-Xmx%sg' % input_args.memory},
+                env={'JAVA_OPTS':'-Xmx%sg' % config['xmx']},
                 parameters = command,
                 tool ='quay.io/ucsc_cgl/gatk:3.5--dba6dae49156168a909c43330350c6161dc7ecc2',
-                inputs=inputs,
-                outputs=outputD)
-    shared_ids = write_to_filestore(job, work_dir, shared_ids, *outputs)
-    job.addChildJobFn(apply_vqsr_indel, shared_ids, input_args)
+                inputs=inputs.keys(),
+                outputs=outputs,
+                mock=config['mock_mode'])
+    recal_id = job.fileStore.writeGlobalFile(os.path.join(work_dir, 'HAPINDEL.recal'))
+    tranches_id = job.fileStore.writeGlobalFile(os.path.join(work_dir, 'HAPINDEL.tranches'))
+    plots_id = job.fileStore.writeGlobalFile(os.path.join(work_dir, 'HAPINDEL.plots'))
+    return recal_id, tranches_id, plots_id
 
 
-def apply_vqsr_indel(job, shared_ids, input_args):
+def gatk_apply_variant_recalibration_indel(job, vcf_id, recal_id, tranches_id, config):
     """
     Apply variant quality score recalibration for indel variants.
-    Writes vcf file to output directory
 
     :param job: Job instance
-    :param shared_ids: dictionary of shared file promises
-    :param input_args: dictionary of input arguments
+    :param vcf_id str: vcf file store ID
+    :param recal_id: recalibration table file store ID
+    :param tranches_id: tranches file store ID
+    :param config dict: pipeline configuration options and shared files
+    :return str: INDEL recalibrated VCF file store ID
     """
+    job.fileStore.logToMaster('Running GATK ApplyRecalibration (INDEL Mode): {}'.format(config['uuid']))
     work_dir = job.fileStore.getLocalTempDir()
-    uuid = input_args.uuid
-    suffix = input_args.suffix
-    input_files = ['ref.fa', 'ref.fa.fai', 'ref.dict', 'unified.raw.BOTH.gatk.vcf',
-                   'HAPINDEL.recal', 'HAPINDEL.tranches', 'HAPINDEL.plots']
-    read_from_filestore_hc(job, work_dir, shared_ids, *input_files)
-    output = '{}.HAPSNP.vqsr.INDEL{}.vcf'.format(uuid, suffix)
-    command = ['-U', 'ALLOW_SEQ_DICT_INCOMPATIBILITY', # RISKY! (?) See #189
-               '-T', 'ApplyRecalibration',
+    uuid = config['uuid']
+    suffix = config['suffix']
+
+    references = ['genome.fa', 'genome.fa.fai', 'genome.dict']
+    inputs = {'toil.vcf': vcf_id,
+              'HAPINDEL.recal': recal_id,
+              'HAPINDEL.tranches': tranches_id}
+    inputs.update({key: config[key] for key in references})
+    get_files_from_filestore(job, work_dir, inputs)
+
+    command = ['-T', 'ApplyRecalibration',
                '-input', 'unified.raw.BOTH.gatk.vcf',
-               '-o', output,
-               '-R', 'ref.fa',
+               '-o', 'toil.vqsr.vcf',
+               '-R', 'genome.fa',
                '-nt', '1',
                '-ts_filter_level', '99.0',
                '-tranchesFile', 'HAPINDEL.tranches',
                '-recalFile', 'HAPINDEL.recal',
                '-mode', 'INDEL']
-    inputs=input_files
-    outputs={output: None}
+
+    if config['unsafe_mode']:
+        command = ['-U', 'ALLOW_SEQ_DICT_INCOMPATIBILITY'] + command
+
+    outputs={'toil.vqsr.vcf': None}
     docker_call(work_dir = work_dir,
-                env={'JAVA_OPTS':'-Xmx%sg' % input_args.memory},
+                env={'JAVA_OPTS':'-Xmx%sg' % config['xmx']},
                 parameters = command,
                 tool = 'quay.io/ucsc_cgl/gatk:3.5--dba6dae49156168a909c43330350c6161dc7ecc2',
-                inputs = inputs,
-                outputs = outputs)
-
-    upload_or_move_hc(work_dir, input_args.output_dir, output, ssec=None)
+                inputs = inputs.keys(),
+                outputs = outputs,
+                mock=config['mock_mode'])
+    return job.fileStore.writeGlobalFile(os.path.join(work_dir, 'toil.vqsr.vcf'))
 
 
 def generate_config():
     return textwrap.dedent("""
-        # GATK Preprocessing Pipeline configuration file
+        # GATK Germline Pipeline configuration file
         # This configuration file is formatted in YAML. Simply write the value (at least one space) after the colon.
         # Edit the values in this configuration file and then rerun the pipeline
         # Comments (beginning with #) do not need to be removed. Optional parameters may be left blank.
         ##############################################################################################################
-        ref:                      # Required: Reference Genome URL 
-        phase:                    # Required: URL (1000G_phase1.indels.hg19.sites.fixed.vcf)
-        mills:                    # Required: URL (Mills_and_1000G_gold_standard.indels.hg19.sites.vcf)
-        dbsnp:                    # Required: URL (dbsnp_132_b37.leftAligned.vcf URL)
-        hapmap:                   # Required: URL (hapmap_3.3.b37.vcf)
-        omni:                     # Required: URL (1000G_omni.5.b37.vcf)
-        file-size: 100G           # Approximate input file size. Should be given as %d[TGMK], e.g.,
-                                  # for a 100 gigabyte file, use file-size: 100G
-        indexed': False           # Set to True if the input file is already indexed and a .bam.bai file is
-                                  # present at the same url as the .bam file
-        ssec:                     # Optional: (string) Path to Key File for SSE-C Encryption
+        # Required: Reference Genome URL
+        genome:
+        # Required: URL (1000G_phase1.indels.hg19.sites.fixed.vcf)
+        phase:
+        # Required: URL (Mills_and_1000G_gold_standard.indels.hg19.sites.vcf)
+        mills:
+        # Required: URL (dbsnp_132_b37.leftAligned.vcf URL)
+        dbsnp:
+        # Required: URL (hapmap_3.3.b37.vcf)
+        hapmap:
+        # Required: URL (1000G_omni.5.b37.vcf)
+        omni:
+        # Approximate input file size. Should be given as %d[TGMK], e.g.,
+        # for a 100 gigabyte file, use file-size: 100G
+        file-size: 100G
+        # Memory allocation for Java option Xmx
+        xmx: 100G
+        # Set to True if the input file is already indexed and a .bam.bai file is
+        # present at the same url as the .bam file
+        indexed': False
+        # Optional: (string) Path to Key File for SSE-C Encryption
+        ssec:
+        # Optional: (string) Suffix to be added to final output
+        suffix:
+        # Optional: (string) Path to output directory
+        output_dir:
+        # Optional: (boolean) Set to True to allow seq dict incompatibility
+        unsafe_mode:
+        # Optional: (boolean) Set to True to run pipeline in mock mode
+        mock_mode:
     """[1:])
 
 def generate_manifest():
@@ -638,51 +480,120 @@ def generate_manifest():
     """[1:])
 
 
-if __name__ == '__main__':
+def parse_manifest(path_to_manifest):
+    """
+    Parses samples, specified in either a manifest or listed with --samples
 
+    :param str path_to_manifest: Path to configuration file
+    :return: Samples and their attributes as defined in the manifest
+    :rtype: list[list]
+    """
+    samples = []
+    with open(path_to_manifest, 'r') as f:
+        for line in f.readlines():
+            if not line.isspace() and not line.startswith('#'):
+                sample = line.strip().split()
+                require(len(sample) == 2, 'Bad manifest format! '
+                                          'Expected 2 tab separated columns, got: {}'.format(sample))
+                uuid, url = sample
+                require(urlparse(url).scheme and urlparse(url), 'Invalid URL passed for {}'.format(url))
+                samples.append(sample)
+    return samples
+
+
+def main():
+    """
+    GATK HaplotypeCaller with variant recalibration.
+    Writes gvcf and vqsr.vcf to output directory
+
+                Tree Structure of GATK Pipeline
+                0 --> 1 --> 2 --> 3 --> 4 --> 5 ----> 8
+                                             / \      |
+                                            6   7     9
+    0 = Start Node
+    1 = Download References
+    2 = Prepare References
+    4 = Download Sample
+    5 = HaplotypeCaller SNP & Indel
+    6 = VariantRecalibrator SNPs
+    7 = VariantRecalibrator Indels
+    8 = ApplyRecalibration SNPs
+    9 = ApplyRecalibration Indels
+
+    ===================================================================
+    :Dependencies:
+    curl            - apt-get install curl
+    docker          - apt-get install docker (or 'docker.io' for linux)
+    toil            - pip install --pre toil
+    """
     # Define Parser object and add to jobTree
-    parser = argparse.ArgumentParser()
-    subparsers = parser.add_subparsers(dest='command')
+    parser = argparse.ArgumentParser(description=main.__doc__,
+                                     formatter_class=argparse.RawTextHelpFormatter)
     # Generate subparsers
+    subparsers = parser.add_subparsers(dest='command')
     subparsers.add_parser('generate-config', help='Generates an editable config in the current working directory.')
     subparsers.add_parser('generate-manifest', help='Generates an editable manifest in the current working directory.')
     subparsers.add_parser('generate', help='Generates a config and manifest in the current working directory.')
+
     # Run subparser
     parser_run = subparsers.add_parser('run', help='Runs the GATK germline pipeline')
-    group = parser_run.add_mutually_exclusive_group(required=True)
-    parser_run.add_argument('--config', default='gatk_germline.config', type=str,
+    parser_run.add_argument('--config', default='config-toil-germline.yaml', type=str,
                             help='Path to the (filled in) config file, generated with "generate-config".')
-    group.add_argument('--manifest', default='gatk-germline-manifest.tsv', type=str,
+    parser_run.add_argument('--manifest', default='manifest-toil-germline.tsv', type=str,
                        help='Path to the (filled in) manifest file, generated with "generate-manifest". '
                             '\nDefault value: "%(default)s".')
-    group.add_argument('--sample', default=None, nargs='2', type=str,
+    parser_run.add_argument('--sample', default=None, nargs=2, type=str,
                        help='Space delimited sample UUID and BAM file in the format: uuid url')
     parser_run.add_argument('--output-dir', default=None, help='Full path to directory or filename where '
-                                                               'final results will be output')    
-    parser_run.add_argument('-s', '--suffix', default='.bqsr', help='Additional suffix to add to the names of the output files')
+                                                               'final results will be output')
+    parser_run.add_argument('-s', '--suffix', default=None,
+                            help='Additional suffix to add to the names of the output files')
     Job.Runner.addToilOptions(parser_run)
     options = parser.parse_args()
 
     cwd = os.getcwd()
     if options.command == 'generate-config' or options.command == 'generate':
-        generate_file(os.path.join(cwd, 'gatk-preprocessing.config'), generate_config)
+        generate_file(os.path.join(cwd, 'config-toil-germline.yaml'), generate_config)
     if options.command == 'generate-manifest' or options.command == 'generate':
-        generate_file(os.path.join(cwd, 'gatk-preprocessing-manifest.tsv'), generate_manifest)
-
+        generate_file(os.path.join(cwd, 'manifest-toil-germline.tsv'), generate_manifest)
     # Pipeline execution
     elif options.command == 'run':
+        # Program checks
+        for program in ['curl', 'docker']:
+            require(next(which(program)), program + ' must be installed on every node.'.format(program))
+
         require(os.path.exists(options.config), '{} not found. Please run '
-                                             '"generate-config"'.format(options.config))
-        if not options.sample:
-            require(os.path.exists(options.manifest), '{} not found and no sample provided. Please '
-                                                       'run "generate-manifest"'.format(options.manifest))
+                                                '"generate-config"'.format(options.config))
+        samples = []
+        if options.sample:
+            uuid, bam = options.sample.split()
+            samples.append((uuid, bam))
+        elif options.manifest:
+            samples.extend(parse_manifest(options.manifest))
+
         # Parse config
-        parsed_config = {x.replace('-', '_'): y for x, y in yaml.load(open(options.config).read()).iteritems()}
-        inputs = argparse.Namespace(**parsed_config)
-        if options.manifest:
-            inputs.manifest = options.manifest
-    
-    inputs.cpu_count = multiprocessing.cpu_count() # FIXME: should not be called from toil-leader, see #186
-    inputs.memory = '15'
-    
-    Job.Runner.startToil(Job.wrapJobFn(batch_start, inputs, options.sample, options.output_dir, options.suffix), options)
+        config = {x.replace('-', '_'): y for x, y in yaml.load(open(options.config).read()).iteritems()}
+        config_fields = set(config)
+        required_fields = {'genome', 'mills', 'dbsnp', 'phase', 'hapmap', 'omni',
+                           'output_dir', 'mock_mode', 'unsafe_mode', 'xmx', 'suffix'}
+        require(config_fields > required_fields,
+                'Missing config parameters:\n{}'.format(required_fields - config_fields))
+
+        if config['output_dir'] is  None:
+            config['output_dir'] = options.output_dir if options.output_dir else os.getcwd()
+
+        if config['suffix'] is  None:
+            config['suffix'] = options.suffix if options.suffix else ''
+
+        root = Job.wrapJobFn(download_shared_files, config)
+        ref = Job.wrapJobFn(reference_preprocessing, root.rv(), mock=config['mock_mode'])
+
+        root.addFollowOn(ref)
+
+        for uuid, url in samples:
+            ref.addFollowOnJobFn(gatk_germline_pipeline, uuid, url, ref.rv())
+
+        Job.Runner.startToil(root, options)
+
+if __name__ == '__main__':
+    main()

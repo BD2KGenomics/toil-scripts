@@ -1,0 +1,14 @@
+#   Edit this manifest to include information pertaining to each sample pair to be run.
+#   There are 2tab-separated columns: UUID, Sample BAM URL
+#
+#   UUID            This should be a unique identifier for the sample to be processed
+#   Sample URL      A URL (http://, file://, s3://, gnos://) pointing to the normal bam
+#
+#   Examples of several combinations are provided below. Lines beginning with # are ignored.
+#
+#   UUID_1  file:///path/to/sample.bam
+#   UUID_2  http://sample-depot.com/sample.bam
+#   UUID_3  s3://my-bucket-name/directory/sample.bam
+#
+#   Place your samples below, one per line.
+UUID_1	file:///home/jacob/munge/defuse/defuse_dummpy_reference
