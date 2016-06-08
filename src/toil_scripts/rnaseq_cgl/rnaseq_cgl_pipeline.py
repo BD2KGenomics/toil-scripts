@@ -39,7 +39,7 @@ def download_sample(job, sample, config):
     config.file_type, config.paired, config.uuid, config.url = sample
     config.paired = True if config.paired == 'paired' else False
     config.single = True if config.paired == 'single' else False
-    config.cores = multiprocessing.cpu_count()
+    config.cores = min(config.maxCores, multiprocessing.cpu_count())
     job.fileStore.logToMaster('Downloading sample: {}'.format(config.uuid))
     # Download or locate local file and place in the jobStore
     tar_id, r1_id, r2_id = None, None, None
@@ -624,6 +624,7 @@ def main():
         # Parse config
         parsed_config = {x.replace('-', '_'): y for x, y in yaml.load(open(args.config).read()).iteritems()}
         config = argparse.Namespace(**parsed_config)
+        config.maxCores = int(args.maxCores) if args.maxCores else sys.maxint
         # Config sanity checks
         require(config.kallisto_index or config.star_index,
                  'URLs not provided for kallisto or star, so there is nothing to do')
