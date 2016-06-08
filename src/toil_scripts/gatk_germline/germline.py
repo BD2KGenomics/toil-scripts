@@ -141,7 +141,8 @@ def move_to_output_dir(work_dir, output_dir, *filenames):
     for filename in filenames:
         origin = os.path.join(work_dir, filename)
         dest = os.path.join(output_dir, filename)
-        shutil.move(origin, dest)
+        # With caching we cannot move the file
+        shutil.copy(origin, dest)
 
 
 def batch_start(job, input_args):
