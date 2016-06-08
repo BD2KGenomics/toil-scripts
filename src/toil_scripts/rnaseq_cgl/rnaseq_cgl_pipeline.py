@@ -193,7 +193,35 @@ def cutadapt(job, config, r1_id, r2_id):
     if config.kallisto_index:
         cores = min(config.cores, 16)
         kallisto_output = job.addChildJobFn(kallisto, config, r1_cut_id, r2_cut_id, cores=cores, disk=disk).rv()
-    return rsem_output, kallisto_output, config.single, config.improper_pair
+    fastqc_output = job.addChildJobFn(fastqc, config, r1_cut_id, r2_cut_id)
+    return rsem_output, kallisto_output, fastqc_output, config.single, config.improper_pair
+
+
+def fastqc(job, config, r1_id, r2_id):
+    """
+    Run Fastqc on the input reads
+
+    :param JobFunctionWrappingJob job: passed automatically by Toil
+    :param Namespace config: Argparse Namespace object containing argument inputs
+    :param str r1_id: FileStoreID of fastq read 1
+    :param str r2_id: FileStoreID of fastq read 2
+    :return: FileStoreID of fastQC output (tarball)
+    :rtype: str
+    """
+    job.fileStore.logToMaster('FastQC: {}'.format(config.uuid))
+    work_dir = job.fileStore.getLocalTempDir()
+    job.fileStore.readGlobalFile(r1_id, os.path.join(work_dir, 'R1.fastq'))
+    parameters = ['/data/R1.fastq']
+    output_names = ['R1_fastqc.html']
+    if r2_id:
+        job.fileStore.readGlobalFile(r2_id, os.path.join(work_dir, 'R2.fastq'))
+        parameters.extend(['-t', '2', '/data/R2.fastq'])
+        output_names.append('R2_fastqc.html')
+    docker_call(tool='quay.io/ucsc_cgl/fastqc:0.11.5--be13567d00cd4c586edf8ae47d991815c8c72a49',
+                work_dir=work_dir, parameters=parameters)
+    output_files = [os.path.join(work_dir, x) for x in output_names]
+    tarball_files(tar_name='fastqc.tar.gz', file_paths=output_files, output_dir=work_dir)
+    return job.fileStore.writeGlobalFile(os.path.join(work_dir, 'fastqc.tar.gz'))
 
 
 def kallisto(job, config, r1_cut_id, r2_cut_id):
@@ -407,7 +435,7 @@ def consolidate_output(job, config, output_ids_and_info):
     job.fileStore.logToMaster('Consolidating input: {}'.format(config.uuid))
     work_dir = job.fileStore.getLocalTempDir()
     # Retrieve IDs
-    rsem_id, hugo_id, kallisto_id, single_end, improper_pair = flatten(output_ids_and_info)
+    rsem_id, hugo_id, kallisto_id, fastqc_id, single_end, improper_pair = flatten(output_ids_and_info)
     # Retrieve output file paths to consolidate
     rsem_tar, hugo_tar, kallisto_tar = None, None, None
     if rsem_id:
@@ -415,6 +443,7 @@ def consolidate_output(job, config, output_ids_and_info):
         hugo_tar = job.fileStore.readGlobalFile(hugo_id, os.path.join(work_dir, 'rsem_hugo.tar.gz'))
     if kallisto_id:
         kallisto_tar = job.fileStore.readGlobalFile(kallisto_id, os.path.join(work_dir, 'kallisto.tar.gz'))
+    fastqc_tar = job.fileStore.readGlobalFile(fastqc_id, os.path.join(work_dir, 'fastqc.tar.gz'))
     # I/O
     if improper_pair:
         config.uuid = 'IMPROPERLY_PAIRED.{}'.format(config.uuid)
@@ -422,7 +451,7 @@ def consolidate_output(job, config, output_ids_and_info):
         config.uuid = 'SINGLE-END.{}'.format(config.uuid)
     out_tar = os.path.join(work_dir, config.uuid + '.tar.gz')
     # Consolidate separate tarballs into one as streams (avoids unnecessary untaring)
-    tar_list = [x for x in [rsem_tar, hugo_tar, kallisto_tar] if x is not None]
+    tar_list = [x for x in [rsem_tar, hugo_tar, kallisto_tar, kallisto_tar] if x is not None]
     with tarfile.open(os.path.join(work_dir, out_tar), 'w:gz') as f_out:
         for tar in tar_list:
             with tarfile.open(tar, 'r') as f_in:
@@ -432,8 +461,10 @@ def consolidate_output(job, config, output_ids_and_info):
                             tarinfo.name = os.path.join(config.uuid, 'RSEM', os.path.basename(tarinfo.name))
                         elif tar == hugo_tar:
                             tarinfo.name = os.path.join(config.uuid, 'RSEM', 'Hugo', os.path.basename(tarinfo.name))
-                        else:
+                        elif tar == kallisto_tar:
                             tarinfo.name = os.path.join(config.uuid, 'Kallisto', os.path.basename(tarinfo.name))
+                        else:
+                            tarinfo.name = os.path.join(config.uuid, 'QC', os.path.basename(tarinfo.name))
                         f_out.addfile(tarinfo, fileobj=f_in_file)
         if improper_pair:
             with open(os.path.join(work_dir, 'WARNING.txt'), 'w') as f:
