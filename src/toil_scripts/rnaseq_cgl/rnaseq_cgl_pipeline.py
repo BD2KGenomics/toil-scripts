@@ -193,7 +193,7 @@ def cutadapt(job, config, r1_id, r2_id):
     if config.kallisto_index:
         cores = min(config.cores, 16)
         kallisto_output = job.addChildJobFn(kallisto, config, r1_cut_id, r2_cut_id, cores=cores, disk=disk).rv()
-    fastqc_output = job.addChildJobFn(fastqc, config, r1_cut_id, r2_cut_id)
+    fastqc_output = job.addChildJobFn(fastqc, config, r1_cut_id, r2_cut_id).rv()
     return rsem_output, kallisto_output, fastqc_output, config.single, config.improper_pair
 
 
