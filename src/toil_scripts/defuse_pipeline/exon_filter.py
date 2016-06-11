@@ -1,7 +1,10 @@
 #!/usr/bin/env python2.7
 
+import re
 import csv
 import cPickle
+
+from collections import defaultdict, Counter
 
 class GTF(object):
 
@@ -18,42 +21,65 @@ class GTF(object):
         for feature in self.attribute.split(';'):
             try:
                 attr, value = feature.split()
-                setattr(self, attr, value)
+                setattr(self, attr, value.replace('"', ''))
             except ValueError:
                 pass
 
 
-def get_exons(gtf_fname):
-    pickle_name = 'exons_{}'.format(gtf_fname)
-    exons = {}
-    try:
-        with open(pickle_name, 'rb') as f:
-            exons = cPickle.load(f)
-    except IOError:
-        with open(gtf_fname, 'rb') as f, open(pickle_name, 'wb') as g:
-            reader = csv.reader(f, delimiter='\t')
+def get_gtfs(gtf_fname):
+    with open(gtf_fname, 'rb') as f:
+        reader = csv.reader(f, delimiter='\t')
+        line = reader.next()
+        while line[0].startswith('##'):
             line = reader.next()
-            while line[0].startswith('##'):
+        while True:
+            yield GTF(line)
+            try:
                 line = reader.next()
-            while True:
-                gtf = GTF(line)
-                if gtf.feature == 'exon':
-                    exons[gtf.gene_id] = gtf
-                try:
-                    line = reader.next()
-                except StopIteration:
-                    break
-            cPickle.dump(exons, g)
-    return exons
+            except StopIteration:
+                break
 
 
+def get_pickled_data(fname):
+    try:
+        with open(fname, 'rb') as f:
+            return cPickle.load(f)
+    except IOError:
+        raise IOError("Pickle file does not exist")
+
+
+def pickle_data(fname, obj):
+    with open(fname, 'wb') as f:
+        cPickle.dump(obj, f)
+
+def get_transcript_data(gtf_fname):
+    try:
+        transcripts = get_pickled_data('transcripts_{}.pkl'.format(gtf_fname))
+    except IOError:
+        # exons = get_exons(gtf_fname)
+        transcripts = defaultdict(list)
+        for gtf in get_gtfs(gtf_fname):
+            if gtf.feature == 'exon':
+                transcripts[gtf.transcript_id].append(gtf)
+        pickle_data('transcripts_{}.pkl'.format(gtf_fname), transcripts)
+    return transcripts
 
 
 def main():
     gtf_fname = 'gencode.v19.annotation.gtf'
+    defuse_output = 'results.tsv'
 
-    exons = get_exons(gtf_fname)
-    print exons
+    transcripts = get_transcript_data(gtf_fname)
+    reader = csv.reader(open(defuse_output, 'rb'), delimiter='\t')
+    header = reader.next()
+    line = reader.next()
+    defuse_header = {key: index for index, key in enumerate(header)}
+    defuse_features = ['gene1', 'gene2', 'genomic_break_pos1', 'genomic_break_pos2']
+    for feature in defuse_features:
+        print feature, line[defuse_header[feature]]
+    print transcripts[line[defuse_header['gene1']]]
+
+
 
 if __name__ == '__main__':
      main()
