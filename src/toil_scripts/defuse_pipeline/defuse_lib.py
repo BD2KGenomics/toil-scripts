@@ -5,6 +5,7 @@ import time
 import re
 import gzip
 from urlparse import urlparse
+from collections import defaultdict
 
 from toil_scripts.lib.programs import docker_call
 
@@ -308,3 +309,142 @@ def bam2fastq(job, bamfile, univ_options):
     first_fastq = ''.join([work_dir, '/', base_name, '_1.fastq'])
     assert os.path.exists(first_fastq)
     return first_fastq
+
+
+def run_cutadapt(job, fastq1, fastq2, sample_options):
+    """
+    This module runs cutadapt on the input RNA fastq files and then calls the RNA aligners.
+
+    ARGUMENTS
+    1. fastqs: Dict of list of input RNA-Seq fastqs
+         fastqs
+            +- 'tumor_rna': [<JSid for 1.fastq> , <JSid for 2.fastq>]
+    2. univ_options: Dict of universal arguments used by almost all tools
+         univ_options
+              +- 'dockerhub': <dockerhub to use>
+    3. cutadapt_options: Dict of parameters specific to cutadapt
+         cutadapt_options
+              |- 'a': <sequence of 3' adapter to trim from fwd read>
+              +- 'A': <sequence of 3' adapter to trim from rev read>
+    RETURN VALUES
+    1. output_files: Dict of cutadapted fastqs
+         output_files
+             |- 'rna_cutadapt_1.fastq': <JSid>
+             +- 'rna_cutadapt_2.fastq': <JSid>
+
+    This module corresponds to node 2 on the tree
+    """
+    job.fileStore.logToMaster('Running cutadapt on %s' % sample_options['patient_id'])
+    work_dir = job.fileStore.getLocalTempDir()
+    fq_extn = '.gz' if sample_options['gzipped'] else ''
+    input_files = {
+        'rna_1.fastq' + fq_extn: fastq1,
+        'rna_2.fastq' + fq_extn: fastq2}
+    input_files = get_files_from_filestore(job, input_files, work_dir, docker=True)
+    parameters = ['-a', sample_options['adapter3'],  # Fwd read 3' adapter
+                  '-A', sample_options['adapter5'],  # Rev read 3' adapter
+                  '-m', '35',  # Minimum size of read
+                  '-o', docker_path('rna_cutadapt_1.fastq'),  # Output for R1
+                  '-p', docker_path('rna_cutadapt_2.fastq'),  # Output for R2
+                  input_files['rna_1.fastq'],
+                  input_files['rna_2.fastq']]
+    docker_call(tool='aarjunrao/cutadapt:latest', parameters=parameters, work_dir=work_dir)
+
+    file_id1 = job.fileStore.writeGlobalFile('/'.join([work_dir, 'rna_cutadapt_1.fastq']))
+    file_id2 = job.fileStore.writeGlobalFile('/'.join([work_dir, 'rna_cutadapt_2.fastq']))
+    return file_id1, file_id2
+
+
+def run_star(job, fastqs, univ_options, star_options):
+    """
+    This module uses STAR to align the RNA fastqs to the reference
+
+    ARGUMENTS
+    1. fastqs: REFER RETURN VALUE of run_cutadapt()
+    2. univ_options: Dict of universal arguments used by almost all tools
+         univ_options
+              +- 'dockerhub': <dockerhub to use>
+    3. star_options: Dict of parameters specific to STAR
+         star_options
+             |- 'index_tar': <JSid for the STAR index tarball>
+             +- 'n': <number of threads to allocate>
+    RETURN VALUES
+    1. output_files: Dict of aligned bams
+         output_files
+             |- 'rnaAligned.toTranscriptome.out.bam': <JSid>
+             +- 'rnaAligned.sortedByCoord.out.bam': Dict of genome bam + bai
+                                |- 'rna_fix_pg_sorted.bam': <JSid>
+                                +- 'rna_fix_pg_sorted.bam.bai': <JSid>
+
+    This module corresponds to node 9 on the tree
+    """
+    assert star_options['type'] in ('star', 'starlong')
+    job.fileStore.logToMaster('Running STAR on %s' %univ_options['patient'])
+    work_dir = job.fileStore.getLocalTempDir()
+    input_files = {
+        'rna_cutadapt_1.fastq': fastqs['rna_cutadapt_1.fastq'],
+        'rna_cutadapt_2.fastq': fastqs['rna_cutadapt_2.fastq'],
+        'star_index.tar.gz': star_options['index_tar']}
+    input_files = get_files_from_filestore(job, input_files, work_dir,
+                                           docker=True)
+    parameters = ['--runThreadN', str(star_options['n']),
+                  '--genomeDir', input_files['star_index'],
+                  '--outFileNamePrefix', 'rna',
+                  '--readFilesIn',
+                  input_files['rna_cutadapt_1.fastq'],
+                  input_files['rna_cutadapt_2.fastq'],
+                  '--outSAMattributes', 'NH', 'HI', 'AS', 'NM', 'MD',
+                  '--outSAMtype', 'BAM', 'SortedByCoordinate',
+                  '--quantMode', 'TranscriptomeSAM',
+                  '--outSAMunmapped', 'Within']
+    if star_options['type'] == 'star':
+        docker_call(tool='star', tool_parameters=parameters, work_dir=work_dir,
+                    dockerhub=univ_options['dockerhub'])
+    else:
+        docker_call(tool='starlong', tool_parameters=parameters, work_dir=work_dir,
+                    dockerhub=univ_options['dockerhub'])
+    output_files = defaultdict()
+    for bam_file in ['rnaAligned.toTranscriptome.out.bam',
+                     'rnaAligned.sortedByCoord.out.bam']:
+        output_files[bam_file] = job.fileStore.writeGlobalFile('/'.join([
+            work_dir, bam_file]))
+    job.fileStore.deleteGlobalFile(fastqs['rna_cutadapt_1.fastq'])
+    job.fileStore.deleteGlobalFile(fastqs['rna_cutadapt_2.fastq'])
+    index_star = job.wrapJobFn(index_bamfile,
+                               output_files['rnaAligned.sortedByCoord.out.bam'],
+                               'rna', univ_options, disk='120G')
+    job.addChild(index_star)
+    output_files['rnaAligned.sortedByCoord.out.bam'] = index_star.rv()
+    return output_files
+
+
+def index_bamfile(job, bamfile, sample_type, univ_options):
+    """
+    This module indexes BAMFILE
+    ARGUMENTS
+    1. bamfile: <JSid for a bam file>
+    2. sample_type: string of 'tumor_dna' or 'normal_dna'
+    3. univ_options: Dict of universal arguments used by almost all tools
+         univ_options
+                +- 'dockerhub': <dockerhub to use>
+    RETURN VALUES
+    1. output_files: REFER output_files in run_bwa(). This module is the one is
+                     the one that generates the files.
+    """
+    job.fileStore.logToMaster('Running samtools-index on %s:%s' % (univ_options['patient'],
+                                                                   sample_type))
+    work_dir = job.fileStore.getLocalTempDir()
+    in_bamfile = '_'.join([sample_type, 'fix_pg_sorted.bam'])
+    input_files = {
+        in_bamfile: bamfile}
+    input_files = get_files_from_filestore(job, input_files, work_dir,
+                                           docker=True)
+    parameters = ['index',
+                  input_files[in_bamfile]]
+    docker_call(tool='samtools', tool_parameters=parameters,
+                work_dir=work_dir, dockerhub=univ_options['dockerhub'])
+    output_files = {in_bamfile: bamfile,
+                    in_bamfile + '.bai': job.fileStore.writeGlobalFile('/'.join([work_dir,
+                                                                                 in_bamfile +
+                                                                                 '.bai']))}
+    return output_files

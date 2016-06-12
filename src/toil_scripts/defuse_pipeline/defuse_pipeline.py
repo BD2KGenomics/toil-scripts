@@ -6,19 +6,19 @@ Toil workflow for running deFuse
 
 Tree structure
 
-            0
-            |
-            1
-            |
-            2
-          /   \
-         3    4
+                  6 -- 7 -- 8
+                /
+0 -- 1 -- 2 -- 3 -- 4 -- 5
 
 0 = Start node
 1 = Download references
-2 = Run deFuse
-3 = Awk filter
-4 = Exon filter
+2 = Download Sample
+3 = Run cutadapt
+4 = Run deFuse
+5 = Awk filter
+6 = Run STAR
+7 = Run RSEM
+8 = Exon filter
 """
 
 
@@ -48,67 +48,101 @@ def parse_config(config_path):
         return yaml.load(stream)
 
 
-def get_shared_files(job, config, univ_options):
-    shared_files = set(['defuse_index'])
+# TODO This is broken. It throws a key error
+def get_shared_files(job, config, tool_options):
+    important_parameters = {'defuse': {'index_url': ('required', 'download', 'index'),
+                                       'output': ('optional', 'download', 'output')},
+                            'gencode': {'url': ('optional', 'download', 'gencode_gtf')}}
     work_dir = job.fileStore.getLocalTempDir()
 
-    if len(shared_files.intersection(set(config.keys()))) == 0:
-        raise ValueError('Need defuse_index in config file')
-    for key, value in config.iteritems():
-        univ_options[key] = job.addChildJobFn(download_url_job, value, name=key, s3_key_path=univ_options['ssec']).rv()
-    return univ_options
+    for tool, parameters in important_parameters.iteritems():
+        for parameter, (status, action, name) in parameters.iteritems():
+            print(tool)
+            print(name)
+            try:
+                value = config[tool][parameter]
+                print(value)
+                if action == 'download':
+                    if tool in tool_options:
+                        pass
+                    else:
+                        tool_options[tool] = {}
+
+                    tool_options[tool][name] = job.addChildJobFn(download_url_job, value, name=name,
+                                                                 s3_key_path=tool_options['ssec']).rv()
+            except KeyError:
+                if status == 'required':
+                    raise KeyError('Tool {} requires parameter {}'.format(tool, parameter))
+                elif status == 'optional':
+                    job.fileStore.logToMaster('Depending on configuration, tool {} may require {}'.format(tool,
+                                                                                                          parameter))
+            print(tool_options)
+    return tool_options
 
 
 def start_pipeline(job, manifest, univ_options):
     with open(manifest, 'r') as m:
-        for line in m:
-            try:
-                sample_name, rna_url = line.strip().split()
-            except ValueError:
-                raise ValueError('Manifest file is not properly formatted')
-            job.addChildJobFn(defuse_pipeline, sample_name, rna_url, univ_options.copy())
+        for sample_name, sample_options in yaml.load(m).iteritems():
+            sample_options['patient_id'] = sample_name
+            job.addChildJobFn(defuse_pipeline, sample_options, univ_options.copy())
 
 
-def defuse_pipeline(job, sample_name, url, univ_options):
+def defuse_pipeline(job, sample_options, tool_options):
     """
     Runs defuse pipeline
 
     :param job:
-    :param str sample_name: name for sample
-    :param str url:
-    :param univ_options:
+    :param dict sample_options: sample features
+    :param dict tool_options: paramters for bioinformatics tools
     :return:
     """
-    univ_options['patient_id'] = sample_name
-    if url.endswith('.gz'):
-        univ_options['gzipped'] = True
+    if sample_options['url'].endswith('.gz'):
+        sample_options['gzipped'] = True
+    else:
+        sample_options['gzipped'] = False
 
-    get_sample = job.wrapJobFn(download_sample, url)
-    defuse = job.wrapJobFn(run_defuse, get_sample.rv(0), get_sample.rv(1), univ_options)
-    defuse_out = job.wrapJobFn(move_file, defuse.rv(), '{}.results.tsv'.format(sample_name), univ_options)
+    sample = job.wrapJobFn(download_sample, sample_options)
+    cutadapt = job.wrapJobFn(lib.run_cutadapt, sample.rv(0), sample.rv(1), sample_options)
+    defuse = job.wrapJobFn(run_defuse, cutadapt.rv(0), cutadapt.rv(1), sample_options, tool_options['defuse'])
+    defuse_out = job.wrapJobFn(move_file, defuse.rv(), '{}.results.tsv'.format(sample_options['patient_id']),
+                               tool_options)
+
     awk = job.wrapJobFn(run_simple_filter, defuse.rv())
-    awk_out = job.wrapJobFn(move_file, awk.rv(), '{}.results.awk.tsv'.format(sample_name), univ_options)
+    awk_out = job.wrapJobFn(move_file, awk.rv(), '{}.results.awk.tsv'.format(sample_options['patient_id']),
+                            tool_options)
 
 
-    job.addFollowOn(get_sample)
-    get_sample.addFollowOn(defuse)
-    if univ_options['filter']:
-        defuse.addFollowOn(awk)
-        awk.addFollowOn(awk_out)
+    job.addFollowOn(sample)
+    sample.addFollowOn(cutadapt)
+    cutadapt.addFollowOn(defuse)
+
+    if tool_options['filter'] == 'awk':
+        pass
+        # defuse.addFollowOn(awk)
+        # awk.addFollowOn(awk_out)
+    elif tool_options['filter'] == 'exon':
+        pass
+
     else:
         defuse.addFollowOn(defuse_out)
 
 
 def move_file(job, fileStoreID, filename, univ_options):
     work_dir = job.fileStore.getLocalTempDir()
-    filepath = os.path.join(work_dir, filename)
-    job.fileStore.readGlobalFile(fileStoreID, filepath)
-    shutil.copy(filepath, univ_options['output_dir'])
+
+    src = os.path.join(work_dir, filename)
+    job.fileStore.readGlobalFile(fileStoreID, src)
+
+    dest = os.path.join(univ_options['output_dir'], filename)
+
+    shutil.copy(src, dest)
 
 
-def download_sample(job, url):
+def download_sample(job, sample_options):
 
     fq, gz = '', ''
+
+    url = sample_options['url']
 
     if url.endswith('.gz'):
         basname_fq, gz = os.path.splitext(url)
@@ -120,24 +154,27 @@ def download_sample(job, url):
         basename2 = re.sub('1$', '2', basename)
         url2 = ''.join([basename2, fq, gz])
 
+    elif 'url2' in sample_options.keys():
+        url2 = sample_options['url2']
+
     else:
-        raise ValueError('Could not find paired sample. Does RNA filename end with 1?')
+        raise ValueError('Could not find paired sample. Use url2 parameter to specify paired reads')
 
     file_id1 = job.addChildJobFn(download_url_job, url).rv()
     file_id2 = job.addChildJobFn(download_url_job, url2).rv()
     return file_id1, file_id2
 
 
-def run_defuse(job, fastq1, fastq2, univ_options):
+def run_defuse(job, fastq1, fastq2, sample_options, defuse_options):
     cores = multiprocessing.cpu_count()
 
     work_dir = job.fileStore.getLocalTempDir()
 
-    fq_extn = '.gz' if univ_options['gzipped'] else ''
+    fq_extn = '.gz' if sample_options['gzipped'] else ''
 
     input_files = {'rna_1.fastq' + fq_extn: fastq1,
                    'rna_2.fastq' + fq_extn: fastq2,
-                   'defuse_index': univ_options['defuse_index']}
+                   'defuse_index': defuse_options['index']}
 
     input_files = lib.get_files_from_filestore(job, input_files, work_dir, docker=True)
 
@@ -145,11 +182,11 @@ def run_defuse(job, fastq1, fastq2, univ_options):
                   '--output', '/data',
                   '--1fastq', '/data/rna_1.fastq',
                   '--2fastq', '/data/rna_2.fastq',
-                  '--name', univ_options['patient_id'],
+                  '--name', sample_options['patient_id'],
                   '--local', '/data/jobDir',
                   '--parallel', str(cores)]
 
-    results_url = 'File:///home/jacob/munge/defuse/defuse_test/results.tsv'
+    results_url = defuse_options['output']
 
     docker_call('jpfeil/defuse:0.6.2', parameters=parameters, work_dir=work_dir,
                 mock=True, outputs={'results.tsv': results_url})
@@ -208,7 +245,12 @@ def run_simple_filter(job, tsvID):
     return job.fileStore.writeGlobalFile(outpath)
 
 
+def sort_gtf(job, univ_options):
+    pass
+
+
 def run_exon_filter():
+    pass
 
 
 
@@ -232,9 +274,9 @@ def main():
     parser = argparse.ArgumentParser(description=main.__doc__, formatter_class=argparse.RawTextHelpFormatter)
     parser.add_argument('-c', '--config', required=True, help='Config for deFuse Toil workflow')
     parser.add_argument('-m', '--manifest', required=True, help='Manifest of sample URLs')
-    parser.add_argument('-f', '--filter', action='store_true', help='Filter deFuse output')
-    parser.add_argument('-o', '--output_dir', default=None, help='Full path to final output dir')
-    parser.add_argument('-s', '--ssec', help='A key that can be used to fetch encrypted data')
+    parser.add_argument('-o', '--output_dir', required=True, help='Full path to final output dir')
+    parser.add_argument('-f', '--filter', default=None, help='Filter deFuse output')
+    parser.add_argument('-s', '--ssec', default=None, help='A key that can be used to fetch encrypted data')
     parser.add_argument('-3', '--s3_dir', default=None, help='S3 Directory, starting with bucket name.')
     if len(sys.argv) == 1:
         parser.print_help()
@@ -246,8 +288,11 @@ def main():
 
     params = parser.parse_args()
 
+    if params.filter not in {None, 'awk', 'exon'}:
+        raise ValueError('Filter must be either None, awk, or exon')
+
     global_options = {'ssec': params.ssec,
-                      'output_dir': params.output_dir,
+                      'output_dir': os.path.abspath(params.output_dir),
                       's3_dir': params.s3_dir,
                       'filter': params.filter}
 
