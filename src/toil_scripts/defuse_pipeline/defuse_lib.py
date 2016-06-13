@@ -357,74 +357,6 @@ def run_cutadapt(job, fastq1, fastq2, sample_options):
     return file_id1, file_id2
 
 
-def run_star(job, fastq1, fastq2, sample_options, star_options):
-    """
-    This module uses STAR to align the RNA fastqs to the reference
-
-    ARGUMENTS
-    1. fastqs: REFER RETURN VALUE of run_cutadapt()
-    2. univ_options: Dict of universal arguments used by almost all tools
-         univ_options
-              +- 'dockerhub': <dockerhub to use>
-    3. star_options: Dict of parameters specific to STAR
-         star_options
-             |- 'index_tar': <JSid for the STAR index tarball>
-             +- 'n': <number of threads to allocate>
-    RETURN VALUES
-    1. output_files: Dict of aligned bams
-         output_files
-             |- 'rnaAligned.toTranscriptome.out.bam': <JSid>
-             +- 'rnaAligned.sortedByCoord.out.bam': Dict of genome bam + bai
-                                |- 'rna_fix_pg_sorted.bam': <JSid>
-                                +- 'rna_fix_pg_sorted.bam.bai': <JSid>
-
-    This module corresponds to node 9 on the tree
-    """
-    assert star_options['type'] in ('star', 'starlong')
-    job.fileStore.logToMaster('Running STAR on %s' % sample_options['patient_id'])
-    work_dir = job.fileStore.getLocalTempDir()
-    input_files = {
-        'rna_cutadapt_1.fastq': fastq1,
-        'rna_cutadapt_2.fastq': fastq2,
-        'star_index.tar.gz': star_options['index']}
-    input_files = get_files_from_filestore(job, input_files, work_dir,
-                                           docker=True)
-    parameters = ['--runThreadN', str(star_options['n']),
-                  '--genomeDir', input_files['star_index'],
-                  '--outFileNamePrefix', 'rna',
-                  '--readFilesIn',
-                  input_files['rna_cutadapt_1.fastq'],
-                  input_files['rna_cutadapt_2.fastq'],
-                  '--outSAMattributes', 'NH', 'HI', 'AS', 'NM', 'MD',
-                  '--outSAMtype', 'BAM', 'SortedByCoordinate',
-                  '--quantMode', 'TranscriptomeSAM',
-                  '--outSAMunmapped', 'Within']
-
-    result_files = ['rnaAligned.toTranscriptome.out.bam',
-                    'rnaAligned.sortedByCoord.out.bam',
-                    'rnaAligned.toTranscriptome.out.bam.bai']
-
-    result_urls = {key: star_options[key] for key in result_files}
-
-    if star_options['type'] == 'star':
-        docker_call(tool='star', parameters=parameters, work_dir=work_dir, mock=True, outputs=result_urls)
-    else:
-        docker_call(tool='starlong', parameters=parameters, work_dir=work_dir, mock=True, outputs=result_urls)
-    output_files = defaultdict()
-    for bam_file in ['rnaAligned.toTranscriptome.out.bam',
-                     'rnaAligned.sortedByCoord.out.bam']:
-        output_files[bam_file] = job.fileStore.writeGlobalFile('/'.join([
-            work_dir, bam_file]))
-    job.fileStore.deleteGlobalFile(fastq1)
-    job.fileStore.deleteGlobalFile(fastq2)
-    return output_files
-
-    # index_star = job.wrapJobFn(index_bamfile,
-    #                            output_files['rnaAligned.sortedByCoord.out.bam'],
-    #                            'rna', sample_options, disk='120G')
-    # job.addChild(index_star)
-    # output_files['rnaAligned.sortedByCoord.out.bam'] = index_star.rv()
-    # return output_files
 
 
 def index_bamfile(job, bamfile, sample_options, sample_type=''):
@@ -457,8 +389,6 @@ def index_bamfile(job, bamfile, sample_options, sample_type=''):
     return output_files
 
 
-def run_bedtools_coverage(job, bam, bedtools_options):
-    raise NotImplementedError
 
 
 

@@ -25,7 +25,8 @@ def docker_call(tool,
                 outputs=None,
                 docker_parameters=None,
                 check_output=False,
-                mock=None):
+                mock=None,
+                save_dir=None):
     """
     Calls Docker, passing along parameters and tool.
 
@@ -45,6 +46,7 @@ def docker_call(tool,
                       the environment variable.
     """
     from toil_scripts.lib.urls import download_url
+    from toil_scripts.lib.files import copy_files_to
 
     if mock is None:
         mock = mock_mode()
@@ -110,7 +112,6 @@ def docker_call(tool,
         if not os.path.isabs(filename):
             filename = os.path.join(work_dir, filename)
         assert(os.path.isfile(filename))
-
 
 def _fix_permissions(base_docker_call, tool, work_dir):
     """

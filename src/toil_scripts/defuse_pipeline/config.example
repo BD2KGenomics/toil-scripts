@@ -7,8 +7,12 @@ defuse:
 gencode:
  url: file:///home/jacob/munge/defuse/gencode.v19.annotation.gtf
 
+bedtools:
+ output: file:///home/jacob/munge/defuse/SRR1657557rnaAligned.sortedByCoord.out.bam.cov
+
 star:
  type: star
+ ncores: 4
  index_url: file:///home/jacob/munge/defuse/defuse_dummpy_reference
  rnaAligned.toTranscriptome.out.bam: file:///home/jacob/munge/defuse/SRR1657557rnaAligned.toTranscriptome.out.bam
  rnaAligned.sortedByCoord.out.bam: file:///home/jacob/munge/defuse/SRR1657557rnaAligned.sortedByCoord.out.bam
@@ -17,4 +21,5 @@ star:
 rsem:
  index_url: file:///home/jacob/munge/defuse/defuse_dummpy_reference
  ncores: 4
+ output: file:///home/jacob/munge/defuse/rsem.isoforms.results 
  

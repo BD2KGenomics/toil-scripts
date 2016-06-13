@@ -28,6 +28,9 @@ def copy_files(file_paths, output_dir):
     :param str output_dir: Output directory
     :param list[str] file_paths: Absolute file paths to move
     """
+    if not hasattr(file_paths, '__next__'):
+        file_paths = (file_paths)
+
     for file_path in file_paths:
         if not file_path.startswith('/'):
             raise ValueError('Path provided is relative not absolute.')
