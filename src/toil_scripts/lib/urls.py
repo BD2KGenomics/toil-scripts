@@ -3,8 +3,8 @@ import glob
 import hashlib
 import os
 import subprocess
-from urlparse import urlparse
 import shutil
+from urlparse import urlparse
 from toil_scripts.lib.programs import docker_call
 
 

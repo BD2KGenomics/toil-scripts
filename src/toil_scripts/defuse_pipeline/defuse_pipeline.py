@@ -48,43 +48,52 @@ def parse_config(config_path):
         return yaml.load(stream)
 
 
-# TODO This is broken. It throws a key error
 def get_shared_files(job, config, tool_options):
     important_parameters = {'defuse': {'index_url': ('required', 'download', 'index'),
-                                       'output': ('optional', 'download', 'output')},
-                            'gencode': {'url': ('optional', 'download', 'gencode_gtf')}}
+                                       'output': ('optional', None, 'output')},
+                            'gencode': {'url': ('optional', 'download', 'gencode_gtf')},
+                            'star': {'index_url': ('optional', 'download', 'index'),
+                                     'rnaAligned.toTranscriptome.out.bam': ('optional', None,
+                                                                            'rnaAligned.toTranscriptome.out.bam'),
+                                     'rnaAligned.sortedByCoord.out.bam': ('optional', None,
+                                                                          'rnaAligned.sortedByCoord.out.bam'),
+                                     'rnaAligned.sortedByCoord.out.bam.bai': ('optional', None,
+                                                                              'rnaAligned.sortedByCoord.out.bam.bai')}}
     work_dir = job.fileStore.getLocalTempDir()
 
     for tool, parameters in important_parameters.iteritems():
         for parameter, (status, action, name) in parameters.iteritems():
-            print(tool)
-            print(name)
+            if tool not in tool_options:
+                tool_options[tool] = {}
             try:
                 value = config[tool][parameter]
-                print(value)
-                if action == 'download':
-                    if tool in tool_options:
-                        pass
-                    else:
-                        tool_options[tool] = {}
 
+                if action == 'download':
                     tool_options[tool][name] = job.addChildJobFn(download_url_job, value, name=name,
                                                                  s3_key_path=tool_options['ssec']).rv()
+                else:
+                    tool_options[tool][name] = value
+
             except KeyError:
                 if status == 'required':
                     raise KeyError('Tool {} requires parameter {}'.format(tool, parameter))
                 elif status == 'optional':
-                    job.fileStore.logToMaster('Depending on configuration, tool {} may require {}'.format(tool,
-                                                                                                          parameter))
-            print(tool_options)
+                    msg = 'Depending on configuration, tool {} may require {}'.format(tool, parameter)
+                    job.fileStore.logToMaster(msg)
     return tool_options
 
 
 def start_pipeline(job, manifest, univ_options):
+    important_paramters = ['url', 'adapter3', 'adapter5']
     with open(manifest, 'r') as m:
         for sample_name, sample_options in yaml.load(m).iteritems():
-            sample_options['patient_id'] = sample_name
-            job.addChildJobFn(defuse_pipeline, sample_options, univ_options.copy())
+            if all(param in sample_options for param in important_paramters):
+                sample_options['patient_id'] = sample_name
+                job.addChildJobFn(defuse_pipeline, sample_options, univ_options.copy())
+            else:
+                msg = "Sample {} does not have all required parameters: {}".format(sample_name,
+                                                                                   str(important_paramters))
+                raise ValueError(msg)
 
 
 def defuse_pipeline(job, sample_options, tool_options):
@@ -106,6 +115,7 @@ def defuse_pipeline(job, sample_options, tool_options):
     defuse = job.wrapJobFn(run_defuse, cutadapt.rv(0), cutadapt.rv(1), sample_options, tool_options['defuse'])
     defuse_out = job.wrapJobFn(move_file, defuse.rv(), '{}.results.tsv'.format(sample_options['patient_id']),
                                tool_options)
+    exon_filter = job.wrapJobFn(exon_filter_pipeline, defuse, sample_options, tool_options)
 
     awk = job.wrapJobFn(run_simple_filter, defuse.rv())
     awk_out = job.wrapJobFn(move_file, awk.rv(), '{}.results.awk.tsv'.format(sample_options['patient_id']),
@@ -114,17 +124,20 @@ def defuse_pipeline(job, sample_options, tool_options):
 
     job.addFollowOn(sample)
     sample.addFollowOn(cutadapt)
-    cutadapt.addFollowOn(defuse)
 
     if tool_options['filter'] == 'awk':
-        pass
-        # defuse.addFollowOn(awk)
-        # awk.addFollowOn(awk_out)
+        cutadapt.addFollowOn(defuse)
+        defuse.addFollowOn(awk)
+        awk.addFollowOn(awk_out)
     elif tool_options['filter'] == 'exon':
-        pass
-
+        cutadapt.addFollowOn(exon_filter)
     else:
+        cutadapt.addFollowOn(defuse)
         defuse.addFollowOn(defuse_out)
+
+def exon_filter_pipeline(job, fastq1, fastq2, defuse_job, sample_options, tool_options):
+    pass
+
 
 
 def move_file(job, fileStoreID, filename, univ_options):
@@ -135,7 +148,11 @@ def move_file(job, fileStoreID, filename, univ_options):
 
     dest = os.path.join(univ_options['output_dir'], filename)
 
-    shutil.copy(src, dest)
+    if os.path.exists(dest):
+        job.fileStore.logToMaster('File {} already exists'.format(dest))
+    else:
+        shutil.copy(src, dest)
+
 
 
 def download_sample(job, sample_options):
@@ -166,7 +183,6 @@ def download_sample(job, sample_options):
 
 
 def run_defuse(job, fastq1, fastq2, sample_options, defuse_options):
-    cores = multiprocessing.cpu_count()
 
     work_dir = job.fileStore.getLocalTempDir()
 
@@ -178,6 +194,7 @@ def run_defuse(job, fastq1, fastq2, sample_options, defuse_options):
 
     input_files = lib.get_files_from_filestore(job, input_files, work_dir, docker=True)
 
+    cores = multiprocessing.cpu_count()
     parameters = ['--config', '/data/defuse_index',
                   '--output', '/data',
                   '--1fastq', '/data/rna_1.fastq',
@@ -206,7 +223,6 @@ def run_simple_filter(job, tsvID):
     lib.get_files_from_filestore(job, input_files, work_dir)
 
     tsvFile = os.path.join(work_dir, 'results.tsv')
-
     outpath = os.path.join(work_dir, 'results.awk.tsv')
 
     features = {'splitr_count': lambda x: x > 1,
@@ -223,7 +239,9 @@ def run_simple_filter(job, tsvID):
         reader = csv.reader(f, delimiter='\t')
         writer = csv.writer(g, delimiter='\t')
         header = reader.next()
+        print(header)
         writer.writerow(header)
+
         for feature in features:
             try:
                 featureIndex[feature] = header.index(feature)
