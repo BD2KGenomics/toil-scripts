@@ -26,12 +26,14 @@ Type: `toil-rnaseq` to get basic help menu and instructions
 
 To decrease the chance of versioning conflicts, install toil-scripts into a virtualenv: 
 
-- `virtualenv --system-site-packages ~/toil-scripts` 
+- `virtualenv ~/toil-scripts` 
 - `source ~/toil-scripts/bin/activate`
+- `pip install toil`
 - `pip install toil-scripts`
 
-`--system-site-packages` is only needed as a flag if there are dependencies (like Mesos) installed on the system that 
-are needed by the pipeline. 
+If Toil is already installed globally (true for CGCloud users), or there are global dependencies (like Mesos),
+use virtualenv's `--system-site-packages` flag.
+ 
 
 ## Dependencies
 

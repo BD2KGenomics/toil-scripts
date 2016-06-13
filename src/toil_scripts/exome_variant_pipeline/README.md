@@ -26,14 +26,15 @@ or `pip install --pre toil-scripts` for cutting edge development version.
 
 Type: `toil-exome` to get basic help menu and instructions
 
-To decrease the chance of versioning conflicts, install toil-scripts into a virtualenv:
+To decrease the chance of versioning conflicts, install toil-scripts into a virtualenv: 
 
-- `virtualenv --system-site-packages ~/toil-scripts` 
+- `virtualenv ~/toil-scripts` 
 - `source ~/toil-scripts/bin/activate`
+- `pip install toil`
 - `pip install toil-scripts`
 
-`--system-site-packages` is only needed as a flag if there are dependencies (like Mesos) installed on the system that 
-are needed by the pipeline.
+If Toil is already installed globally (true for CGCloud users), or there are global dependencies (like Mesos),
+use virtualenv's `--system-site-packages` flag.
 
 ## Dependencies
 
@@ -88,7 +89,7 @@ be downloaded after creating an account which takes about 1 minute and is free.
 Run sample(s) locally using the manifest
 1. `toil-exome generate`
 2. Fill in config and manifest
-3. `toil-rnaseq run ./example-jobstore`
+3. `toil-exome run ./example-jobstore`
 
 Toil options can be appended to `toil-exome run`, for example:
 `toil-exome run ./example-jobstore --retryCount=1 --workDir=/data`
