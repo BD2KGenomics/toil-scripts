@@ -23,6 +23,7 @@ from toil_scripts.lib.urls import download_url_job, s3am_upload
 from toil_scripts.tools.aligners import run_star
 from toil_scripts.tools.preprocessing import cutadapt
 from toil_scripts.tools.quantifiers import run_kallisto, run_rsem, run_rsem_postprocess
+from toil_scripts.tools.QC import run_fastqc
 
 
 # Start of pipeline
@@ -93,8 +94,11 @@ def pipeline_declaration(job, config, preprocessing_output):
     :param tuple(str, str, bool) preprocessing_output: R1 FileStoreID, R2 FileStoreID, Improper Pairing (True/False)
     """
     r1_id, r2_id = preprocessing_output
-    kallisto_output, rsem_output = None, None
+    kallisto_output, rsem_output, fastqc_output = None, None, None
     disk = '2G' if config.ci_test else '40G'
+    if config.fastqc:
+        job.fileStore.logToMaster('Queueing FastQC job for: ')
+        fastqc_output = job.addChildJobFn(run_fastqc, r1_id, r2_id, cores=2, disk=disk).rv()
     if config.kallisto_index:
         job.fileStore.logToMaster('Queueing Kallisto job for: ' + config.uuid)
         kallisto_output = job.addChildJobFn(run_kallisto, config.cores, r1_id, r2_id, config.kallisto_index,
@@ -102,7 +106,7 @@ def pipeline_declaration(job, config, preprocessing_output):
     if config.star_index and config.rsem_ref:
         job.fileStore.logToMaster('Queueing STAR alignment for: ' + config.uuid)
         rsem_output = job.addChildJobFn(star_alignment, config, r1_id, r2_id).rv()
-    job.addFollowOnJobFn(consolidate_output, config, kallisto_output, rsem_output)
+    job.addFollowOnJobFn(consolidate_output, config, kallisto_output, rsem_output, fastqc_output)
 
 
 def star_alignment(job, config, r1_id, r2_id):
@@ -217,31 +221,34 @@ def process_sample_tar(job, config, tar_id):
         return r1_id, r2_id
 
 
-def consolidate_output(job, config, kallisto_output, rsem_output):
+def consolidate_output(job, config, kallisto_output, rsem_output, fastqc_output):
     """
     Combines the contents of the outputs into one tarball and places in output directory or s3
 
     :param JobFunctionWrappingJob job: passed automatically by Toil
     :param Namespace config: Argparse Namespace object containing argument inputs
-    :param str kallisto_output: FileStoreID for kallisto output (tarball)
-    :param tuple(str, str) rsem_output:
+    :param str kallisto_output: FileStoreID for Kallisto output
+    :param tuple(str, str) rsem_output: FileStoreIDs for RSEM output
+    :param str fastqc_output: FileStoreID for FastQC output
     """
     job.fileStore.logToMaster('Consolidating input: {}'.format(config.uuid))
     work_dir = job.fileStore.getLocalTempDir()
     # Retrieve output file paths to consolidate
-    rsem_tar, hugo_tar, kallisto_tar = None, None, None
+    rsem_tar, hugo_tar, kallisto_tar, fastqc_tar = None, None, None, None
     if rsem_output:
         rsem_id, hugo_id = rsem_output
         rsem_tar = job.fileStore.readGlobalFile(rsem_id, os.path.join(work_dir, 'rsem.tar.gz'))
         hugo_tar = job.fileStore.readGlobalFile(hugo_id, os.path.join(work_dir, 'rsem_hugo.tar.gz'))
     if kallisto_output:
         kallisto_tar = job.fileStore.readGlobalFile(kallisto_output, os.path.join(work_dir, 'kallisto.tar.gz'))
+    if fastqc_output:
+        fastqc_tar = job.fileStore.readGlobalFile(fastqc_output, os.path.join(work_dir, 'fastqc.tar.gz'))
     # I/O
     if not config.paired:
         config.uuid = 'SINGLE-END.{}'.format(config.uuid)
     out_tar = os.path.join(work_dir, config.uuid + '.tar.gz')
     # Consolidate separate tarballs into one as streams (avoids unnecessary untaring)
-    tar_list = [x for x in [rsem_tar, hugo_tar, kallisto_tar] if x is not None]
+    tar_list = [x for x in [rsem_tar, hugo_tar, kallisto_tar, fastqc_tar] if x is not None]
     with tarfile.open(os.path.join(work_dir, out_tar), 'w:gz') as f_out:
         for tar in tar_list:
             with tarfile.open(tar, 'r') as f_in:
@@ -251,8 +258,10 @@ def consolidate_output(job, config, kallisto_output, rsem_output):
                             tarinfo.name = os.path.join(config.uuid, 'RSEM', os.path.basename(tarinfo.name))
                         elif tar == hugo_tar:
                             tarinfo.name = os.path.join(config.uuid, 'RSEM', 'Hugo', os.path.basename(tarinfo.name))
-                        else:
+                        elif tar == kallisto_tar:
                             tarinfo.name = os.path.join(config.uuid, 'Kallisto', os.path.basename(tarinfo.name))
+                        else:
+                            tarinfo.name = os.path.join(config.uuid, 'QC', os.path.basename(tarinfo.name))
                         f_out.addfile(tarinfo, fileobj=f_in_file)
     # Move to output directory
     if config.output_dir:
@@ -324,6 +333,9 @@ def generate_config():
 
         # Optional: If true, will preprocess samples with cutadapt using adapter sequences.
         cutadapt: true
+
+        # Optional: If true, will run FastQC and include QC in sample output
+        fastqc: true
 
         # Adapter sequence to trim. Defaults set for Illumina
         fwd-3pr-adapter: AGATCGGAAGAG

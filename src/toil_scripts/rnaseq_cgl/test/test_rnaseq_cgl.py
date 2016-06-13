@@ -28,7 +28,7 @@ def test_rnaseq_cgl(tmpdir):
         conn = S3Connection()
         b = Bucket(conn, 'cgl-driver-projects')
         k = Key(b)
-        k.key = 'test/ci/IMPROPERLY_PAIRED.chr6_sample.tar.gz'
+        k.key = 'test/ci/chr6_sample.tar.gz'
         k.delete()
 
 
@@ -49,6 +49,7 @@ def generate_config():
         rsem-ref: s3://cgl-pipeline-inputs/rnaseq_cgl/ci/rsem_ref_chr6.tar.gz
         output-dir:
         s3-output-dir: s3://cgl-driver-projects/test/ci
+        fastqc: true
         cutadapt:
         ssec:
         gtkey:
