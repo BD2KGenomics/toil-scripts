@@ -33,6 +33,9 @@ import yaml
 import multiprocessing
 import defuse_lib as lib
 
+from operator import itemgetter
+from collections import defaultdict
+
 from toil_scripts.lib.programs import docker_call
 from toil_scripts.lib.urls import download_url_job
 from toil.job import Job
@@ -58,7 +61,11 @@ def get_shared_files(job, config, tool_options):
                                      'rnaAligned.sortedByCoord.out.bam': ('optional', None,
                                                                           'rnaAligned.sortedByCoord.out.bam'),
                                      'rnaAligned.sortedByCoord.out.bam.bai': ('optional', None,
-                                                                              'rnaAligned.sortedByCoord.out.bam.bai')}}
+                                                                              'rnaAligned.sortedByCoord.out.bam.bai')},
+                            'rsem': {'index_url': ('optional', 'download', 'index'),
+                                     'ncores': ('optional', None, 'ncores'),
+                                     'output': ('optional', None, 'output')}
+                            }
     work_dir = job.fileStore.getLocalTempDir()
 
     for tool, parameters in important_parameters.iteritems():
@@ -81,6 +88,8 @@ def get_shared_files(job, config, tool_options):
                     msg = 'Depending on configuration, tool {} may require {}'.format(tool, parameter)
                     job.fileStore.logToMaster(msg)
     return tool_options
+
+
 
 
 def start_pipeline(job, manifest, univ_options):
@@ -111,11 +120,13 @@ def defuse_pipeline(job, sample_options, tool_options):
         sample_options['gzipped'] = False
 
     sample = job.wrapJobFn(download_sample, sample_options)
+    gtf = job.wrapJobFn(prepare_gtf, tool_options['gencode'])
     cutadapt = job.wrapJobFn(lib.run_cutadapt, sample.rv(0), sample.rv(1), sample_options)
     defuse = job.wrapJobFn(run_defuse, cutadapt.rv(0), cutadapt.rv(1), sample_options, tool_options['defuse'])
     defuse_out = job.wrapJobFn(move_file, defuse.rv(), '{}.results.tsv'.format(sample_options['patient_id']),
                                tool_options)
-    exon_filter = job.wrapJobFn(exon_filter_pipeline, defuse, sample_options, tool_options)
+    exon_filter = job.wrapJobFn(exon_filter_pipeline, cutadapt.rv(0), cutadapt.rv(1),
+                                defuse, sample_options, tool_options)
 
     awk = job.wrapJobFn(run_simple_filter, defuse.rv())
     awk_out = job.wrapJobFn(move_file, awk.rv(), '{}.results.awk.tsv'.format(sample_options['patient_id']),
@@ -130,13 +141,23 @@ def defuse_pipeline(job, sample_options, tool_options):
         defuse.addFollowOn(awk)
         awk.addFollowOn(awk_out)
     elif tool_options['filter'] == 'exon':
+        cutadapt.addChild(gtf)
         cutadapt.addFollowOn(exon_filter)
     else:
         cutadapt.addFollowOn(defuse)
         defuse.addFollowOn(defuse_out)
 
+
 def exon_filter_pipeline(job, fastq1, fastq2, defuse_job, sample_options, tool_options):
-    pass
+    job.fileStore.logToMaster('Running exon filter on %s' % sample_options['patient_id'])
+    star = job.wrapJobFn(lib.run_star, fastq1, fastq2, sample_options, tool_options['star'])
+    sort = job.wrapJobFn(sort_gtf, sample_options, tool_options)
+    rsem = job.wrapJobFn(lib.run_rsem, star.rv('rnaAligned.toTranscriptome.out.bam'),
+                         sample_options, tool_options['rsem'])
+
+    defuse_job.addChild(star)
+    defuse_job.addChild(sort)
+    star.addFollowOn(rsem)
 
 
 
@@ -183,6 +204,7 @@ def download_sample(job, sample_options):
 
 
 def run_defuse(job, fastq1, fastq2, sample_options, defuse_options):
+    job.fileStore.logToMaster('Running deFuse on %s' % sample_options['patient_id'])
 
     work_dir = job.fileStore.getLocalTempDir()
 
@@ -263,8 +285,88 @@ def run_simple_filter(job, tsvID):
     return job.fileStore.writeGlobalFile(outpath)
 
 
-def sort_gtf(job, univ_options):
-    pass
+def prepare_gtf(job, gencode_gtf):
+    gtfs = {}
+
+    exon = job.wrapJobFn(get_exon_gtf, gencode_gtf)
+    sort = job.wrapJobFn(sort_gtf, exon.rv())
+
+    job.addChild(exon)
+
+
+def get_exon_gtf(job, gencode_options):
+    work_dir = job.fileStore.getLocalTempDir()
+
+    input_files = {'gencode.gtf': gencode_options['gencode_gtf']}
+    lib.get_files_from_filestore(job, input_files, work_dir)
+
+    gtf_path = os.path.join(work_dir, 'gencode.gtf')
+    output_path = os.path.join(work_dir, 'gencode.exons.gtf')
+
+    reader = csv.reader(open(gtf_path, 'rb'), delimiter='\t')
+    line = reader.next()
+    headers = []
+    while line[0].startswith('##'):
+        headers.append(line)
+        line = reader.next()
+
+    outfile = open(output_path, 'w')
+    for header in headers:
+        outfile.write('\t'.join(header) + '\n')
+
+    if line[2] == 'exon':
+        outfile.write('\t'.join(line) + '\n')
+
+    for line in reader:
+        if line[2] == 'exon':
+            outfile.write('\t'.join(line) + '\n')
+    outfile.close()
+    return job.fileStore.writeGlobalFile(output_path)
+
+def sort_gtf(job, gtf_id):
+    job.fileStore.logToMaster('Sorting GTF')
+    work_dir = job.fileStore.getLocalTempDir()
+    input_files = {'gencode.gtf': gtf_id}
+    lib.get_files_from_filestore(job, input_files, work_dir)
+
+    gtf_path = os.path.join(work_dir, 'gencode.gtf')
+    output_path = os.path.join(work_dir, 'gencode.sorted.gtf')
+
+    reader = csv.reader(open(gtf_path, 'rb'), delimiter='\t')
+    line = reader.next()
+    headers = []
+    while line[0].startswith('##'):
+        headers.append(line)
+        line = reader.next()
+
+    outfile = open(output_path, 'w')
+    for header in headers:
+        outfile.write('\t'.join(header) + '\n')
+
+    data = defaultdict(list)
+
+    chromosome_format = 'chr'
+    chromosomes = ['{}{}'.format(chromosome_format, num) for num in range(1, 23) + ['X', 'Y', 'M']]
+
+    chromosome = 0
+    start_pos = 3
+
+    while True:
+        if len(line) == 9:
+            data[line[chromosome]].append((line, int(line[start_pos])))
+        else:
+            raise ValueError("GTF file must have 9 features")
+        try:
+            line = reader.next()
+        except StopIteration:
+            break
+
+    for chrom in chromosomes:
+        gtfs = sorted(data[chrom], key=itemgetter(1))
+        lines = ['\t'.join(gtf) for gtf, _ in gtfs]
+        for line in lines:
+            outfile.write(line + '\n')
+    return job.fileStore.writeGlobalFile(output_path)
 
 
 def run_exon_filter():

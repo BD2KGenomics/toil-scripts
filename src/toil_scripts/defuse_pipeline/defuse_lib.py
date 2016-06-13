@@ -52,6 +52,7 @@ def is_gzipfile(filename):
         else:
             return False
 
+
 def get_files_from_filestore(job, files, work_dir, cache=True, docker=False):
     """
     This is adapted from John Vivian's return_input_paths from the RNA-Seq pipeline.
@@ -91,6 +92,7 @@ def get_files_from_filestore(job, files, work_dir, cache=True, docker=False):
         if docker:
             files[name] = docker_path(files[name])
     return files
+
 
 def get_file_from_s3(job, s3_url, encryption_key=None, per_file_encryption=True,
                      write_to_jobstore=True):
@@ -397,10 +399,17 @@ def run_star(job, fastq1, fastq2, sample_options, star_options):
                   '--outSAMtype', 'BAM', 'SortedByCoordinate',
                   '--quantMode', 'TranscriptomeSAM',
                   '--outSAMunmapped', 'Within']
+
+    result_files = ['rnaAligned.toTranscriptome.out.bam',
+                    'rnaAligned.sortedByCoord.out.bam',
+                    'rnaAligned.toTranscriptome.out.bam.bai']
+
+    result_urls = {key: star_options[key] for key in result_files}
+
     if star_options['type'] == 'star':
-        docker_call(tool='star', parameters=parameters, work_dir=work_dir)
+        docker_call(tool='star', parameters=parameters, work_dir=work_dir, mock=True, outputs=result_urls)
     else:
-        docker_call(tool='starlong', parameters=parameters, work_dir=work_dir)
+        docker_call(tool='starlong', parameters=parameters, work_dir=work_dir, mock=True, outputs=result_urls)
     output_files = defaultdict()
     for bam_file in ['rnaAligned.toTranscriptome.out.bam',
                      'rnaAligned.sortedByCoord.out.bam']:
@@ -408,12 +417,14 @@ def run_star(job, fastq1, fastq2, sample_options, star_options):
             work_dir, bam_file]))
     job.fileStore.deleteGlobalFile(fastq1)
     job.fileStore.deleteGlobalFile(fastq2)
-    index_star = job.wrapJobFn(index_bamfile,
-                               output_files['rnaAligned.sortedByCoord.out.bam'],
-                               'rna', sample_options, disk='120G')
-    job.addChild(index_star)
-    output_files['rnaAligned.sortedByCoord.out.bam'] = index_star.rv()
     return output_files
+
+    # index_star = job.wrapJobFn(index_bamfile,
+    #                            output_files['rnaAligned.sortedByCoord.out.bam'],
+    #                            'rna', sample_options, disk='120G')
+    # job.addChild(index_star)
+    # output_files['rnaAligned.sortedByCoord.out.bam'] = index_star.rv()
+    # return output_files
 
 
 def index_bamfile(job, bamfile, sample_options, sample_type=''):
@@ -444,3 +455,46 @@ def index_bamfile(job, bamfile, sample_options, sample_type=''):
                                                                                  in_bamfile +
                                                                                  '.bai']))}
     return output_files
+
+
+def run_rsem(job, star_bam, sample_options, rsem_options):
+    """
+    This module will run rsem on the RNA Bam file.
+
+    ARGUMENTS
+    1. star_bams: Dict of input STAR bams
+         star_bams
+              +- 'rnaAligned.toTranscriptome.out.bam': <JSid>
+    2. univ_options: Dict of universal arguments used by almost all tools
+         univ_options
+                +- 'dockerhub': <dockerhub to use>
+    3. rsem_options: Dict of parameters specific to rsem
+         rsem_options
+              |- 'index_tar': <JSid for the rsem index tarball>
+              +- 'n': <number of threads to allocate>
+
+    RETURN VALUES
+    1. output_file: <Jsid of rsem.isoforms.results>
+
+    This module corresponds to node 9 on the tree
+    """
+    job.fileStore.logToMaster('Running rsem index on %s' % sample_options['patient_id'])
+    work_dir = job.fileStore.getLocalTempDir()
+    input_files = {'star_transcriptome.bam': star_bam,
+                   'rsem_index.tar.gz': rsem_options['index']}
+    input_files = get_files_from_filestore(job, input_files, work_dir, docker=True)
+    parameters = ['--paired-end',
+                  '-p', str(rsem_options['ncores']),
+                  '--bam',
+                  input_files['star_transcriptome.bam'],
+                  '--no-bam-output',
+                  '/'.join([rsem_options['index'], 'hg19']),
+                  'rsem']
+
+    result = {'rsem.isoforms.results': rsem_options['output']}
+    docker_call(tool='aarjunrao/rsem:latest', parameters=parameters, work_dir=work_dir,
+                mock=True, outputs=result)
+    output_file = \
+        job.fileStore.writeGlobalFile('/'.join([work_dir, 'rsem.isoforms.results']))
+    return output_file
+
