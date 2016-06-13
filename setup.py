@@ -22,8 +22,8 @@ from version import version
 from pkg_resources import parse_version
 
 # Toil version check -- Raise warning instead of using intall_requires to avoid virtualenv conflicts
-toil_min_version = '3.1'
-toil_max_version = '3.2'
+toil_min_version = '3.1.6'
+toil_max_version = '3.2.0'
 
 try:
     from toil.version import version as toil_version
@@ -32,9 +32,9 @@ except ImportError:
                        'http://toil.readthedocs.io/en/latest/installation.html'.format(toil_min_version))
 
 if not parse_version(str(toil_min_version)) <= parse_version(toil_version) < parse_version(toil_max_version):
-    raise RuntimeError('Need version {}.x of Toil. Read about installing Toil at: '
+    raise RuntimeError('Need Toil version within range [{},{}). Read about installing Toil at: '
                        'http://toil.readthedocs.io/en/latest/installation.html'
-                       ''.format(toil_min_version))
+                       ''.format(toil_min_version, toil_max_version))
 
 kwargs = dict(
     name='toil-scripts',
