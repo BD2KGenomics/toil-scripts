@@ -1,10 +1,11 @@
 #!/usr/bin/env python2.7
 
 import re
+import os
 import csv
 import cPickle
 
-from collections import defaultdict, Counter
+from collections import defaultdict, namedtuple
 
 class GTF(object):
 
@@ -53,23 +54,59 @@ def pickle_data(fname, obj):
         cPickle.dump(obj, f)
 
 def get_transcript_data(gtf_fname):
-    try:
-        transcripts = get_pickled_data('transcripts_{}.pkl'.format(gtf_fname))
-    except IOError:
-        # exons = get_exons(gtf_fname)
-        transcripts = defaultdict(list)
-        for gtf in get_gtfs(gtf_fname):
-            if gtf.feature == 'exon':
-                transcripts[gtf.transcript_id].append(gtf)
-        pickle_data('transcripts_{}.pkl'.format(gtf_fname), transcripts)
-    return transcripts
+    transcript_data = defaultdict(set)
+    reader = csv.reader(open(gtf_fname, 'rb'), delimiter='\t')
+    while True:
+        line = reader.next()
+        if line[0].startswith('##'):
+            line = reader.next()
+        else:
+            break
+    while True:
+        if line[2] != 'exon':
+            pass
+        else:
+            transcript_match = re.search('transcript_id "(\w+)\.*(\d*)"', line[8])
+            exon_match = re.search('exon_id "(\w+)\.*(\d*)"', line[8])
+            if transcript_match and exon_match:
+                transcript_id = transcript_match.group(1)
+                version = transcript_match.group(2)
+                exon_id = exon_match.group(1)
+                transcript_data[transcript_id].add(exon_id)
+            else:
+                pass
+        try:
+            line = reader.next()
+        except StopIteration:
+            break
+    return transcript_data
+
+
+def read_rsem_data(rsem_path):
+    rsem_data = namedtuple('RSEM_DATA', 'gene_name gene_version transcript_name transcript_version fpkm')
+    rsem_reader = csv.reader(open(rsem_path, 'rb'), delimiter='\t')
+    header = rsem_reader.next()
+    header = {key: index for index, key in enumerate(header)}
+    data = defaultdict(list)
+    for line in rsem_reader:
+        gene_id = line[header['gene_id']]
+        gene_name, gene_version = gene_id.split('.')
+        transcript_id = line[header['transcript_id']]
+        transcript_name, transcript_version = transcript_id.split('.')
+        fpkm =  line[header['FPKM']]
+        data[gene_name].append(rsem_data(gene_name, gene_version, transcript_name, transcript_version, fpkm))
+    return data
+
 
 
 def main():
-    gtf_fname = 'gencode.v19.annotation.gtf'
-    defuse_output = 'results.tsv'
+    defuse_output = '/home/jacob/munge/defuse/results.tsv'
+    gtf_path = '/home/jacob/munge/defuse/gencode.v19.annotation.gtf'
+    rsem_path = '/home/jacob/munge/defuse/rsem.isoforms.results'
 
-    transcripts = get_transcript_data(gtf_fname)
+    rsem_data = read_rsem_data(rsem_path)
+
+    transcripts = get_transcript_data(gtf_path)
     reader = csv.reader(open(defuse_output, 'rb'), delimiter='\t')
     header = reader.next()
     line = reader.next()
@@ -77,7 +114,9 @@ def main():
     defuse_features = ['gene1', 'gene2', 'genomic_break_pos1', 'genomic_break_pos2']
     for feature in defuse_features:
         print feature, line[defuse_header[feature]]
-    print transcripts[line[defuse_header['gene1']]]
+    rsem_datum = rsem_data[line[defuse_header['gene1']]][0]
+    print transcripts[rsem_datum.transcript_name]
+
 
 
 
