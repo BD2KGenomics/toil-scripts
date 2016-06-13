@@ -457,6 +457,11 @@ def index_bamfile(job, bamfile, sample_options, sample_type=''):
     return output_files
 
 
+def run_bedtools_coverage(job, bam, bedtools_options):
+    raise NotImplementedError
+
+
+
 def run_rsem(job, star_bam, sample_options, rsem_options):
     """
     This module will run rsem on the RNA Bam file.

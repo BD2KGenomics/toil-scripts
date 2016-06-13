@@ -38,7 +38,7 @@ from collections import defaultdict
 
 from toil_scripts.lib.programs import docker_call
 from toil_scripts.lib.urls import download_url_job
-from toil.job import Job
+from toil.job import Job, PromisedRequirement
 
 
 def parse_config(config_path):
@@ -66,7 +66,6 @@ def get_shared_files(job, config, tool_options):
                                      'ncores': ('optional', None, 'ncores'),
                                      'output': ('optional', None, 'output')}
                             }
-    work_dir = job.fileStore.getLocalTempDir()
 
     for tool, parameters in important_parameters.iteritems():
         for parameter, (status, action, name) in parameters.iteritems():
@@ -88,8 +87,6 @@ def get_shared_files(job, config, tool_options):
                     msg = 'Depending on configuration, tool {} may require {}'.format(tool, parameter)
                     job.fileStore.logToMaster(msg)
     return tool_options
-
-
 
 
 def start_pipeline(job, manifest, univ_options):
@@ -120,7 +117,6 @@ def defuse_pipeline(job, sample_options, tool_options):
         sample_options['gzipped'] = False
 
     sample = job.wrapJobFn(download_sample, sample_options)
-    gtf = job.wrapJobFn(prepare_gtf, tool_options['gencode'])
     cutadapt = job.wrapJobFn(lib.run_cutadapt, sample.rv(0), sample.rv(1), sample_options)
     defuse = job.wrapJobFn(run_defuse, cutadapt.rv(0), cutadapt.rv(1), sample_options, tool_options['defuse'])
     defuse_out = job.wrapJobFn(move_file, defuse.rv(), '{}.results.tsv'.format(sample_options['patient_id']),
@@ -141,7 +137,6 @@ def defuse_pipeline(job, sample_options, tool_options):
         defuse.addFollowOn(awk)
         awk.addFollowOn(awk_out)
     elif tool_options['filter'] == 'exon':
-        cutadapt.addChild(gtf)
         cutadapt.addFollowOn(exon_filter)
     else:
         cutadapt.addFollowOn(defuse)
@@ -151,13 +146,13 @@ def defuse_pipeline(job, sample_options, tool_options):
 def exon_filter_pipeline(job, fastq1, fastq2, defuse_job, sample_options, tool_options):
     job.fileStore.logToMaster('Running exon filter on %s' % sample_options['patient_id'])
     star = job.wrapJobFn(lib.run_star, fastq1, fastq2, sample_options, tool_options['star'])
-    sort = job.wrapJobFn(sort_gtf, sample_options, tool_options)
+    bedtools = job.wrapJobFn(lib.run_bedtools, star.rv('rnaAligned.sortedByCoord.out.bam'), tool_options)
     rsem = job.wrapJobFn(lib.run_rsem, star.rv('rnaAligned.toTranscriptome.out.bam'),
                          sample_options, tool_options['rsem'])
 
     defuse_job.addChild(star)
-    defuse_job.addChild(sort)
     star.addFollowOn(rsem)
+    star.addFollowOn(bedtools)
 
 
 
@@ -173,7 +168,6 @@ def move_file(job, fileStoreID, filename, univ_options):
         job.fileStore.logToMaster('File {} already exists'.format(dest))
     else:
         shutil.copy(src, dest)
-
 
 
 def download_sample(job, sample_options):
@@ -285,19 +279,19 @@ def run_simple_filter(job, tsvID):
     return job.fileStore.writeGlobalFile(outpath)
 
 
-def prepare_gtf(job, gencode_gtf):
-    gtfs = {}
+def prepare_gtf(job, tool_options):
+    try:
+        gencode_gtf = tool_options['gencode']['gencode_gtf']
+        tool_options['exon_gtf'] = job.addChildJobFn(get_exon_gtf, gencode_gtf).rv()
+    except KeyError:
+        pass
+    return tool_options
 
-    exon = job.wrapJobFn(get_exon_gtf, gencode_gtf)
-    sort = job.wrapJobFn(sort_gtf, exon.rv())
 
-    job.addChild(exon)
-
-
-def get_exon_gtf(job, gencode_options):
+def get_exon_gtf(job, gencode_id):
     work_dir = job.fileStore.getLocalTempDir()
 
-    input_files = {'gencode.gtf': gencode_options['gencode_gtf']}
+    input_files = {'gencode.gtf': gencode_id}
     lib.get_files_from_filestore(job, input_files, work_dir)
 
     gtf_path = os.path.join(work_dir, 'gencode.gtf')
@@ -321,7 +315,8 @@ def get_exon_gtf(job, gencode_options):
         if line[2] == 'exon':
             outfile.write('\t'.join(line) + '\n')
     outfile.close()
-    return job.fileStore.writeGlobalFile(output_path)
+    exon_gtf = job.fileStore.writeGlobalFile(output_path)
+    return job.addChildJobFn(sort_gtf, exon_gtf).rv()
 
 def sort_gtf(job, gtf_id):
     job.fileStore.logToMaster('Sorting GTF')
@@ -418,10 +413,12 @@ def main():
 
     root = Job.wrapFn(parse_config, os.path.abspath(params.config))
     download_refs = Job.wrapJobFn(get_shared_files, root.rv(), global_options)
-    start = Job.wrapJobFn(start_pipeline, os.path.abspath(params.manifest), download_refs.rv())
+    update_parameters = Job.wrapJobFn(prepare_gtf, download_refs.rv())
+    start = Job.wrapJobFn(start_pipeline, os.path.abspath(params.manifest), update_parameters.rv())
 
     root.addFollowOn(download_refs)
-    download_refs.addFollowOn(start)
+    download_refs.addFollowOn(update_parameters)
+    update_parameters.addFollowOn(start)
 
 
     Job.Runner.startToil(root, params)
