@@ -19,8 +19,22 @@ import sys
 from setuptools import find_packages, setup
 from setuptools.command.test import test as TestCommand
 from version import version
+from pkg_resources import parse_version
 
-toil_version = '3.1.4'
+# Toil version check -- Raise warning instead of using intall_requires to avoid virtualenv conflicts
+toil_min_version = '3.1.6'
+toil_max_version = '3.2.0'
+
+try:
+    from toil.version import version as toil_version
+except ImportError:
+    raise RuntimeError('Cannot find Toil version {}.x for Toil. Read about installing Toil at: '
+                       'http://toil.readthedocs.io/en/latest/installation.html'.format(toil_min_version))
+
+if not parse_version(str(toil_min_version)) <= parse_version(toil_version) < parse_version(toil_max_version):
+    raise RuntimeError('Need Toil version within range [{},{}). Read about installing Toil at: '
+                       'http://toil.readthedocs.io/en/latest/installation.html'
+                       ''.format(toil_min_version, toil_max_version))
 
 kwargs = dict(
     name='toil-scripts',
@@ -30,7 +44,6 @@ kwargs = dict(
     author_email='cgl-toil@googlegroups.com',
     url="https://github.com/BD2KGenomics/toil-scripts",
     install_requires=[
-        'toil==' + toil_version,
         'boto==2.38.0', # FIXME: Make an extra
         'tqdm==3.8.0', # FIXME: Remove once ADAM stops using it (superfluous import)
         'pyyaml==3.11'],
