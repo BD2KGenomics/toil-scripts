@@ -15,7 +15,6 @@ def run_star(job, cores, r1_id, r2_id, star_index_url):
     :param str r1_id: FileStoreID of fastq (pair 1)
     :param str r2_id: FileStoreID of fastq (pair 2 if applicable, else pass None)
     :param str star_index_url: STAR index tarball
-    :param bool paired: If True, treats the sample as
     :return: FileStoreID from RSEM
     :rtype: str
     """
