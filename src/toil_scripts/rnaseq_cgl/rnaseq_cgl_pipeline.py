@@ -149,23 +149,13 @@ def rsem_quantification(job, config, star_output):
             s3am_upload(fpath=sorted_bam, s3_dir=config.s3_output_dir, s3_key_path=config.ssec)
         if config.output_dir:
             move_files(file_paths=[sorted_bam], output_dir=config.output_dir)
-    rsem_output = job.addChildJobFn(run_rsem, config.cores, transcriptome_id, config.rsem_ref, paired=config.paired,
-                                    cores=cores, disk=disk).rv()
-    return job.addFollowOnJobFn(rsem_postprocessing, config, rsem_output).rv()
-
-
-def rsem_postprocessing(job, config, rsem_output):
-    """
-    Unpack RSEM output and run RSEM postprocessing
-
-    :param JobFunctionWrappingJob job: passed automatically by Toil
-    :param Namespace config: Argparse Namespace object containing argument inputs
-    :param tuple(str, str) rsem_output:
-    :return: FileStoreID of RSEM postprocess
-    :rtype: str
-    """
-    gene_id, isoform_id = rsem_output
-    return job.addChildJobFn(run_rsem_postprocess, config.uuid, gene_id, isoform_id).rv()
+    # Declare RSEM and RSEM post-process jobs
+    rsem_output = job.wrapJobFn(run_rsem, config.cores, transcriptome_id, config.rsem_ref, paired=config.paired,
+                                    cores=cores, disk=disk)
+    rsem_postprocess = job.wrapJobFn(run_rsem_postprocess, config.uuid, rsem_output.rv(0), rsem_output.rv(1))
+    job.addChild(rsem_output)
+    rsem_output.addChild(rsem_postprocess)
+    return rsem_postprocess.rv()
 
 
 def process_sample_tar(job, config, tar_id):
