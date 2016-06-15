@@ -19,12 +19,13 @@ import sys
 from setuptools import find_packages, setup
 from setuptools.command.test import test as TestCommand
 from version import version
-from pkg_resources import parse_version
+from pkg_resources import parse_version, require, DistributionNotFound
 
-# Toil version check -- Raise warning instead of using intall_requires to avoid virtualenv conflicts
 toil_min_version = '3.1.6'
 toil_max_version = '3.2.0'
+bpl_min_version = '1.10.dev6'
 
+# Toil version check -- Raise warning instead of using intall_requires to avoid virtualenv conflicts
 try:
     from toil.version import version as toil_version
 except ImportError:
@@ -35,6 +36,18 @@ if not parse_version(str(toil_min_version)) <= parse_version(toil_version) < par
     raise RuntimeError('Need Toil version within range [{},{}). Read about installing Toil at: '
                        'http://toil.readthedocs.io/en/latest/installation.html'
                        ''.format(toil_min_version, toil_max_version))
+
+# bd2k-python-lib check -- Raise warning instead of install_requires to avoid version conflicts with Toil
+try:
+    bpl = require('bd2k-python-lib')[0].version
+except DistributionNotFound:
+    raise RuntimeError('Cannot find bd2k-python-lib, which is included in Toil. Read about installing Toil at: '
+                       'http://toil.readthedocs.io/en/latest/installation.html')
+
+if parse_version(bpl) < parse_version(bpl_min_version):
+    raise RuntimeError('bd2k-python-lib is out of date. Requires at least version {}.  Installing Toil will'
+                       'include the correct version of bd2k-python-lib: '
+                       'http://toil.readthedocs.io/en/latest/installation.html'.format(bpl_min_version))
 
 kwargs = dict(
     name='toil-scripts',
