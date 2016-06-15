@@ -2,10 +2,14 @@
 
 import re
 import os
+import sys
 import csv
 import cPickle
 
+import matplotlib.pyplot as plt
+
 from collections import defaultdict, namedtuple
+
 
 class GTF(object):
 
@@ -54,7 +58,8 @@ def pickle_data(fname, obj):
         cPickle.dump(obj, f)
 
 def get_transcript_data(gtf_fname):
-    transcript_data = defaultdict(set)
+    gtf_stats = namedtuple('GTF_STATS', 'seqname source feature start end score strand frame')
+    transcript_data = defaultdict(list)
     reader = csv.reader(open(gtf_fname, 'rb'), delimiter='\t')
     while True:
         line = reader.next()
@@ -66,13 +71,18 @@ def get_transcript_data(gtf_fname):
         if line[2] != 'exon':
             pass
         else:
+            gtf_line = gtf_stats(*line[:8])
             transcript_match = re.search('transcript_id "(\w+)\.*(\d*)"', line[8])
             exon_match = re.search('exon_id "(\w+)\.*(\d*)"', line[8])
+            exon_number_match = re.search('exon_number (\d+)', line[8])
             if transcript_match and exon_match:
-                transcript_id = transcript_match.group(1)
-                version = transcript_match.group(2)
+                transcript_name = transcript_match.group(1)
+                transcript_version = transcript_match.group(2)
                 exon_id = exon_match.group(1)
-                transcript_data[transcript_id].add(exon_id)
+                exon_number = exon_number_match.group(1)
+                transcript_data[transcript_name].append((exon_id, gtf_line, exon_number))
+                reverse = False if gtf_line.strand == '+' else True
+                sorted(transcript_data[transcript_name], key=lambda x: int(x[2]), reverse=reverse)
             else:
                 pass
         try:
@@ -80,6 +90,17 @@ def get_transcript_data(gtf_fname):
         except StopIteration:
             break
     return transcript_data
+
+
+def get_exon_coverage(exon_coverage):
+    reader = csv.reader(open(exon_coverage, 'rb'), delimiter='\t')
+    exon_data = {}
+    for line in reader:
+        exon_match = re.search('exon_id "(\w+)\.*(\d*)"', line[8])
+        if exon_match:
+            exon_data[exon_match.group(1)] = float(line[9]) / float(line[11])
+    return exon_data
+
 
 
 def read_rsem_data(rsem_path):
@@ -100,11 +121,14 @@ def read_rsem_data(rsem_path):
 
 
 def main():
-    defuse_output = '/home/jacob/munge/defuse/results.tsv'
-    gtf_path = '/home/jacob/munge/defuse/gencode.v19.annotation.gtf'
-    rsem_path = '/home/jacob/munge/defuse/rsem.isoforms.results'
+    defuse_output = '/home/jacob/munge/defuse/data/results.tsv'
+    gtf_path = '/home/jacob/munge/defuse/data/gencode.v19.annotation.gtf'
+    rsem_path = '/home/jacob/munge/defuse/data/rsem.isoforms.results'
+    cov_path = '/home/jacob/munge/defuse/data/SRR1657557rnaAligned.sortedByCoord.out.bam.cov'
 
     rsem_data = read_rsem_data(rsem_path)
+
+    exon_data = get_exon_coverage(cov_path)
 
     transcripts = get_transcript_data(gtf_path)
     reader = csv.reader(open(defuse_output, 'rb'), delimiter='\t')
@@ -114,9 +138,18 @@ def main():
     defuse_features = ['gene1', 'gene2', 'genomic_break_pos1', 'genomic_break_pos2']
     for feature in defuse_features:
         print feature, line[defuse_header[feature]]
-    rsem_datum = rsem_data[line[defuse_header['gene1']]][0]
-    print transcripts[rsem_datum.transcript_name]
 
+    rsem_datum1 = rsem_data[line[defuse_header['gene1']]][0]
+    rsem_datum2 = rsem_data[line[defuse_header['gene2']]][0]
+
+    for exon, gtf, number in transcripts[rsem_datum1.transcript_name]:
+        print exon_data[exon], gtf.start, number
+
+    print '##############################', line[defuse_header['genomic_break_pos1']], \
+        line[defuse_header['genomic_break_pos2']]
+
+    for exon, gtf, number in transcripts[rsem_datum2.transcript_name]:
+        print exon_data[exon], gtf.start, number
 
 
 

@@ -239,10 +239,8 @@ def run_exon_filter(job, exon_cov, rsem_out, defuse_out, sample_options, tool_op
     fusion_reader = csv.reader(fusion_file, delimiter='\t')
 
     for line in fusion_reader:
-        output_file.write(line + '\n')
         job.fileStore.logToMaster(repr(line))
 
-    copy_files_to(output_path, tool_options['output_dir'])
 
 
 

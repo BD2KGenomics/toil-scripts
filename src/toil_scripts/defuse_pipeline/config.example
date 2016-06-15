@@ -1,25 +1,25 @@
 # defuse_index: File:///home/jacob/munge/defuse/defuse_input_gencode74_with_config.tgz
 
 defuse: 
- index_url: file:///home/jacob/munge/defuse/defuse_dummpy_reference
- output: file:///home/jacob/munge/defuse/results.tsv
+ index_url: file:///home/jacob/munge/defuse/data/defuse_dummpy_reference
+ output: file:///home/jacob/munge/defuse/data/results.tsv
 
 gencode:
- url: file:///home/jacob/munge/defuse/gencode.v19.annotation.gtf
+ url: file:///home/jacob/munge/defuse/data/gencode.v19.annotation.gtf
 
 bedtools:
- output: file:///home/jacob/munge/defuse/SRR1657557rnaAligned.sortedByCoord.out.bam.cov
+ output: file:///home/jacob/munge/defuse/data/SRR1657557rnaAligned.sortedByCoord.out.bam.cov
 
 star:
  type: star
  ncores: 4
- index_url: file:///home/jacob/munge/defuse/defuse_dummpy_reference
- rnaAligned.toTranscriptome.out.bam: file:///home/jacob/munge/defuse/SRR1657557rnaAligned.toTranscriptome.out.bam
- rnaAligned.sortedByCoord.out.bam: file:///home/jacob/munge/defuse/SRR1657557rnaAligned.sortedByCoord.out.bam
- rnaAligned.sortedByCoord.out.bam.bai: file:///home/jacob/munge/defuse/SRR1657557rnaAligned.sortedByCoord.out.bam.bai 
+ index_url: file:///home/jacob/munge/defuse/data/defuse_dummpy_reference
+ rnaAligned.toTranscriptome.out.bam: file:///home/jacob/munge/defuse/data/SRR1657557rnaAligned.toTranscriptome.out.bam
+ rnaAligned.sortedByCoord.out.bam: file:///home/jacob/munge/defuse/data/SRR1657557rnaAligned.sortedByCoord.out.bam
+ rnaAligned.sortedByCoord.out.bam.bai: file:///home/jacob/munge/defuse/data/SRR1657557rnaAligned.sortedByCoord.out.bam.bai 
 
 rsem:
- index_url: file:///home/jacob/munge/defuse/defuse_dummpy_reference
+ index_url: file:///home/jacob/munge/defuse/data/defuse_dummpy_reference
  ncores: 4
- output: file:///home/jacob/munge/defuse/rsem.isoforms.results 
+ output: file:///home/jacob/munge/defuse/data/rsem.isoforms.results 
  

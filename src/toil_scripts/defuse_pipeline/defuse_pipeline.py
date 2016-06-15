@@ -53,26 +53,24 @@ def parse_config(config_path):
 
 
 def get_shared_files(job, config, tool_options):
-    important_parameters = {'defuse': {'index_url': ('required', 'download', 'index'),
-                                       'output': ('optional', None, 'output')},
-                            'gencode': {'url': ('optional', 'download', 'gencode_gtf')},
-                            'bedtools': {'output': ('optional', None, 'output')},
-                            'star': {'type': ('optional', None, 'type'),
-                                     'ncores': ('optional', None, 'ncores'),
-                                     'index_url': ('optional', 'download', 'index'),
-                                     'rnaAligned.toTranscriptome.out.bam': ('optional', None,
-                                                                            'rnaAligned.toTranscriptome.out.bam'),
-                                     'rnaAligned.sortedByCoord.out.bam': ('optional', None,
-                                                                          'rnaAligned.sortedByCoord.out.bam'),
-                                     'rnaAligned.sortedByCoord.out.bam.bai': ('optional', None,
-                                                                              'rnaAligned.sortedByCoord.out.bam.bai')},
-                            'rsem': {'index_url': ('optional', 'download', 'index'),
-                                     'ncores': ('optional', None, 'ncores'),
-                                     'output': ('optional', None, 'output')}
-                            }
+    important_params = {
+        'defuse':   {'index_url': ('required', 'download', 'index', None),
+                     'output': ('optional', None, 'output', None)},
+                     'gencode': {'url': ('optional', 'download', 'gencode_gtf', None)},
+        'bedtools': {'output': ('optional', None, 'output', None)},
+        'star':     {'type': ('optional', None, 'type', None),
+                     'ncores': ('optional', None, 'ncores', None),
+                     'index_url': ('optional', 'download', 'index', None),
+                     'rnaAligned.toTranscriptome.out.bam': ('optional', None, 'rnaAligned.toTranscriptome.out.bam', None),
+                     'rnaAligned.sortedByCoord.out.bam': ('optional', None, 'rnaAligned.sortedByCoord.out.bam', None),
+                     'rnaAligned.sortedByCoord.out.bam.bai': ('optional', None, 'rnaAligned.sortedByCoord.out.bam.bai', None)},
+        'rsem':     {'index_url': ('optional', 'download', 'index', None),
+                     'ncores': ('optional', None, 'ncores', None),
+                     'output': ('optional', None, 'output', None)}
+                    }
 
-    for tool, parameters in important_parameters.iteritems():
-        for parameter, (status, action, name) in parameters.iteritems():
+    for tool, parameters in important_params.iteritems():
+        for parameter, (status, action, name, default) in parameters.iteritems():
             if tool not in tool_options:
                 tool_options[tool] = {}
             try:
@@ -90,6 +88,7 @@ def get_shared_files(job, config, tool_options):
                 elif status == 'optional':
                     msg = 'Depending on configuration, tool {} may require {}'.format(tool, parameter)
                     job.fileStore.logToMaster(msg)
+                    tool_options[tool][name] = default
     return tool_options
 
 
