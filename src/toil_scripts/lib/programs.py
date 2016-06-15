@@ -1,34 +1,9 @@
 import os
 import subprocess
 import logging
+from bd2k.util.exceptions import panic
 
 _log = logging.getLogger(__name__)
-
-# FIXME: replace with bd2k.util.processes.which
-def which(program):
-    """
-    Determines if a program exists
-
-    :param str program: Name of program to check
-    :return: Path to program or None
-    :rtype: str
-    """
-
-    def is_exe(f):
-        return os.path.isfile(f) and os.access(f, os.X_OK)
-
-    fpath, fname = os.path.split(program)
-    if fpath:
-        if is_exe(program):
-            return program
-    else:
-        for path in os.environ['PATH'].split(os.pathsep):
-            path = path.strip('"')
-            exe_file = os.path.join(path, program)
-            if is_exe(exe_file):
-                return exe_file
-
-    return None
 
 
 def mock_mode():
@@ -123,14 +98,29 @@ def docker_call(tool,
                 return subprocess.check_output(docker_call)
             else:
                 subprocess.check_call(docker_call)
-    finally:
-        # Fix root ownership of output files
-        base_docker_call.append('--entrypoint=chown')
-        stat = os.stat(work_dir)
-        command = base_docker_call + [tool] + ['-R', '{}:{}'.format(stat.st_uid, stat.st_gid), '/data']
-        subprocess.check_call(command)
+    # Fix root ownership of output files
+    except:
+        # Panic avoids hiding the exception raised in the try block
+        with panic():
+            _fix_permissions(base_docker_call, tool, work_dir)
+    else:
+        _fix_permissions(base_docker_call, tool, work_dir)
 
     for filename in outputs.keys():
         if not os.path.isabs(filename):
             filename = os.path.join(work_dir, filename)
         assert(os.path.isfile(filename))
+
+
+def _fix_permissions(base_docker_call, tool, work_dir):
+    """
+    Fix permission of a mounted Docker directory by reusing the tool
+
+    :param list base_docker_call: Docker run parameters
+    :param str tool: Name of tool
+    :param str work_dir: Path of work directory to recursively chown
+    """
+    base_docker_call.append('--entrypoint=chown')
+    stat = os.stat(work_dir)
+    command = base_docker_call + [tool] + ['-R', '{}:{}'.format(stat.st_uid, stat.st_gid), '/data']
+    subprocess.check_call(command)

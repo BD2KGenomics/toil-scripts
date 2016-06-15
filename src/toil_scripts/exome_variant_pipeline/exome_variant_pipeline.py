@@ -14,10 +14,12 @@ import yaml
 from toil.job import Job
 
 from toil_scripts.lib import require
-from toil_scripts.lib.files import tarball_files, mkdir_p, move_files
+from toil_scripts.lib.files import tarball_files, move_files
 from toil_scripts.lib.jobs import map_job
-from toil_scripts.lib.programs import which, docker_call
+from toil_scripts.lib.programs import docker_call
 from toil_scripts.lib.urls import download_url_job, s3am_upload
+from bd2k.util.processes import which
+from bd2k.util.files import mkdir_p
 
 
 # Start of Job Functions
@@ -800,7 +802,7 @@ def main():
                     'Missing inputs for MuSe, check config file.')
         # Program checks
         for program in ['curl', 'docker']:
-            require(which(program), program + ' must be installed on every node.'.format(program))
+            require(next(which(program), None), program + ' must be installed on every node.'.format(program))
 
         # Launch Pipeline
         Job.Runner.startToil(Job.wrapJobFn(download_shared_files, samples, config), args)
