@@ -86,7 +86,7 @@ class MasterAddress(str):
         return docker_parameters
 
 
-def call_conductor(masterIP, inputs, src, dst):
+def call_conductor(master_ip, inputs, src, dst):
     """
     Invokes the Conductor container to copy files between S3 and HDFS
 
@@ -103,41 +103,41 @@ def call_conductor(masterIP, inputs, src, dst):
                 mock=False)
 
 
-def call_adam(masterIP, inputs, arguments):
+def call_adam(master_ip, inputs, arguments):
     """
     Invokes the ADAM container
 
     :type masterIP: MasterAddress
     """
     default_params = ["--master",
-                      ("spark://%s:%s" % (masterIP, SPARK_MASTER_PORT)),
+                      ("spark://%s:%s" % (master_ip, SPARK_MASTER_PORT)),
                       "--conf", ("spark.driver.memory=%sg" % inputs.memory),
                       "--conf", ("spark.executor.memory=%sg" % inputs.memory),
-                      "--conf", ("spark.hadoop.fs.default.name=hdfs://%s:%s" % (masterIP, HDFS_MASTER_PORT)),
+                      "--conf", ("spark.hadoop.fs.default.name=hdfs://%s:%s" % (master_ip, HDFS_MASTER_PORT)),
                       "--conf", "spark.driver.maxResultSize=0",
                       # set max result size to unlimited, see #177
                       "--"]
     docker_call(rm = False,
                 tool = "quay.io/ucsc_cgl/adam:962-ehf--6e7085f8cac4b9a927dc9fb06b48007957256b80",
-                docker_parameters = masterIP.docker_parameters(["--net=host"]),
+                docker_parameters = master_ip.docker_parameters(["--net=host"]),
                 parameters = default_params + arguments,
                 mock=False)
 
 
-def remove_file(masterIP, filename, sparkOnToil):
+def remove_file(master_ip, filename, spark_on_toil):
     """
     Remove the given file from hdfs with master at the given IP address
 
     :type masterIP: MasterAddress
     """
-    masterIP = masterIP.actual
+    master_ip = master_ip.actual
 
-    ssh_call = ['ssh', '-o', 'StrictHostKeyChecking=no', masterIP]
+    ssh_call = ['ssh', '-o', 'StrictHostKeyChecking=no', master_ip]
 
-    if sparkOnToil:
+    if spark_on_toil:
         output = check_output(ssh_call + ['docker', 'ps'])
-        containerID = next(line.split()[0] for line in output.splitlines() if 'apache-hadoop-master' in line)
-        ssh_call += ['docker', 'exec', containerID]
+        container_id = next(line.split()[0] for line in output.splitlines() if 'apache-hadoop-master' in line)
+        ssh_call += ['docker', 'exec', container_id]
 
     try:
         check_call(ssh_call + ['hdfs', 'dfs', '-rm', '-r', '/' + filename])
@@ -145,20 +145,20 @@ def remove_file(masterIP, filename, sparkOnToil):
         pass
 
 
-def truncate_file(masterIP, filename, sparkOnToil):
+def truncate_file(master_ip, filename, spark_on_toil):
     """
     Truncate the given hdfs file to 10 bytes with master at the given IP address
 
     :type masterIP: MasterAddress
     """
-    masterIP = masterIP.actual
+    master_ip = master_ip.actual
 
-    ssh_call = ['ssh', '-o', 'StrictHostKeyChecking=no', masterIP]
+    ssh_call = ['ssh', '-o', 'StrictHostKeyChecking=no', master_ip]
 
-    if sparkOnToil:
+    if spark_on_toil:
         output = check_output(ssh_call + ['docker', 'ps'])
-        containerID = next(line.split()[0] for line in output.splitlines() if 'apache-hadoop-master' in line)
-        ssh_call += ['docker', 'exec', containerID]
+        container_id = next(line.split()[0] for line in output.splitlines() if 'apache-hadoop-master' in line)
+        ssh_call += ['docker', 'exec', container_id]
 
     try:
         check_call(ssh_call + ['hdfs', 'dfs', '-truncate', '-w', '10', '/' + filename])
@@ -166,139 +166,139 @@ def truncate_file(masterIP, filename, sparkOnToil):
         pass
 
 
-def download_data(masterIP, inputs, knownSNPs, bam, hdfsSNPs, hdfsBAM):
+def download_data(master_ip, inputs, known_snps, bam, hdfs_snps, hdfs_bam):
     """
     Downloads input data files from S3.
 
     :type masterIP: MasterAddress
     """
 
-    log.info("Downloading known sites file %s to %s.", knownSNPs, hdfsSNPs)
-    call_conductor(masterIP, inputs, knownSNPs, hdfsSNPs)
+    log.info("Downloading known sites file %s to %s.", known_snps, hdfs_snps)
+    call_conductor(master_ip, inputs, known_snps, hdfs_snps)
 
-    log.info("Downloading input BAM %s to %s.", bam, hdfsBAM)
-    call_conductor(masterIP, inputs, bam, hdfsBAM)
+    log.info("Downloading input BAM %s to %s.", bam, hdfs_bam)
+    call_conductor(master_ip, inputs, bam, hdfs_bam)
 
 
-def adam_convert(masterIP, inputs, inFile, inSnps, adamFile, adamSnps, sparkOnToil):
+def adam_convert(master_ip, inputs, in_file, in_snps, adam_file, adam_snps, spark_on_toil):
     """
     Convert input sam/bam file and known SNPs file into ADAM format
     """
 
     log.info("Converting input BAM to ADAM.")
-    call_adam(masterIP, inputs, ["transform", inFile, adamFile])
+    call_adam(master_ip, inputs, ["transform", in_file, adam_file])
 
-    inFileName = inFile.split("/")[-1]
-    remove_file(masterIP, inFileName, sparkOnToil)
+    in_file_name = in_file.split("/")[-1]
+    remove_file(master_ip, in_file_name, spark_on_toil)
 
     log.info("Converting known sites VCF to ADAM.")
 
-    call_adam(masterIP, inputs, ["vcf2adam", "-only_variants", inSnps, adamSnps])
+    call_adam(master_ip, inputs, ["vcf2adam", "-only_variants", in_snps, adam_snps])
 
-    inSnpsName = inSnps.split("/")[-1]
-    remove_file(masterIP, inSnpsName, sparkOnToil)
+    in_snps_name = in_snps.split("/")[-1]
+    remove_file(master_ip, in_snps_name, spark_on_toil)
 
 
-def adam_transform(masterIP, inputs, inFile, snpFile, hdfsDir, outFile, sparkOnToil):
+def adam_transform(master_ip, inputs, in_file, snp_file, hdfs_dir, out_file, spark_on_toil):
     """
-    Preprocess inFile with known SNPs snpFile:
+    Preprocess in_file with known SNPs snp_file:
         - mark duplicates
         - realign indels
         - recalibrate base quality scores
     """
 
     log.info("Marking duplicate reads.")
-    call_adam(masterIP,
+    call_adam(master_ip,
               inputs,
               ["transform",
-               inFile,  hdfsDir + "/mkdups.adam",
+               in_file,  hdfs_dir + "/mkdups.adam",
                "-aligned_read_predicate",
                "-limit_projection",
                "-mark_duplicate_reads"])
 
     #FIXME
-    inFileName = inFile.split("/")[-1]
-    remove_file(masterIP, inFileName + "*", sparkOnToil)
+    in_file_name = in_file.split("/")[-1]
+    remove_file(master_ip, in_file_name + "*", spark_on_toil)
 
     log.info("Realigning INDELs.")
-    call_adam(masterIP,
+    call_adam(master_ip,
               inputs,
               ["transform",
-               hdfsDir + "/mkdups.adam",
-               hdfsDir + "/ri.adam",
+               hdfs_dir + "/mkdups.adam",
+               hdfs_dir + "/ri.adam",
                "-realign_indels"])
 
-    remove_file(masterIP, hdfsDir + "/mkdups.adam*", sparkOnToil)
+    remove_file(master_ip, hdfs_dir + "/mkdups.adam*", spark_on_toil)
 
     log.info("Recalibrating base quality scores.")
-    call_adam(masterIP,
+    call_adam(master_ip,
               inputs,
               ["transform",
-               hdfsDir + "/ri.adam",
-               hdfsDir + "/bqsr.adam",
+               hdfs_dir + "/ri.adam",
+               hdfs_dir + "/bqsr.adam",
                "-recalibrate_base_qualities",
-               "-known_snps", snpFile])
+               "-known_snps", snp_file])
 
-    remove_file(masterIP, "ri.adam*", sparkOnToil)
+    remove_file(master_ip, "ri.adam*", spark_on_toil)
 
     log.info("Sorting reads and saving a single BAM file.")
-    call_adam(masterIP,
+    call_adam(master_ip,
               inputs,
               ["transform",
-               hdfsDir + "/bqsr.adam",
-               outFile,
+               hdfs_dir + "/bqsr.adam",
+               out_file,
                "-sort_reads", "-single"])
 
-    remove_file(masterIP, "bqsr.adam*", sparkOnToil)
+    remove_file(master_ip, "bqsr.adam*", spark_on_toil)
 
-    return outFile
+    return out_file
 
 
-def upload_data(masterIP, inputs, hdfsName, uploadName, sparkOnToil):
+def upload_data(master_ip, inputs, hdfs_name, upload_name, spark_on_toil):
     """
     Upload file hdfsName from hdfs to s3
     """
 
     if mock_mode():
-        truncate_file(masterIP, hdfsName, sparkOnToil)
+        truncate_file(master_ip, hdfs_name, spark_on_toil)
 
-    log.info("Uploading output BAM %s to %s.", hdfsName, uploadName)
-    call_conductor(masterIP, inputs, hdfsName, uploadName)
+    log.info("Uploading output BAM %s to %s.", hdfs_name, upload_name)
+    call_conductor(master_ip, inputs, hdfs_name, upload_name)
 
 
-def download_run_and_upload(job, masterIP, inputs, sparkOnToil):
+def download_run_and_upload(job, master_ip, inputs, spark_on_toil):
     """
     Monolithic job that calls data download, conversion, transform, upload.
     Previously, this was not monolithic; change came in due to #126/#134.
     """
-    masterIP = MasterAddress(masterIP)
+    master_ip = MasterAddress(master_ip)
 
-    bamName = inputs.sample.split('://')[-1].split('/')[-1]
-    sampleName = ".".join(os.path.splitext(bamName)[:-1])
-    hdfsSubdir = sampleName + "-dir"
-    hdfsDir = "hdfs://{0}:{1}/{2}".format(masterIP, HDFS_MASTER_PORT, hdfsSubdir)
+    bam_name = inputs.sample.split('://')[-1].split('/')[-1]
+    sample_name = ".".join(os.path.splitext(bam_name)[:-1])
+    hdfs_subdir = sample_name + "-dir"
+    hdfs_dir = "hdfs://{0}:{1}/{2}".format(master_ip, HDFS_MASTER_PORT, hdfs_subdir)
 
     try:
-        hdfsPrefix = hdfsDir + "/" + sampleName
-        hdfsBAM = hdfsDir + "/" + bamName
+        hdfs_prefix = hdfs_dir + "/" + sample_name
+        hdfs_bam = hdfs_dir + "/" + bam_name
 
         hdfs_snps = hdfs_dir + "/" + inputs.dbsnp.split('://')[-1].split('/')[-1]
 
-        download_data(masterIP, inputs, inputs.dbsnp, inputs.sample, hdfsSNPs, hdfsBAM)
+        download_data(master_ip, inputs, inputs.dbsnp, inputs.sample, hdfs_snps, hdfs_bam)
 
-        adamInput = hdfsPrefix + ".adam"
-        adamSNPs = hdfsDir + "/snps.var.adam"
-        adam_convert(masterIP, inputs, hdfsBAM, hdfsSNPs, adamInput, adamSNPs, sparkOnToil)
+        adam_input = hdfs_prefix + ".adam"
+        adam_snps = hdfs_dir + "/snps.var.adam"
+        adam_convert(master_ip, inputs, hdfs_bam, hdfs_snps, adam_input, adam_snps, spark_on_toil)
 
-        adamOutput = hdfsPrefix + ".processed.adam"
-        adam_transform(masterIP, inputs, adamInput, adamSNPs, hdfsDir, adamOutput, sparkOnToil)
+        adam_output = hdfs_prefix + ".processed.adam"
+        adam_transform(master_ip, inputs, adam_input, adam_snps, hdfs_dir, adam_output, spark_on_toil)
 
-        outFile = inputs.output_dir + "/" + sampleName + inputs.suffix + ".bam"
+        out_file = inputs.output_dir + "/" + sample_name + inputs.suffix + ".bam"
 
-        upload_data(masterIP, inputs, adamOutput, outFile, sparkOnToil)
+        upload_data(master_ip, inputs, adam_output, out_file, spark_on_toil)
 
     except:
-        remove_file(masterIP, hdfsSubdir, sparkOnToil)
+        remove_file(master_ip, hdfs_subdir, spark_on_toil)
         raise
 
 
@@ -313,33 +313,33 @@ def static_adam_preprocessing_dag(job, inputs, sample, output_dir, suffix=''):
     if inputs.master_ip:
         if inputs.master_ip == 'auto':
             # Static, standalone Spark cluster managed by uberscript
-            sparkOnToil = False
-            scaleUp = job.wrapJobFn(scale_external_spark_cluster, 1)
-            job.addChild(scaleUp)
-            sparkWork = job.wrapJobFn(download_run_and_upload,
-                                      inputs.master_ip, inputs, sparkOnToil)
-            scaleUp.addChild(sparkWork)
-            scaleDown = job.wrapJobFn(scale_external_spark_cluster, -1)
-            sparkWork.addChild(scaleDown)
+            spark_on_toil = False
+            scale_up = job.wrapJobFn(scale_external_spark_cluster, 1)
+            job.addChild(scale_up)
+            spark_work = job.wrapJobFn(download_run_and_upload,
+                                       inputs.master_ip, inputs, spark_on_toil)
+            scale_up.addChild(spark_work)
+            scale_down = job.wrapJobFn(scale_external_spark_cluster, -1)
+            spark_work.addChild(scale_down)
         else:
             # Static, external Spark cluster
-            sparkOnToil = False
-            sparkWork = job.wrapJobFn(download_run_and_upload,
-                                      inputs.master_ip, inputs, sparkOnToil)
-            job.addChild(sparkWork)
+            spark_on_toil = False
+            spark_work = job.wrapJobFn(download_run_and_upload,
+                                       inputs.master_ip, inputs, spark_on_toil)
+            job.addChild(spark_work)
     else:
         # Dynamic subclusters, i.e. Spark-on-Toil
-        sparkOnToil = True
+        spark_on_toil = True
         cores = multiprocessing.cpu_count()
-        startCluster = job.wrapJobFn(start_spark_hdfs_cluster,
-                                     inputs.num_nodes-1,
-                                     inputs.memory,
-                                     download_run_and_upload,
-                                     jArgs=(inputs, sparkOnToil),
-                                     jCores=cores,
-                                     jMemory="%s G" %
-                                             inputs.memory).encapsulate()
-        job.addChild(startCluster)
+        start_cluster = job.wrapJobFn(start_spark_hdfs_cluster,
+                                      inputs.num_nodes-1,
+                                      inputs.memory,
+                                      download_run_and_upload,
+                                      jArgs=(inputs, spark_on_toil),
+                                      jCores=cores,
+                                      jMemory="%s G" %
+                                              inputs.memory).encapsulate()
+        job.addChild(start_cluster)
 
 
 def scale_external_spark_cluster(num_samples=1):
