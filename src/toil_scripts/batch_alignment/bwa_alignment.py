@@ -25,8 +25,10 @@ import argparse
 import multiprocessing
 import os
 
+import sys
 from toil.job import Job
 
+from toil_scripts.lib import require
 from toil_scripts.lib.files import move_files
 from toil_scripts.lib.jobs import map_job
 from toil_scripts.lib.programs import docker_call
@@ -68,12 +70,13 @@ def parse_config(job, shared_ids, inputs):
         for line in f_in:
             if line.strip():
                 line = line.strip().split(',')
-                assert len(line) == 3, 'Improper formatting. Expected UUID,URl1,URL2. Received: {}'.format(line)
+                require(len(line) == 3, 'Improper formatting. Expected UUID,URl1,URL2. Received: {}'.format(line))
                 uuid = line[0]
                 urls = line[1:]
                 mock_bam = '.'.join(line[1].split('.')[:-2])[:-2] + ".bam"
                 samples.append((uuid, urls, mock_bam))
-    inputs.cores = multiprocessing.cpu_count()
+    inputs.maxCores = int(inputs.maxCores) if inputs.maxCores else sys.maxint
+    inputs.cores = min(inputs.maxCores, multiprocessing.cpu_count())
     job.fileStore.logToMaster('Parsed configuration file.')
     job.addChildJobFn(map_job, download_sample, samples, inputs, shared_ids, cores=1, disk=inputs.file_size)
 

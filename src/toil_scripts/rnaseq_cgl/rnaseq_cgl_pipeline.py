@@ -2,27 +2,28 @@
 from __future__ import print_function
 
 import argparse
-import glob
-import logging
 import multiprocessing
 import os
-import shutil
 import subprocess
 import sys
 import tarfile
 import textwrap
-import yaml
 from contextlib import closing
 from subprocess import PIPE
 
+import yaml
 from toil.job import Job
 
-from toil_scripts.lib import flatten, require, UserError
+from toil_scripts.lib import require, UserError
 from toil_scripts.lib.files import mkdir_p
-from toil_scripts.lib.files import tarball_files, move_files
+from toil_scripts.lib.files import move_files
 from toil_scripts.lib.jobs import map_job
-from toil_scripts.lib.programs import docker_call, which
-from toil_scripts.lib.urls import download_url_job, s3am_upload, s3am_upload_job, download_url
+from toil_scripts.lib.programs import which
+from toil_scripts.lib.urls import download_url_job, s3am_upload
+from toil_scripts.tools.aligners import run_star
+from toil_scripts.tools.preprocessing import cutadapt
+from toil_scripts.tools.quantifiers import run_kallisto, run_rsem, run_rsem_postprocess
+from toil_scripts.tools.QC import run_fastqc
 
 
 # Start of pipeline
@@ -38,9 +39,9 @@ def download_sample(job, sample, config):
     config = argparse.Namespace(**vars(config))
     config.file_type, config.paired, config.uuid, config.url = sample
     config.paired = True if config.paired == 'paired' else False
-    config.single = True if config.paired == 'single' else False
     config.cores = min(config.maxCores, multiprocessing.cpu_count())
-    job.fileStore.logToMaster('Downloading sample: {}'.format(config.uuid))
+    job.fileStore.logToMaster('UUID: {}\nURL: {}\nPaired: {}\nFile Type: {}\nCores: {}\nCIMode: {}'.format(
+        config.uuid, config.url, config.paired, config.file_type, config.cores, config.ci_test))
     # Download or locate local file and place in the jobStore
     tar_id, r1_id, r2_id = None, None, None
     if config.file_type == 'tar':
@@ -48,7 +49,7 @@ def download_sample(job, sample, config):
                                    s3_key_path=config.ssec, disk='20G').rv()
     else:
         if config.paired:
-            require(len(config.url.split(',')==2), 'Fastq pairs must have 2 URLS separated by comma')
+            require(len(config.url.split(',')) == 2, 'Fastq pairs must have 2 URLS separated by comma')
             r1_url, r2_url = config.url.split(',')
             r1_id = job.addChildJobFn(download_url_job, r1_url, cghub_key_path=config.gtkey,
                                       s3_key_path=config.ssec, disk='20G').rv()
@@ -57,29 +58,104 @@ def download_sample(job, sample, config):
         else:
             r1_id = job.addChildJobFn(download_url_job, config.url, cghub_key_path=config.gtkey,
                                       s3_key_path=config.ssec, disk='20G').rv()
-    job.addFollowOnJobFn(static_workflow_declaration, config, tar_id, r1_id, r2_id)
+    job.addFollowOnJobFn(preprocessing_declaration, config, tar_id, r1_id, r2_id)
 
 
-def static_workflow_declaration(job, config, tar_id, r1_id, r2_id):
+def preprocessing_declaration(job, config, tar_id, r1_id, r2_id):
     """
-    Statically define remainder of pipeline
+    Define preprocessing steps
 
     :param JobFunctionWrappingJob job: passed automatically by Toil
     :param Namespace config: Argparse Namespace object containing argument inputs
-    :param str tar_id: FileStoreID of sample tar
-    :param str r1_id: FileStoreID of sample read 1
-    :param str r2_id: FileStoreID of sample read 2
+    :param str tar_id: FileStoreID of sample tar (or None)
+    :param str r1_id: FileStoreID of sample read 1 (or None)
+    :param str r2_id: FileStoreID of sample read 2 (or None)
     """
-    job.fileStore.logToMaster('Defining static DAG')
     disk = '2G' if config.ci_test else '100G'
     if tar_id:
-        a = job.wrapJobFn(process_sample_tar, config, tar_id, disk=disk).encapsulate()
+        job.fileStore.logToMaster('Processing sample tar and queueing CutAdapt for: ' + config.uuid)
+        preprocessing_output = job.addChildJobFn(process_sample_tar, config, tar_id, disk=disk).rv()
     else:
-        a = job.wrapJobFn(cutadapt, config, r1_id, r2_id, disk=disk).encapsulate()
-    b = job.wrapJobFn(consolidate_output, config, a.rv(), disk='2G')
-    # Take advantage of "encapsulate" to simplify pipeline wiring
-    job.addChild(a)
-    a.addChild(b)
+        if config.cutadapt:
+            job.fileStore.logToMaster('Queueing CutAdapt for: ' + config.uuid)
+            preprocessing_output = job.addChildJobFn(cutadapt, config, r1_id, r2_id, disk=disk).rv()
+        else:
+            preprocessing_output = (r1_id, r2_id)
+    job.addFollowOnJobFn(pipeline_declaration, config, preprocessing_output)
+
+
+# FIXME: Replace hardcoded disk requirments with promised requirement once available
+def pipeline_declaration(job, config, preprocessing_output):
+    """
+    Define pipeline edges that use the fastq files
+
+    :param JobFunctionWrappingJob job: passed automatically by Toil
+    :param Namespace config: Argparse Namespace object containing argument inputs
+    :param tuple(str, str, bool) preprocessing_output: R1 FileStoreID, R2 FileStoreID, Improper Pairing (True/False)
+    """
+    r1_id, r2_id = preprocessing_output
+    kallisto_output, rsem_output, fastqc_output = None, None, None
+    disk = '2G' if config.ci_test else '40G'
+    if config.fastqc:
+        job.fileStore.logToMaster('Queueing FastQC job for: ')
+        fastqc_output = job.addChildJobFn(run_fastqc, r1_id, r2_id, cores=2, disk=disk).rv()
+    if config.kallisto_index:
+        job.fileStore.logToMaster('Queueing Kallisto job for: ' + config.uuid)
+        kallisto_output = job.addChildJobFn(run_kallisto, config.cores, r1_id, r2_id, config.kallisto_index,
+                                            cores=config.cores, disk=disk).rv()
+    if config.star_index and config.rsem_ref:
+        job.fileStore.logToMaster('Queueing STAR alignment for: ' + config.uuid)
+        rsem_output = job.addChildJobFn(star_alignment, config, r1_id, r2_id).rv()
+    job.addFollowOnJobFn(consolidate_output, config, kallisto_output, rsem_output, fastqc_output)
+
+
+def star_alignment(job, config, r1_id, r2_id):
+    """
+    Logic for running STAR
+
+    :param JobFunctionWrappingJob job: passed automatically by Toil
+    :param Namespace config: Argparse Namespace object containing argument inputs
+    :param str r1_id: FileStoreID of sample read 1 (or None)
+    :param str r2_id: FileStoreID of sample read 2 (or None)
+    :return: FileStoreID results from RSEM
+    :rtype: str
+    """
+    job.fileStore.logToMaster('Queueing RSEM job for: ' + config.uuid)
+    mem = '2G' if config.ci_test else '40G'
+    star = job.addChildJobFn(run_star, config.cores, r1_id, r2_id, star_index_url=config.star_index,
+                             cores=config.cores, memory=mem).rv()
+    return job.addFollowOnJobFn(rsem_quantification, config, star).rv()
+
+
+def rsem_quantification(job, config, star_output):
+    """
+    Unpack STAR results and run RSEM (and saving BAM from STAR)
+
+    :param JobFunctionWrappingJob job: passed automatically by Toil
+    :param Namespace config: Argparse Namespace object containing argument inputs
+    :param tuple(str, str) star_output: FileStoreIDs from STARs output
+    :return: FileStoreID results from RSEM postprocess
+    :rtype: str
+    """
+    cores = min(16, config.cores)
+    disk = '2G' if config.ci_test else '40G'
+    transcriptome_id, sorted_id = star_output
+    # Save sorted bam if flag is selected
+    if config.save_bam:
+        work_dir = job.fileStore.getLocalTempDir()
+        bam_path = os.path.join(work_dir, '{}.sorted.bam'.format(config.uuid))
+        sorted_bam = job.fileStore.readGlobalFile(sorted_id, bam_path)
+        if config.s3_output_dir and config.ssec:
+            s3am_upload(fpath=sorted_bam, s3_dir=config.s3_output_dir, s3_key_path=config.ssec)
+        if config.output_dir:
+            move_files(file_paths=[sorted_bam], output_dir=config.output_dir)
+    # Declare RSEM and RSEM post-process jobs
+    rsem_output = job.wrapJobFn(run_rsem, config.cores, transcriptome_id, config.rsem_ref, paired=config.paired,
+                                cores=cores, disk=disk)
+    rsem_postprocess = job.wrapJobFn(run_rsem_postprocess, config.uuid, rsem_output.rv(0), rsem_output.rv(1))
+    job.addChild(rsem_output)
+    rsem_output.addChild(rsem_postprocess)
+    return rsem_postprocess.rv()
 
 
 def process_sample_tar(job, config, tar_id):
@@ -121,7 +197,7 @@ def process_sample_tar(job, config, tar_id):
         p2.wait()
         r1_id = job.fileStore.writeGlobalFile(os.path.join(work_dir, 'R1.fastq'))
         r2_id = job.fileStore.writeGlobalFile(os.path.join(work_dir, 'R2.fastq'))
-    elif config.single:
+    else:
         command = 'zcat' if fastqs[0].endswith('.gz') else 'cat'
         with open(os.path.join(work_dir, 'R1.fastq'), 'w') as f:
             subprocess.check_call([command] + fastqs, stdout=f)
@@ -129,325 +205,36 @@ def process_sample_tar(job, config, tar_id):
     job.fileStore.deleteGlobalFile(tar_id)
     # Start cutadapt step
     disk = '2G' if config.ci_test else '125G'
-    return job.addChildJobFn(cutadapt, config, r1_id, r2_id, disk=disk).rv()
-
-
-def cutadapt(job, config, r1_id, r2_id):
-    """
-    Adapter triming for RNA-seq data
-
-    :param JobFunctionWrappingJob job: passed automatically by Toil
-    :param Namespace config: Argparse Namespace object containing argument inputs
-    :param str r1_id: FileStoreID of fastq read 1
-    :param str r2_id: FileStoreID of fastq read 2
-    :return: FileStoreIDs and sample information
-    :rtype: tuple
-    """
-    job.fileStore.logToMaster('CutAdapt: {}'.format(config.uuid))
-    work_dir = job.fileStore.getLocalTempDir()
-    config.improper_pair = None
-    # Retrieve files
-    parameters = ['-a', config.fwd_3pr_adapter,
-                  '-m', '35']
-    if config.single:
-        job.fileStore.readGlobalFile(r1_id, os.path.join(work_dir, 'R1.fastq'))
-        parameters.extend(['-o', '/data/R1_cutadapt.fastq', '/data/R1.fastq'])
+    if config.cutadapt:
+        return job.addChildJobFn(cutadapt, r1_id, r2_id, config.fwd_3pr_adapter, config.rev_3pr_adapter, disk=disk).rv()
     else:
-        job.fileStore.readGlobalFile(r1_id, os.path.join(work_dir, 'R1.fastq'))
-        job.fileStore.readGlobalFile(r2_id, os.path.join(work_dir, 'R2.fastq'))
-        parameters.extend(['-A', config.rev_3pr_adapter,
-                           '-o', '/data/R1_cutadapt.fastq',
-                           '-p', '/data/R2_cutadapt.fastq',
-                           '/data/R1.fastq', '/data/R2.fastq'])
-    # Call: CutAdapt
-    base_docker_call = 'docker run --log-driver=none --rm -v {}:/data'.format(work_dir).split()
-    tool = 'quay.io/ucsc_cgl/cutadapt:1.9--6bd44edd2b8f8f17e25c5a268fedaab65fa851d2'
-    p = subprocess.Popen(base_docker_call + [tool] + parameters, stderr=PIPE, stdout=PIPE)
-    stdout, stderr = p.communicate()
-    if p.returncode != 0:
-        if 'improperly paired' in stderr:
-            config.improper_pair = True
-            if config.paired == 'single':
-                shutil.move(os.path.join(work_dir, 'R1.fastq'), os.path.join(work_dir, 'R1_cutadapt.fastq'))
-            else:
-                shutil.move(os.path.join(work_dir, 'R1.fastq'), os.path.join(work_dir, 'R1_cutadapt.fastq'))
-                shutil.move(os.path.join(work_dir, 'R2.fastq'), os.path.join(work_dir, 'R2_cutadapt.fastq'))
-        else:
-            logging.error('Stdout: {}\n\nStderr: {}'.format(stdout, stderr))
-            raise subprocess.CalledProcessError(p.returncode, parameters, stderr)
-    # Write to fileStore
-    if config.single:
-        r1_cut_id = job.fileStore.writeGlobalFile(os.path.join(work_dir, 'R1_cutadapt.fastq'))
-        r2_cut_id = None
-    else:
-        r1_cut_id = job.fileStore.writeGlobalFile(os.path.join(work_dir, 'R1_cutadapt.fastq'))
-        r2_cut_id = job.fileStore.writeGlobalFile(os.path.join(work_dir, 'R2_cutadapt.fastq'))
-    # start STAR and Kallisto steps
-    disk = '2G' if config.ci_test else '100G'
-    memory = '6G' if config.ci_test else '40G'
-    # Based on inputs, run Kallisto and/or STAR/RSEM
-    rsem_output, kallisto_output = None, None
-    if config.rsem_ref:
-        rsem_output = job.addChildJobFn(star, config, r1_cut_id, r2_cut_id,
-                                        cores=config.cores, disk=disk, memory=memory).rv()
-    if config.kallisto_index:
-        cores = min(config.cores, 16)
-        kallisto_output = job.addChildJobFn(kallisto, config, r1_cut_id, r2_cut_id, cores=cores, disk=disk).rv()
-    fastqc_output = job.addChildJobFn(fastqc, config, r1_cut_id, r2_cut_id).rv()
-    return rsem_output, kallisto_output, fastqc_output, config.single, config.improper_pair
+        return r1_id, r2_id
 
 
-def fastqc(job, config, r1_id, r2_id):
-    """
-    Run Fastqc on the input reads
-
-    :param JobFunctionWrappingJob job: passed automatically by Toil
-    :param Namespace config: Argparse Namespace object containing argument inputs
-    :param str r1_id: FileStoreID of fastq read 1
-    :param str r2_id: FileStoreID of fastq read 2
-    :return: FileStoreID of fastQC output (tarball)
-    :rtype: str
-    """
-    job.fileStore.logToMaster('FastQC: {}'.format(config.uuid))
-    work_dir = job.fileStore.getLocalTempDir()
-    job.fileStore.readGlobalFile(r1_id, os.path.join(work_dir, 'R1.fastq'))
-    parameters = ['/data/R1.fastq']
-    output_names = ['R1_fastqc.html']
-    if r2_id:
-        job.fileStore.readGlobalFile(r2_id, os.path.join(work_dir, 'R2.fastq'))
-        parameters.extend(['-t', '2', '/data/R2.fastq'])
-        output_names.append('R2_fastqc.html')
-    docker_call(tool='quay.io/ucsc_cgl/fastqc:0.11.5--be13567d00cd4c586edf8ae47d991815c8c72a49',
-                work_dir=work_dir, parameters=parameters)
-    output_files = [os.path.join(work_dir, x) for x in output_names]
-    tarball_files(tar_name='fastqc.tar.gz', file_paths=output_files, output_dir=work_dir)
-    return job.fileStore.writeGlobalFile(os.path.join(work_dir, 'fastqc.tar.gz'))
-
-
-def kallisto(job, config, r1_cut_id, r2_cut_id):
-    """
-    RNA quantification via Kallisto
-
-    :param JobFunctionWrappingJob job: passed automatically by Toil
-    :param Namespace config: Argparse Namespace object containing argument inputs
-    :param str r1_cut_id: FileStoreID of fastq (pair 1)
-    :param str r2_cut_id: FileStoreID of fastq (pair 2)
-    :return: FileStoreID from Kallisto
-    :rtype: str
-    """
-    job.fileStore.logToMaster('Kallisto: {}'.format(config.uuid))
-    work_dir = job.fileStore.getLocalTempDir()
-    download_url(url=config.kallisto_index, name='kallisto_hg38.idx', work_dir=work_dir)
-    # Retrieve files
-    parameters = ['quant',
-                  '-i', '/data/kallisto_hg38.idx',
-                  '-t', str(config.cores),
-                  '-o', '/data/',
-                  '-b', '100']
-    if config.single:
-        job.fileStore.readGlobalFile(r1_cut_id, os.path.join(work_dir, 'R1_cutadapt.fastq'))
-        parameters.extend(['--single', '-l', '200', '-s', '15', '/data/R1_cutadapt.fastq'])
-    else:
-        job.fileStore.readGlobalFile(r1_cut_id, os.path.join(work_dir, 'R1_cutadapt.fastq'))
-        job.fileStore.readGlobalFile(r2_cut_id, os.path.join(work_dir, 'R2_cutadapt.fastq'))
-        parameters.extend(['/data/R1_cutadapt.fastq', '/data/R2_cutadapt.fastq'])
-    # Call: Kallisto
-    docker_call(tool='quay.io/ucsc_cgl/kallisto:0.42.4--35ac87df5b21a8e8e8d159f26864ac1e1db8cf86',
-                work_dir=work_dir, parameters=parameters)
-    # Tar output files together and store in fileStore
-    output_files = [os.path.join(work_dir, x) for x in ['run_info.json', 'abundance.tsv', 'abundance.h5']]
-    tarball_files(tar_name='kallisto.tar.gz', file_paths=output_files, output_dir=work_dir)
-    return job.fileStore.writeGlobalFile(os.path.join(work_dir, 'kallisto.tar.gz'))
-
-
-def star(job, config, r1_cut_id, r2_cut_id):
-    """
-    Performs alignment of fastqs to bam via STAR
-
-    :param JobFunctionWrappingJob job: passed automatically by Toil
-    :param Namespace config: Argparse Namespace object containing argument inputs
-    :param str r1_cut_id: FileStoreID of fastq (pair 1)
-    :param str r2_cut_id: FileStoreID of fastq (pair 2)
-    :return: FileStoreID from RSEM
-    :rtype: str
-    """
-    job.fileStore.logToMaster('STAR: {}'.format(config.uuid))
-    work_dir = job.fileStore.getLocalTempDir()
-    download_url(url=config.star_index, name='starIndex.tar.gz', work_dir=work_dir)
-    subprocess.check_call(['tar', '-xvf', os.path.join(work_dir, 'starIndex.tar.gz'), '-C', work_dir])
-    os.remove(os.path.join(work_dir, 'starIndex.tar.gz'))
-    # Determine tarball structure - star index contains are either in a subdir or in the tarball itself
-    star_index = os.path.join('/data', os.listdir(work_dir)[0]) if len(os.listdir(work_dir)) == 1 else '/data'
-    # Parameters and input retrieval
-    parameters = ['--runThreadN', str(config.cores),
-                  '--genomeDir', star_index,
-                  '--outFileNamePrefix', 'rna',
-                  '--outSAMtype', 'BAM', 'SortedByCoordinate',
-                  '--outSAMunmapped', 'Within',
-                  '--quantMode', 'TranscriptomeSAM',
-                  '--outSAMattributes', 'NH', 'HI', 'AS', 'NM', 'MD',
-                  '--outFilterType', 'BySJout',
-                  '--outFilterMultimapNmax', '20',
-                  '--outFilterMismatchNmax', '999',
-                  '--outFilterMismatchNoverReadLmax', '0.04',
-                  '--alignIntronMin', '20',
-                  '--alignIntronMax', '1000000',
-                  '--alignMatesGapMax', '1000000',
-                  '--alignSJoverhangMin', '8',
-                  '--alignSJDBoverhangMin', '1',
-                  '--sjdbScore', '1']
-    if config.wiggle:
-        parameters.extend(['--outWigType', 'bedGraph',
-                           '--outWigStrand', 'Unstranded',
-                           '--outWigReferencesPrefix', 'chr'])
-    if config.single:
-        job.fileStore.readGlobalFile(r1_cut_id, os.path.join(work_dir, 'R1_cutadapt.fastq'))
-        parameters.extend(['--readFilesIn', '/data/R1_cutadapt.fastq'])
-    else:
-        job.fileStore.readGlobalFile(r1_cut_id, os.path.join(work_dir, 'R1_cutadapt.fastq'))
-        job.fileStore.readGlobalFile(r2_cut_id, os.path.join(work_dir, 'R2_cutadapt.fastq'))
-        parameters.extend(['--readFilesIn', '/data/R1_cutadapt.fastq', '/data/R2_cutadapt.fastq'])
-    # Call: STAR Map
-    docker_call(tool='quay.io/ucsc_cgl/star:2.4.2a--bcbd5122b69ff6ac4ef61958e47bde94001cfe80',
-                work_dir=work_dir, parameters=parameters)
-    # Write to fileStore
-    bam_id = job.fileStore.writeGlobalFile(os.path.join(work_dir, 'rnaAligned.toTranscriptome.out.bam'))
-    # Save Wiggle File
-    if config.wiggle and config.s3_dir:
-        wiggles = [os.path.basename(x) for x in glob.glob(os.path.join(work_dir, '*.bg'))]
-        # Rename extension
-        for wiggle in wiggles:
-            shutil.move(os.path.join(work_dir, wiggle),
-                        os.path.join(work_dir, os.path.splitext(wiggle)[0] + '.bedGraph'))
-        wiggles = [os.path.join(work_dir, x) for x in [os.path.splitext(x)[0] + '.bedGraph' for x in wiggles]]
-        tarball_files('wiggle.tar.gz', file_paths=wiggles, output_dir=work_dir)
-        wiggle_id = job.fileStore.writeGlobalFile(os.path.join(work_dir, 'wiggle.tar.gz'))
-        job.addChildJobFn(s3am_upload_job, file_id=wiggle_id, file_name='wiggle.tar.gz',
-                          s3_dir=config.s3_dir, num_cores=config.cores)
-    if config.save_bam and config.s3_dir:
-        sorted_bam_id = job.fileStore.writeGlobalFile(os.path.join(work_dir, 'rnaAligned.sortedByCoord.out.bam'))
-        job.addChildJobFn(s3am_upload_job, file_id=sorted_bam_id, file_name=config.uuid + '.sorted.bam',
-                          s3_dir=config.s3_dir, num_cores=config.cores, s3_key_path=config.ssec)
-    # RSEM doesn't tend to use more than 16 cores
-    cores = min(config.cores, 16)
-    disk = '2G' if config.ci_test else '50G'
-    return job.addChildJobFn(rsem, config, bam_id, cores=cores, disk=disk).rv()
-
-
-def rsem(job, config, bam_id):
-    """
-    RNA quantification with RSEM
-
-    :param JobFunctionWrappingJob job: Passed automatically by Toil
-    :param Namespace config: Argparse Namespace object containing argument inputs
-    :param str bam_id: FileStoreID of transcriptome bam for quantification
-    :return: FileStoreID from RSEM postprocess
-    :rtype: str
-    """
-    job.fileStore.logToMaster('RSEM: {}'.format(config.uuid))
-    work_dir = job.fileStore.getLocalTempDir()
-    cores = 16 if config.cores >= 16 else config.cores
-    download_url(url=config.rsem_ref, name='rsem_ref.tar.gz', work_dir=work_dir)
-    subprocess.check_call(['tar', '-xvf', os.path.join(work_dir, 'rsem_ref.tar.gz'), '-C', work_dir])
-    os.remove(os.path.join(work_dir, 'rsem_ref.tar.gz'))
-    # Determine tarball structure - based on it, ascertain folder name and rsem reference prefix
-    rsem_files = []
-    for root, directories, files in os.walk(work_dir):
-        rsem_files.extend([os.path.join(root, x) for x in files])
-    # "grp" is a required RSEM extension that should exist in the RSEM reference
-    ref_prefix = [os.path.basename(os.path.splitext(x)[0]) for x in rsem_files if 'grp' in x][0]
-    ref_folder = os.path.join('/data', os.listdir(work_dir)[0]) if len(os.listdir(work_dir)) == 1 else '/data'
-    # I/O
-    job.fileStore.readGlobalFile(bam_id, os.path.join(work_dir, 'transcriptome.bam'))
-    output_prefix = 'rsem'
-    # Call: RSEM
-    parameters = ['--quiet',
-                  '--no-qualities',
-                  '-p', str(cores),
-                  '--forward-prob', '0.5',
-                  '--seed-length', '25',
-                  '--fragment-length-mean', '-1.0',
-                  '--bam', '/data/transcriptome.bam',
-                  os.path.join(ref_folder, ref_prefix),
-                  output_prefix]
-    if not config.single:
-        parameters = ['--paired-end'] + parameters
-    docker_call(tool='quay.io/ucsc_cgl/rsem:1.2.25--d4275175cc8df36967db460b06337a14f40d2f21',
-                parameters=parameters, work_dir=work_dir)
-    os.rename(os.path.join(work_dir, output_prefix + '.genes.results'), os.path.join(work_dir, 'rsem_gene.tab'))
-    os.rename(os.path.join(work_dir, output_prefix + '.isoforms.results'), os.path.join(work_dir, 'rsem_isoform.tab'))
-    # Write to FileStore
-    rsem_gene_id = job.fileStore.writeGlobalFile(os.path.join(work_dir, 'rsem_gene.tab'))
-    rsem_isoform_id = job.fileStore.writeGlobalFile(os.path.join(work_dir, 'rsem_isoform.tab'))
-    job.fileStore.deleteGlobalFile(bam_id)
-    # Run child jobs
-    return job.addChildJobFn(rsem_postprocess, config, rsem_gene_id, rsem_isoform_id).rv()
-
-
-def rsem_postprocess(job, config, rsem_gene_id, rsem_isoform_id):
-    """
-    Parses RSEMs output to produce the separate .tab files (TPM, FPKM, counts) for both gene and isoform.
-    These are two-column files: Genes and Quantifications.
-    HUGO files are also provided that have been mapped from Gencode/ENSEMBLE names.
-
-    :param JobFunctionWrappingJob job: passed automatically by Toil
-    :param Namespace config: Argparse Namespace object containing argument inputs
-    :param str rsem_gene_id: FileStoreID of rsem_gene_ids
-    :param str rsem_isoform_id: FileStoreID of rsem_isoform_ids
-    :return: FileStoreID from RSEM post process tarball
-    :rytpe: str
-    """
-    job.fileStore.logToMaster('RSEM Postprocess: {}'.format(config.uuid))
-    work_dir = job.fileStore.getLocalTempDir()
-    # I/O
-    job.fileStore.readGlobalFile(rsem_gene_id, os.path.join(work_dir, 'rsem_gene.tab'))
-    job.fileStore.readGlobalFile(rsem_isoform_id, os.path.join(work_dir, 'rsem_isoform.tab'))
-    # Convert RSEM files into individual .tab files.
-    docker_call(tool='jvivian/rsem_postprocess', parameters=[config.uuid], work_dir=work_dir)
-    os.rename(os.path.join(work_dir, 'rsem_gene.tab'), os.path.join(work_dir, 'rsem_genes.results'))
-    os.rename(os.path.join(work_dir, 'rsem_isoform.tab'), os.path.join(work_dir, 'rsem_isoforms.results'))
-    output_files = ['rsem.genes.norm_counts.tab', 'rsem.genes.raw_counts.tab', 'rsem.genes.norm_fpkm.tab',
-                    'rsem.genes.norm_tpm.tab', 'rsem.isoform.norm_counts.tab', 'rsem.isoform.raw_counts.tab',
-                    'rsem.isoform.norm_fpkm.tab', 'rsem.isoform.norm_tpm.tab', 'rsem_genes.results',
-                    'rsem_isoforms.results']
-    # Perform HUGO gene / isoform name mapping
-    genes = [x for x in output_files if 'gene' in x]
-    isoforms = [x for x in output_files if 'isoform' in x]
-    command = ['-g'] + genes + ['-i'] + isoforms
-    docker_call(tool='jvivian/gencode_hugo_mapping', parameters=command, work_dir=work_dir)
-    hugo_files = [os.path.splitext(x)[0] + '.hugo' + os.path.splitext(x)[1] for x in output_files]
-    # Create tarballs for outputs
-    tarball_files('rsem.tar.gz', file_paths=[os.path.join(work_dir, x) for x in output_files], output_dir=work_dir)
-    tarball_files('rsem_hugo.tar.gz', [os.path.join(work_dir, x) for x in hugo_files], output_dir=work_dir)
-    rsem_id = job.fileStore.writeGlobalFile(os.path.join(work_dir, 'rsem.tar.gz'))
-    hugo_id = job.fileStore.writeGlobalFile(os.path.join(work_dir, 'rsem_hugo.tar.gz'))
-    return rsem_id, hugo_id
-
-
-def consolidate_output(job, config, output_ids_and_info):
+def consolidate_output(job, config, kallisto_output, rsem_output, fastqc_output):
     """
     Combines the contents of the outputs into one tarball and places in output directory or s3
 
     :param JobFunctionWrappingJob job: passed automatically by Toil
     :param Namespace config: Argparse Namespace object containing argument inputs
-    :param list output_ids_and_info: Array of output IDs to consolidate
+    :param str kallisto_output: FileStoreID for Kallisto output
+    :param tuple(str, str) rsem_output: FileStoreIDs for RSEM output
+    :param str fastqc_output: FileStoreID for FastQC output
     """
     job.fileStore.logToMaster('Consolidating input: {}'.format(config.uuid))
     work_dir = job.fileStore.getLocalTempDir()
-    # Retrieve IDs
-    rsem_id, hugo_id, kallisto_id, fastqc_id, single_end, improper_pair = flatten(output_ids_and_info)
     # Retrieve output file paths to consolidate
-    rsem_tar, hugo_tar, kallisto_tar = None, None, None
-    if rsem_id:
+    rsem_tar, hugo_tar, kallisto_tar, fastqc_tar = None, None, None, None
+    if rsem_output:
+        rsem_id, hugo_id = rsem_output
         rsem_tar = job.fileStore.readGlobalFile(rsem_id, os.path.join(work_dir, 'rsem.tar.gz'))
         hugo_tar = job.fileStore.readGlobalFile(hugo_id, os.path.join(work_dir, 'rsem_hugo.tar.gz'))
-    if kallisto_id:
-        kallisto_tar = job.fileStore.readGlobalFile(kallisto_id, os.path.join(work_dir, 'kallisto.tar.gz'))
-    fastqc_tar = job.fileStore.readGlobalFile(fastqc_id, os.path.join(work_dir, 'fastqc.tar.gz'))
+    if kallisto_output:
+        kallisto_tar = job.fileStore.readGlobalFile(kallisto_output, os.path.join(work_dir, 'kallisto.tar.gz'))
+    if fastqc_output:
+        fastqc_tar = job.fileStore.readGlobalFile(fastqc_output, os.path.join(work_dir, 'fastqc.tar.gz'))
     # I/O
-    if improper_pair:
-        config.uuid = 'IMPROPERLY_PAIRED.{}'.format(config.uuid)
-    if single_end:
+    if not config.paired:
         config.uuid = 'SINGLE-END.{}'.format(config.uuid)
     out_tar = os.path.join(work_dir, config.uuid + '.tar.gz')
     # Consolidate separate tarballs into one as streams (avoids unnecessary untaring)
@@ -466,19 +253,15 @@ def consolidate_output(job, config, output_ids_and_info):
                         else:
                             tarinfo.name = os.path.join(config.uuid, 'QC', os.path.basename(tarinfo.name))
                         f_out.addfile(tarinfo, fileobj=f_in_file)
-        if improper_pair:
-            with open(os.path.join(work_dir, 'WARNING.txt'), 'w') as f:
-                f.write('cutadapt: error: Reads are improperly paired. Uneven number of reads in fastq pair.')
-            f_out.add(os.path.join(work_dir, 'WARNING.txt'))
     # Move to output directory
     if config.output_dir:
         job.fileStore.logToMaster('Moving {} to output dir: {}'.format(config.uuid, config.output_dir))
         mkdir_p(config.output_dir)
         move_files(file_paths=[os.path.join(work_dir, config.uuid + '.tar.gz')], output_dir=config.output_dir)
     # Upload to S3
-    if config.s3_dir:
-        job.fileStore.logToMaster('Uploading {} to S3: {}'.format(config.uuid, config.s3_dir))
-        s3am_upload(fpath=out_tar, s3_dir=config.s3_dir, num_cores=config.cores)
+    if config.s3_output_dir:
+        job.fileStore.logToMaster('Uploading {} to S3: {}'.format(config.uuid, config.s3_output_dir))
+        s3am_upload(fpath=out_tar, s3_dir=config.s3_output_dir, num_cores=config.cores)
 
 
 # Pipeline specific functions
@@ -522,21 +305,46 @@ def generate_config():
         # Just Kallisto or STAR/RSEM can be run by supplying only the inputs to those tools
         # Comments (beginning with #) do not need to be removed. Optional parameters may be left blank.
         ##############################################################################################################
-        star-index:             # Required: URL (http, file, s3) to index tarball used by STAR
-                                # Example: s3://cgl-pipeline-inputs/rnaseq_cgl/starIndex_hg38_no_alt.tar.gz\n
-        kallisto-index:         # Required: URL (http, file, s3) to kallisto index file.
-                                # Example: s3://cgl-pipeline-inputs/rnaseq_cgl/kallisto_hg38.idx\n
-        rsem-ref:               # Required: URL (http, file, s3) to reference tarball used by RSEM
-                                # Example: s3://cgl-pipeline-inputs/rnaseq_cgl/rsem_ref_hg38_no_alt.tar.gz\n
-        output-dir:             # Optional: Provide a full path to where results will appear\n
-        s3-dir:                 # Optional: Provide an s3 path (s3://bucket/dir) where results will appear\n
-        ssec:                   # Optional: Provide a full path to a 32-byte key used for SSE-C Encryption in Amazon\n
-        gtkey:                 # Optional: Provide a full path to a CGHub Key used to access GNOS hosted data\n
-        wiggle:                 # Optional: If true, saves a "wiggle" file produced by STAR\n
-        save-bam:               # Optional: If true, saves the aligned bam (by coordinate) produced by STAR\n
-        ci-test:                # Optional: If true, uses resource requirements appropriate for continuous integration\n
-        fwd-3pr-adapter: AGATCGGAAGAG   # Adapter sequence to trim. Defaults set for Illumina\n
-        rev-3pr-adapter: AGATCGGAAGAG   # Adapter sequence to trim. Defaults set for Illumina\n
+        # Required: URL (http, file, s3) to index tarball used by STAR
+        star-index: s3://cgl-pipeline-inputs/rnaseq_cgl/starIndex_hg38_no_alt.tar.gz
+
+        # Required: URL (http, file, s3) to kallisto index file.
+        kallisto-index: s3://cgl-pipeline-inputs/rnaseq_cgl/kallisto_hg38.idx
+
+        # Required: URL (http, file, s3) to reference tarball used by RSEM
+        rsem-ref: s3://cgl-pipeline-inputs/rnaseq_cgl/rsem_ref_hg38_no_alt.tar.gz
+
+        # NOTE: Pipeline requires at least one output option
+        # Optional: Provide a full file path (/path/to/output-dir) where results will appear
+        output-dir:
+
+        # Optional: Provide an s3 path (s3://bucket/dir) where results will appear
+        s3-output-dir:
+
+        # Optional: If true, will preprocess samples with cutadapt using adapter sequences.
+        cutadapt: true
+
+        # Optional: If true, will run FastQC and include QC in sample output
+        fastqc: true
+
+        # Adapter sequence to trim. Defaults set for Illumina
+        fwd-3pr-adapter: AGATCGGAAGAG
+
+        # Adapter sequence to trim (for reverse strand). Defaults set for Illumina
+        rev-3pr-adapter: AGATCGGAAGAG
+
+        # Optional: Provide a full path to a 32-byte key used for SSE-C Encryption in Amazon
+        ssec:
+
+        # Optional: Provide a full path to a CGHub Key used to access GNOS hosted data
+        gtkey:
+
+        # Optional: If true, saves the aligned bam (by coordinate) produced by STAR
+        # You must also specify an ssec key if you want to upload to the s3-output-dir
+        save-bam:
+
+        # Optional: If true, uses resource requirements appropriate for continuous integration
+        ci-test:
     """[1:])
 
 
@@ -565,6 +373,12 @@ def generate_manifest():
 
 
 def generate_file(file_path, generate_func):
+    """
+    Checks file existance, generates file, and provides message
+
+    :param str file_path: File location to generate file
+    :param function generate_func: Function used to generate file
+    """
     require(not os.path.exists(file_path), file_path + ' already exists!')
     with open(file_path, 'w') as f:
         f.write(generate_func())
@@ -617,10 +431,10 @@ def main():
     # Run subparser
     parser_run = subparsers.add_parser('run', help='Runs the RNA-seq pipeline')
     group = parser_run.add_mutually_exclusive_group(required=True)
-    parser_run.add_argument('--config', default='toil-rnaseq.config', type=str,
+    parser_run.add_argument('--config', default='config-toil-rnaseq.yaml', type=str,
                             help='Path to the (filled in) config file, generated with "generate-config". '
                                  '\nDefault value: "%(default)s"')
-    group.add_argument('--manifest', default='toil-rnaseq-manifest.tsv', type=str,
+    group.add_argument('--manifest', default='manifest-toil-rnaseq.tsv', type=str,
                        help='Path to the (filled in) manifest file, generated with "generate-manifest". '
                             '\nDefault value: "%(default)s"')
     group.add_argument('--samples', default=None, nargs='+', type=str,
@@ -639,9 +453,9 @@ def main():
     # Parse subparsers related to generation of config and manifest
     cwd = os.getcwd()
     if args.command == 'generate-config' or args.command == 'generate':
-        generate_file(os.path.join(cwd, 'toil-rnaseq.config'), generate_config)
+        generate_file(os.path.join(cwd, 'config-toil-rnaseq.yaml'), generate_config)
     if args.command == 'generate-manifest' or args.command == 'generate':
-        generate_file(os.path.join(cwd, 'toil-rnaseq-manifest.tsv'), generate_manifest)
+        generate_file(os.path.join(cwd, 'manifest-toil-rnaseq.tsv'), generate_manifest)
     # Pipeline execution
     elif args.command == 'run':
         require(os.path.exists(args.config), '{} not found. Please run '
@@ -658,10 +472,12 @@ def main():
         config.maxCores = int(args.maxCores) if args.maxCores else sys.maxint
         # Config sanity checks
         require(config.kallisto_index or config.star_index,
-                 'URLs not provided for kallisto or star, so there is nothing to do')
+                'URLs not provided for Kallisto or STAR, so there is nothing to do!')
         if config.star_index or config.rsem_ref:
             require(config.star_index and config.rsem_ref, 'Input provided for STAR or RSEM but not both. STAR: '
                                                            '{}, RSEM: {}'.format(config.star_index, config.rsem_ref))
+        require(config.output_dir or config.s3_output_dir, 'output-dir AND/OR s3-output-dir need to be defined, '
+                                                           'otherwise sample output is not stored anywhere!')
         # Program checks
         for program in ['curl', 'docker']:
             require(which(program), program + ' must be installed on every node.'.format(program))

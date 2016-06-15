@@ -1,6 +1,5 @@
 #!/usr/bin/env python2.7
 import argparse
-from glob import glob
 import multiprocessing
 import os
 import subprocess
@@ -8,6 +7,7 @@ import sys
 import tarfile
 import textwrap
 from contextlib import closing
+from glob import glob
 from urlparse import urlparse
 
 import yaml
@@ -125,7 +125,7 @@ def index_bams(job, config):
     disk = '1G' if config.ci_test else '20G'
     config.normal_bai = job.addChildJobFn(index_bam, config.normal_bam, cores=1, disk=disk).rv()
     config.tumor_bai = job.addChildJobFn(index_bam, config.tumor_bam, cores=1, disk=disk).rv()
-    job.addFollowOnJobFn(pre_processing_declaration, config)
+    job.addFollowOnJobFn(preprocessing_declaration, config)
 
 
 def index_bam(job, bam_id):
@@ -147,7 +147,13 @@ def index_bam(job, bam_id):
     return job.fileStore.writeGlobalFile(os.path.join(work_dir, 'sample.bam.bai'))
 
 
-def pre_processing_declaration(job, config):
+def preprocessing_declaration(job, config):
+    """
+    Statically declare jobs related to preprocessing
+
+    :param JobFunctionWrappingJob job: passed automatically by Toil
+    :param Namespace config: Argparse Namespace object containing argument inputs
+    """
     if config.preprocessing:
         disk = '1G' if config.ci_test else '20G'
         mem = '2G' if config.ci_test else '10G'
@@ -410,7 +416,7 @@ def run_pindel(job, cores, normal_bam, normal_bai, tumor_bam, tumor_bai, ref, fa
     """
     Calls Pindel to compute indels / deletions
 
-    :param JobFunctionWrappingJob job: passed automatically by Toil
+    :param JobFunctionWrappingJob job: Passed automatically by Toil
     :param int cores: Maximum number of cores on host node
     :param str normal_bam: Normal BAM FileStoreID
     :param str normal_bai: Normal BAM index FileStoreID
@@ -607,25 +613,47 @@ def generate_config():
     # URLs can take the form: http://, file://, s3://, gnos://.
     # Comments (beginning with #) do not need to be removed. Optional parameters may be left blank
     ####################################################################################################################
-    reference:              # Required: URL to reference genome
-                            # Example: s3://cgl-pipeline-inputs/variant_hg19/hg19.fa\n
-    phase:                  # Required: URL to phase indels VCF
-                            # Example: s3://cgl-pipeline-inputs/variant_hg19/1000G_phase1.indels.hg19.sites.vcf\n
-    mills:                  # Required: URL to Mills indel VCF
-                            # Example: s3://cgl-pipeline-inputs/variant_hg19/Mills_and_1000G_gold_standard.indels.hg19.sites.vcf\n
-    dbsnp:                  # Required: URL to dbsnp VCF
-                            # Example: s3://cgl-pipeline-inputs/variant_hg19/dbsnp_138.hg19.vcf\n
-    cosmic:                 # Required: URL to cosmic VCF
-                            # Example: s3://cgl-pipeline-inputs/variant_hg19/cosmic.hg19.vcf\n\n
-    run-mutect: true        # Optional: If true, will run MuTect to do mutation calls
-    run-pindel: true        # Optional: Iff true, will run pindel to analyze indels
-    run-muse: true          # Optional: If true, will run MuSe to do mutation calls
-    preprocessing: true     # Optional: If true, will perform indel realignment and base quality score recalibration\n
-    output-dir:             # Optional: Provide a full path to where results will appear\n
-    s3-dir:                 # Optional: Provide an s3 path (s3://bucket/dir) where results will appear\n
-    ssec:                   # Optional: Provide a full path to a 32-byte key used for SSE-C Encryption in Amazon\n
-    gtkey:                  # Optional: Provide a full path to a CGHub Key used to access GNOS hosted data\n
-    ci-test:                # Optional: If true, uses resource requirements appropriate for continuous integration\n
+    # Required: URL to reference genome
+    reference: s3://cgl-pipeline-inputs/variant_hg19/hg19.fa
+
+    # Required: URL to phase indels VCF
+    phase: s3://cgl-pipeline-inputs/variant_hg19/1000G_phase1.indels.hg19.sites.vcf
+
+    # Required: URL to Mills indel VCF
+    mills: s3://cgl-pipeline-inputs/variant_hg19/Mills_and_1000G_gold_standard.indels.hg19.sites.vcf
+
+    # Required: URL to dbsnp VCF
+    dbsnp: s3://cgl-pipeline-inputs/variant_hg19/dbsnp_138.hg19.vcf
+
+    # Required: URL to cosmic VCF
+    cosmic: s3://cgl-pipeline-inputs/variant_hg19/cosmic.hg19.vcf
+
+    # Optional: If true, will run MuTect to do mutation calls
+    run-mutect: true
+
+    # Optional: If true, will run pindel to analyze indel
+    run-pindel: true
+
+    # Optional: If true, will run MuSe to do mutation calls
+    run-muse: true
+
+    # Optional: If true, will perform indel realignment and base quality score recalibration
+    preprocessing: true
+
+    # Optional: Provide a full path to where results will appear
+    output-dir:
+
+    # Optional: Provide an s3 path (s3://bucket/dir) where results will appear
+    s3-dir:
+
+    # Optional: Provide a full path to a 32-byte key used for SSE-C Encryption in Amazon
+    ssec:
+
+    # Optional: Provide a full path to a CGHub Key used to access GNOS hosted data
+    gtkey:
+
+    # Optional: If true, uses resource requirements appropriate for continuous integration
+    ci-test: 
     """[1:])
 
 
@@ -658,18 +686,17 @@ def generate_file(file_path, generate_func):
 def main():
     """
     Computational Genomics Lab, Genomics Institute, UC Santa Cruz
-    Toil exome variant pipeline
+    Toil exome pipeline
 
-    Perform variant analysis given a pair of tumor/normal BAM files.
+    Perform variant / indel analysis given a pair of tumor/normal BAM files.
     Samples are optionally preprocessed (indel realignment and base quality score recalibration)
-    before variant analysis is performed using MuTect.  The final output of this pipeline is a tarball
-    containing the output of output of MuTect.
+    The output of this pipeline is a tarball containing results from MuTect, MuSe, and Pindel.
 
     General usage:
-    1. Type "toil-variant generate" to create an editable manifest and config in the current working directory.
+    1. Type "toil-exome generate" to create an editable manifest and config in the current working directory.
     2. Parameterize the pipeline by editing the config.
     3. Fill in the manifest with information pertaining to your samples.
-    4. Type "toil-variant run [jobStore]" to execute the pipeline.
+    4. Type "toil-exome run [jobStore]" to execute the pipeline.
 
     Please read the README.md located in the source directory or at:
     https://github.com/BD2KGenomics/toil-scripts/tree/master/src/toil_scripts/exome_variant_pipeline
@@ -719,10 +746,10 @@ def main():
     subparsers.add_parser('generate', help='Generates a config and manifest in the current working directory.')
     # Run subparser
     parser_run = subparsers.add_parser('run', help='Runs the CGL exome pipeline')
-    parser_run.add_argument('--config', default='toil-exome.config', type=str,
+    parser_run.add_argument('--config', default='config-toil-exome.yaml', type=str,
                             help='Path to the (filled in) config file, generated with "generate-config". '
                                  '\nDefault value: "%(default)s"')
-    parser_run.add_argument('--manifest', default='toil-exome-manifest.tsv', type=str,
+    parser_run.add_argument('--manifest', default='manifest-toil-exome.tsv', type=str,
                             help='Path to the (filled in) manifest file, generated with "generate-manifest". '
                             '\nDefault value: "%(default)s"')
     parser_run.add_argument('--normal', default=None, type=str,
@@ -743,9 +770,9 @@ def main():
     # Parse subparsers related to generation of config and manifest
     cwd = os.getcwd()
     if args.command == 'generate-config' or args.command == 'generate':
-        generate_file(os.path.join(cwd, 'toil-rnaseq.config'), generate_config)
+        generate_file(os.path.join(cwd, 'config-toil-exome.yaml'), generate_config)
     if args.command == 'generate-manifest' or args.command == 'generate':
-        generate_file(os.path.join(cwd, 'toil-rnaseq-manifest.tsv'), generate_manifest)
+        generate_file(os.path.join(cwd, 'manifest-toil-exome.tsv'), generate_manifest)
     # Pipeline execution
     elif args.command == 'run':
         require(os.path.exists(args.config), '{} not found. Please run '
