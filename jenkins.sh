@@ -12,6 +12,7 @@ export PATH=$PATH:${PWD}/bin
 virtualenv venv
 . venv/bin/activate
 pip install toil==3.1.6
+pip install bd2k-python-lib==1.10.dev6
 make develop
 make test
 make clean

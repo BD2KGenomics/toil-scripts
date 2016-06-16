@@ -12,18 +12,18 @@ from contextlib import closing
 from subprocess import PIPE
 
 import yaml
+from bd2k.util.files import mkdir_p
+from bd2k.util.processes import which
 from toil.job import Job
 
 from toil_scripts.lib import require, UserError
-from toil_scripts.lib.files import mkdir_p
 from toil_scripts.lib.files import move_files
 from toil_scripts.lib.jobs import map_job
-from toil_scripts.lib.programs import which
 from toil_scripts.lib.urls import download_url_job, s3am_upload
+from toil_scripts.tools.QC import run_fastqc
 from toil_scripts.tools.aligners import run_star
 from toil_scripts.tools.preprocessing import cutadapt
 from toil_scripts.tools.quantifiers import run_kallisto, run_rsem, run_rsem_postprocess
-from toil_scripts.tools.QC import run_fastqc
 
 
 # Start of pipeline
@@ -480,7 +480,7 @@ def main():
                                                            'otherwise sample output is not stored anywhere!')
         # Program checks
         for program in ['curl', 'docker']:
-            require(which(program), program + ' must be installed on every node.'.format(program))
+            require(next(which(program), None), program + ' must be installed on every node.'.format(program))
 
         # Start the workflow by using map_job() to run the pipeline for each sample
         Job.Runner.startToil(Job.wrapJobFn(map_job, download_sample, samples, config), args)

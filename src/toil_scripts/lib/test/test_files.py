@@ -3,17 +3,6 @@ import tarfile
 from toil.job import Job
 
 
-def test_mkdir_p(tmpdir):
-    import os
-    from toil_scripts.lib.files import mkdir_p
-    work_dir = str(tmpdir)
-    dir_path = os.path.join(work_dir, 'test')
-    assert os.path.exists(work_dir)
-    mkdir_p(work_dir)
-    mkdir_p(dir_path)
-    assert os.path.isdir(dir_path)
-
-
 def test_tarball_files(tmpdir):
     from toil_scripts.lib.files import tarball_files
     work_dir = str(tmpdir)

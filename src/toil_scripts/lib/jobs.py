@@ -6,6 +6,7 @@ def map_job(job, func, inputs, *args):
     Spawns a tree of jobs to avoid overloading the number of jobs spawned by a single parent.
     This function is appropriate to use when batching samples greater than 1,000.
 
+    :param JobFunctionWrappingJob job: passed automatically by Toil
     :param function func: Function to spawn dynamically, passes one sample as first argument
     :param list inputs: Array of samples to be batched
     :param list args: any arguments to be passed to the function

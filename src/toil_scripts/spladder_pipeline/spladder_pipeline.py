@@ -31,14 +31,14 @@ from glob import glob
 
 from toil.job import Job
 
-from toil_scripts.lib.files import mkdir_p
 from toil_scripts.lib.files import tarball_files
 from toil_scripts.lib.jobs import map_job
 from toil_scripts.lib.programs import docker_call
-from toil_scripts.lib.programs import which
 from toil_scripts.lib.urls import s3am_upload_job
 from toil_scripts.lib.urls import download_url_job
 from toil_scripts.lib.urls import download_url
+from bd2k.util.processes import which
+from bd2k.util.files import mkdir_p
 
 
 def parse_input_samples(job, inputs):

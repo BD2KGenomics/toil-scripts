@@ -1,24 +1,7 @@
 from contextlib import closing
 import os
-import errno
 import tarfile
 import shutil
-
-
-# FIXME: replace with bd2k.util.files.mkdir_p
-def mkdir_p(path):
-    """
-    It is Easier to Ask for Forgiveness than Permission
-
-    :param str path: path to directory to create
-    """
-    try:
-        os.makedirs(path)
-    except OSError as exc:
-        if exc.errno == errno.EEXIST and os.path.isdir(path):
-            pass
-        else:
-            raise
 
 
 def tarball_files(tar_name, file_paths, output_dir='.', prefix=''):
@@ -57,6 +40,7 @@ def consolidate_tarballs_job(job, fname_to_id):
     Combine the contents of separate tarballs into one.
     Subdirs within the tarball will be named the keys in **fname_to_id
 
+    :param JobFunctionWrappingJob job: passed automatically by Toil
     :param dict[str,str] fname_to_id: Dictionary of the form: file-name-prefix=FileStoreID
     :return: The file store ID of the generated tarball
     :rtype: str
