@@ -53,19 +53,30 @@ def parse_config(config_path):
 
 
 def get_shared_files(job, config, tool_options):
+
+    job.fileStore.logToMaster('Downloading shared files')
+
     important_params = {
         'defuse':   {'index_url': ('required', 'download', 'index', None),
+                     'mock': ('optional', None, 'mock', None),
                      'output': ('optional', None, 'output', None)},
-                     'gencode': {'url': ('optional', 'download', 'gencode_gtf', None)},
-        'bedtools': {'output': ('optional', None, 'output', None)},
+
+        'gencode': {'url': ('optional', 'download', 'gencode_gtf', None)},
+
+        'bedtools': {'mock': ('optional', None, 'mock', None),
+                    'output': ('optional', None, 'output', None)},
+
         'star':     {'type': ('optional', None, 'type', None),
                      'ncores': ('optional', None, 'ncores', None),
                      'index_url': ('optional', 'download', 'index', None),
+                     'mock': ('optional', None, 'mock', None),
                      'rnaAligned.toTranscriptome.out.bam': ('optional', None, 'rnaAligned.toTranscriptome.out.bam', None),
                      'rnaAligned.sortedByCoord.out.bam': ('optional', None, 'rnaAligned.sortedByCoord.out.bam', None),
                      'rnaAligned.sortedByCoord.out.bam.bai': ('optional', None, 'rnaAligned.sortedByCoord.out.bam.bai', None)},
+
         'rsem':     {'index_url': ('optional', 'download', 'index', None),
                      'ncores': ('optional', None, 'ncores', None),
+                     'mock': ('optional', None, 'mock', None),
                      'output': ('optional', None, 'output', None)}
                     }
 
@@ -212,7 +223,7 @@ def run_defuse(job, fastq1, fastq2, sample_options, defuse_options):
     results_url = defuse_options['output']
 
     docker_call('jpfeil/defuse:0.6.2', parameters=parameters, work_dir=work_dir,
-                mock=True, outputs={'results.tsv': results_url})
+                mock=defuse_options['mock'], outputs={'results.tsv': results_url})
 
     results_path = os.path.join(work_dir, 'results.tsv')
     if not os.path.exists(results_path):

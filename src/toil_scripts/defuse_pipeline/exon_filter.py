@@ -57,6 +57,7 @@ def pickle_data(fname, obj):
     with open(fname, 'wb') as f:
         cPickle.dump(obj, f)
 
+
 def get_transcript_data(gtf_fname):
     gtf_stats = namedtuple('GTF_STATS', 'seqname source feature start end score strand frame')
     transcript_data = defaultdict(list)
@@ -102,7 +103,6 @@ def get_exon_coverage(exon_coverage):
     return exon_data
 
 
-
 def read_rsem_data(rsem_path):
     rsem_data = namedtuple('RSEM_DATA', 'gene_name gene_version transcript_name transcript_version fpkm')
     rsem_reader = csv.reader(open(rsem_path, 'rb'), delimiter='\t')
@@ -119,18 +119,8 @@ def read_rsem_data(rsem_path):
     return data
 
 
-
-def main():
-    defuse_output = '/home/jacob/munge/defuse/data/results.tsv'
-    gtf_path = '/home/jacob/munge/defuse/data/gencode.v19.annotation.gtf'
-    rsem_path = '/home/jacob/munge/defuse/data/rsem.isoforms.results'
-    cov_path = '/home/jacob/munge/defuse/data/SRR1657557rnaAligned.sortedByCoord.out.bam.cov'
-
-    rsem_data = read_rsem_data(rsem_path)
-
-    exon_data = get_exon_coverage(cov_path)
-
-    transcripts = get_transcript_data(gtf_path)
+# TODO This is just to store the data
+def parse_defuse_output(defuse_output, rsem_data, transcripts, exon_data):
     reader = csv.reader(open(defuse_output, 'rb'), delimiter='\t')
     header = reader.next()
     line = reader.next()
@@ -151,7 +141,32 @@ def main():
     for exon, gtf, number in transcripts[rsem_datum2.transcript_name]:
         print exon_data[exon], gtf.start, number
 
+def
 
+
+
+def main():
+    defuse_output = '/home/jacob/munge/defuse/data/SRR1544075_results/results.tsv'
+    gtf_path = '/home/jacob/munge/defuse/data/ref/gencode.v19.annotation.gtf'
+    rsem_path = '/home/jacob/munge/defuse/data/rsem.isoforms.results'
+    cov_path = '/home/jacob/munge/defuse/data/SRR1657557rnaAligned.sortedByCoord.out.bam.cov'
+
+    # rsem_data = read_rsem_data(rsem_path)
+
+    # exon_data = get_exon_coverage(cov_path)
+
+    # transcripts = get_transcript_data(gtf_path)
+
+
+    reader = csv.reader(open(defuse_output, 'rb'), delimiter='\t')
+    header = reader.next()
+    defuse_header = {key: index for index, key in enumerate(header)}
+    defuse_features = ['gene1', 'gene2', 'genomic_break_pos1', 'genomic_break_pos2']
+    for line in reader:
+        if line[defuse_header['gene1']] == 'ENSG00000182944' and line[defuse_header['gene2']] == 'ENSG00000123268':
+            for feature in defuse_features:
+                print feature, line[defuse_header[feature]]
+            break
 
 if __name__ == '__main__':
      main()

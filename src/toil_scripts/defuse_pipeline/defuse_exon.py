@@ -35,11 +35,12 @@ def exon_filter_pipeline(job, fastq1, fastq2, defuse_job, sample_options, tool_o
 
 
 def prepare_gtf(job, tool_options):
-    try:
-        gencode_gtf = tool_options['gencode']['gencode_gtf']
-        tool_options['exon_gtf'] = job.addChildJobFn(get_exon_gtf, gencode_gtf).rv()
-    except KeyError:
-        pass
+    if tool_options['filter'] == 'exon':
+        try:
+            gencode_gtf = tool_options['gencode']['gencode_gtf']
+            tool_options['exon_gtf'] = job.addChildJobFn(get_exon_gtf, gencode_gtf).rv()
+        except KeyError:
+            raise ValueError('Requires gencode gtf for exon filtering')
     return tool_options
 
 

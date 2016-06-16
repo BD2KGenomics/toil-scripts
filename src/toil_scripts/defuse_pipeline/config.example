@@ -3,6 +3,7 @@
 defuse: 
  index_url: file:///home/jacob/munge/defuse/data/defuse_dummpy_reference
  output: file:///home/jacob/munge/defuse/data/results.tsv
+ mock: True
 
 gencode:
  url: file:///home/jacob/munge/defuse/data/gencode.v19.annotation.gtf
