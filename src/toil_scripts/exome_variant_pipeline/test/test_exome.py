@@ -50,7 +50,7 @@ def generate_config():
     run-muse: true
     preprocessing: true
     output-dir:
-    s3-dir: s3://cgl-driver-projects/test/ci
+    s3-output-dir: s3://cgl-driver-projects/test/ci
     ssec:
     gtkey:
     ci-test: true
