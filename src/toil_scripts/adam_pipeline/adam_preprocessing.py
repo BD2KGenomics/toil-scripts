@@ -36,92 +36,13 @@ from subprocess import check_call, check_output
 
 import yaml
 from toil.job import Job
-from toil_scripts.adam_uberscript.automated_scaling import SparkMasterAddress
 from toil_scripts.lib import require
 from toil_scripts.lib.programs import docker_call, mock_mode
 from toil_scripts.rnaseq_cgl.rnaseq_cgl_pipeline import generate_file
 from toil_scripts.spark_utils.spawn_cluster import start_spark_hdfs_cluster
+from toil_scripts.tools.spark_tools import call_adam, call_conductor, MasterAddress, HDFS_MASTER_PORT, SPARK_MASTER_PORT
 
-SPARK_MASTER_PORT = "7077"
-HDFS_MASTER_PORT = "8020"
 log = logging.getLogger(__name__)
-
-
-class MasterAddress(str):
-    """
-    A string containing the hostname or IP of the Spark/HDFS master. The Spark master expects its own address to
-    match what the client uses to connect to it. For example, if the master is configured with a host name,
-    the driver can't use an IP address to connect to it, and vice versa. This class works around by distinguishing
-    between the notional master address (self) and the actual one (self.actual) and adds support for the special
-    master address "auto" in order to implement auto-discovery of the master of a standalone.
-
-    >>> foo = MasterAddress('foo')
-    >>> foo == 'foo'
-    True
-    >>> foo.actual == 'foo'
-    True
-    >>> foo.actual == foo
-    True
-    """
-    def __init__(self, master_ip):
-        # TBD: this could do more tricks like always mapping an IP address to 'spark-master' etc.
-        if master_ip == 'auto':
-            super(MasterAddress, self).__init__('spark-master')
-            self.actual = SparkMasterAddress.load_in_toil().value
-        else:
-            super(MasterAddress, self).__init__(master_ip)
-            self.actual = self
-
-    def docker_parameters(self, docker_parameters=None):
-        """
-        Augment a list of "docker run" arguments with those needed to map the  notional Spark master address to the
-        real one, if they are different.
-        """
-        if self != self.actual:
-            add_host_option = '--add-host=spark-master:' + self.actual
-            if docker_parameters is None:
-                docker_parameters = [add_host_option]
-            else:
-                docker_parameters.append(add_host_option)
-        return docker_parameters
-
-
-def call_conductor(master_ip, inputs, src, dst):
-    """
-    Invokes the Conductor container to copy files between S3 and HDFS
-
-    :type masterIP: MasterAddress
-    """
-
-    docker_call(rm = False,
-                tool = "quay.io/ucsc_cgl/conductor",
-                docker_parameters = master_ip.docker_parameters(["--net=host"]),
-                parameters = ["--master", "spark://%s:%s" % (master_ip, SPARK_MASTER_PORT),
-                 "--conf", "spark.driver.memory=%sg" % inputs.memory,
-                 "--conf", "spark.executor.memory=%sg" % inputs.memory,
-                 "--", "-C", src, dst],
-                mock=False)
-
-
-def call_adam(master_ip, inputs, arguments):
-    """
-    Invokes the ADAM container
-
-    :type masterIP: MasterAddress
-    """
-    default_params = ["--master",
-                      ("spark://%s:%s" % (master_ip, SPARK_MASTER_PORT)),
-                      "--conf", ("spark.driver.memory=%sg" % inputs.memory),
-                      "--conf", ("spark.executor.memory=%sg" % inputs.memory),
-                      "--conf", ("spark.hadoop.fs.default.name=hdfs://%s:%s" % (master_ip, HDFS_MASTER_PORT)),
-                      "--conf", "spark.driver.maxResultSize=0",
-                      # set max result size to unlimited, see #177
-                      "--"]
-    docker_call(rm = False,
-                tool = "quay.io/ucsc_cgl/adam:962-ehf--6e7085f8cac4b9a927dc9fb06b48007957256b80",
-                docker_parameters = master_ip.docker_parameters(["--net=host"]),
-                parameters = default_params + arguments,
-                mock=False)
 
 
 def remove_file(master_ip, filename, spark_on_toil):
@@ -174,10 +95,10 @@ def download_data(master_ip, inputs, known_snps, bam, hdfs_snps, hdfs_bam):
     """
 
     log.info("Downloading known sites file %s to %s.", known_snps, hdfs_snps)
-    call_conductor(master_ip, inputs, known_snps, hdfs_snps)
+    call_conductor(master_ip, known_snps, hdfs_snps, memory=inputs['memory'])
 
     log.info("Downloading input BAM %s to %s.", bam, hdfs_bam)
-    call_conductor(master_ip, inputs, bam, hdfs_bam)
+    call_conductor(master_ip, bam, hdfs_bam, memory=inputs['memory'])
 
 
 def adam_convert(master_ip, inputs, in_file, in_snps, adam_file, adam_snps, spark_on_toil):
@@ -186,14 +107,14 @@ def adam_convert(master_ip, inputs, in_file, in_snps, adam_file, adam_snps, spar
     """
 
     log.info("Converting input BAM to ADAM.")
-    call_adam(master_ip, inputs, ["transform", in_file, adam_file])
+    call_adam(master_ip, ["transform", in_file, adam_file], memory=inputs['memory'])
 
     in_file_name = in_file.split("/")[-1]
     remove_file(master_ip, in_file_name, spark_on_toil)
 
     log.info("Converting known sites VCF to ADAM.")
 
-    call_adam(master_ip, inputs, ["vcf2adam", "-only_variants", in_snps, adam_snps])
+    call_adam(master_ip, ["vcf2adam", "-only_variants", in_snps, adam_snps], memory=inputs['memory'])
 
     in_snps_name = in_snps.split("/")[-1]
     remove_file(master_ip, in_snps_name, spark_on_toil)
@@ -209,12 +130,12 @@ def adam_transform(master_ip, inputs, in_file, snp_file, hdfs_dir, out_file, spa
 
     log.info("Marking duplicate reads.")
     call_adam(master_ip,
-              inputs,
               ["transform",
                in_file,  hdfs_dir + "/mkdups.adam",
                "-aligned_read_predicate",
                "-limit_projection",
-               "-mark_duplicate_reads"])
+               "-mark_duplicate_reads"],
+              memory=inputs['memory'])
 
     #FIXME
     in_file_name = in_file.split("/")[-1]
@@ -222,32 +143,32 @@ def adam_transform(master_ip, inputs, in_file, snp_file, hdfs_dir, out_file, spa
 
     log.info("Realigning INDELs.")
     call_adam(master_ip,
-              inputs,
               ["transform",
                hdfs_dir + "/mkdups.adam",
                hdfs_dir + "/ri.adam",
-               "-realign_indels"])
+               "-realign_indels"],
+              memory=inputs['memory'])
 
     remove_file(master_ip, hdfs_dir + "/mkdups.adam*", spark_on_toil)
 
     log.info("Recalibrating base quality scores.")
     call_adam(master_ip,
-              inputs,
               ["transform",
                hdfs_dir + "/ri.adam",
                hdfs_dir + "/bqsr.adam",
                "-recalibrate_base_qualities",
-               "-known_snps", snp_file])
+               "-known_snps", snp_file],
+              memory=inputs['memory'])
 
     remove_file(master_ip, "ri.adam*", spark_on_toil)
 
     log.info("Sorting reads and saving a single BAM file.")
     call_adam(master_ip,
-              inputs,
               ["transform",
                hdfs_dir + "/bqsr.adam",
                out_file,
-               "-sort_reads", "-single"])
+               "-sort_reads", "-single"],
+              memory=inputs['memory'])
 
     remove_file(master_ip, "bqsr.adam*", spark_on_toil)
 
@@ -263,7 +184,7 @@ def upload_data(master_ip, inputs, hdfs_name, upload_name, spark_on_toil):
         truncate_file(master_ip, hdfs_name, spark_on_toil)
 
     log.info("Uploading output BAM %s to %s.", hdfs_name, upload_name)
-    call_conductor(master_ip, inputs, hdfs_name, upload_name)
+    call_conductor(master_ip, hdfs_name, upload_name, memory=inputs['memory'])
 
 
 def download_run_and_upload(job, master_ip, inputs, spark_on_toil):
