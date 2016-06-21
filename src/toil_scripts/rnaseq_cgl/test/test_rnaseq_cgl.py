@@ -2,27 +2,30 @@ import os
 import subprocess
 import shutil
 import textwrap
+from uuid import uuid4
 
 from boto.s3.connection import S3Connection, Bucket, Key
 
 
 def test_rnaseq_cgl(tmpdir):
-    work_dir = str(tmpdir)
-    create_config_and_manifest(work_dir)
+    tmp_dir = str(tmpdir)
+    create_config_and_manifest(tmp_dir)
     subdir = '/mnt/ephemeral/toil-scripts/rnaseq/'
-    os.makedirs(os.path.join(subdir, 'workDir'))
+    work_dir = os.path.join(subdir, str(uuid4()))
+    if not os.path.exists(work_dir):
+        os.makedirs(work_dir)
     sample = 's3://cgl-pipeline-inputs/rnaseq_cgl/ci/chr6_sample.tar.gz'
     # Call Pipeline
     try:
         base_command = ['toil-rnaseq', 'run',
-                        '--config', os.path.join(work_dir, 'toil-rnaseq.config'),
-                        os.path.join(subdir, 'jstore'),
+                        '--config', os.path.join(tmp_dir, 'toil-rnaseq.config'),
+                        os.path.join(work_dir, 'jstore'),
                         '--retryCount', '1',
-                        '--workDir', os.path.join(subdir, 'workDir')]
+                        '--workDir', work_dir]
         # Run with --samples
         subprocess.check_call(base_command + ['--samples', sample])
         # Run with manifest
-        subprocess.check_call(base_command + ['--manifest', os.path.join(work_dir, 'toil-rnaseq-manifest.tsv')])
+        subprocess.check_call(base_command + ['--manifest', os.path.join(tmp_dir, 'toil-rnaseq-manifest.tsv')])
     finally:
         shutil.rmtree(subdir)
         conn = S3Connection()
