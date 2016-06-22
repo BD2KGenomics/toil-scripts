@@ -112,137 +112,31 @@ S3AM            - pip install --s3am (requires ~/.boto config file)
 """
 
 # import from python system libraries
+import argparse
 import copy
+import textwrap
+from multiprocessing import cpu_count
 
-# import boto sdb connection for autoscaling
-import boto.sdb
-
+import yaml
 # import toil features
 from toil.job import Job
 
 # import job steps from other toil pipelines
-from toil_scripts.adam_pipeline.adam_preprocessing import *
-from toil_scripts.batch_alignment.bwa_alignment import *
-from toil_scripts.gatk_germline.germline import *
-from toil_scripts.gatk_processing.gatk_preprocessing import *
+from toil_scripts.adam_pipeline.adam_preprocessing import * #static_adam_preprocessing_dag
+from toil_scripts.batch_alignment.bwa_alignment import * #download_shared_files
+from toil_scripts.gatk_germline.germline import * #batch_start
+from toil_scripts.gatk_processing.gatk_preprocessing import * #download_gatk_files
+from toil_scripts.rnaseq_cgl.rnaseq_cgl_pipeline import generate_file
 
 # these don't seem necessary! but, must be imported here due to a serialization issue
 from toil_scripts.spark_utils.spawn_cluster import *
 
+from toil_scripts.lib.programs import mock_mode
+
 # import autoscaling tools
 from toil_scripts.adam_uberscript.automated_scaling import Samples
 
-def build_parser():
-
-    parser = argparse.ArgumentParser()
-
-    # add sample uuid
-    parser.add_argument('-U', '--uuid_manifest', required = False,
-                        help = 'Sample UUID.')
-
-    # optionally add suffix
-    parser.add_argument('--dir_suffix',
-                        help = 'Optional suffix to add to output directory names.',
-                        default = '')
-
-    # what pipeline are we running
-    parser.add_argument('-PR', '--pipeline_to_run',
-                        help = "Whether we should run 'adam', 'gatk', or 'both'. Default is 'both'.",
-                        default = 'both')
-    parser.add_argument('-SA', '--skip_alignment',
-                        help = "Skip alignment and start running from preprocessing.",
-                        action = 'store_true')
-    parser.add_argument('-SP', '--skip_preprocessing',
-                        help = "Skip preprocessing and start running from variant calling. Implies --skip_alignment.",
-                        action = 'store_true')
-
-    # what directory are our sequence files in?
-    parser.add_argument('-SD', '--sequence_dir',
-                        help = 'Directory where raw sequences are.',
-                        default = 'sequence')
-
-    # are we automatically scaling the cluster?
-    parser.add_argument('--autoscale_cluster', action='store_true', help = "Scales cluster during pipeline run")
-
-    # add bucket args
-    parser.add_argument('-3', '--s3_bucket', required = not mock_mode(),
-                        help = 'S3 Bucket URI')
-    parser.add_argument('-3r', '--bucket_region', default = "us-west-2",
-                        help = 'Region of the S3 bucket. Defaults to us-east-1.')
-
-    # add file size argument
-    parser.add_argument('-se', '--file_size', default = '100G',
-                        help = 'Approximate input file size. Should be given as %d[TGMK], e.g., '
-                               'for a 100 gigabyte file, use --file_size 100G')
-
-    # add bwa args
-    parser.add_argument('-r', '--ref', required = not mock_mode(),
-                        help = 'Reference fasta file')
-    parser.add_argument('-m', '--amb', required = not mock_mode(),
-                        help = 'Reference fasta file (amb)')
-    parser.add_argument('-n', '--ann', required = not mock_mode(),
-                        help = 'Reference fasta file (ann)')
-    parser.add_argument('-b', '--bwt', required = not mock_mode(),
-                        help = 'Reference fasta file (bwt)')
-    parser.add_argument('-p', '--pac', required = not mock_mode(),
-                        help = 'Reference fasta file (pac)')
-    parser.add_argument('-a', '--sa', required = not mock_mode(),
-                        help = 'Reference fasta file (sa)')
-    parser.add_argument('-f', '--fai', required = not mock_mode(),
-                        help = 'Reference fasta file (fai)')
-    parser.add_argument('-u', '--sudo', dest = 'sudo', action = 'store_true',
-                        help = 'Docker usually needs sudo to execute '
-                        'locally, but not''when running Mesos '
-                        'or when a member of a Docker group.')
-    parser.add_argument('-k', '--use_bwakit', action='store_true', help='Use bwakit instead of the binary build of bwa')
-    parser.add_argument('-t', '--alt', required=False, help='Alternate file for reference build (alt). Necessary for alt aware alignment.')
-    parser.set_defaults(sudo = False) 
-    parser.add_argument('--trim', action='store_true', help='Trim adapters during alignment.')
-
-    # add ADAM args
-    parser.add_argument('-N', '--num_nodes', type = int, required = False, default = None,
-                        help = 'Number of Toil nodes to allocate per Spark subcluster. Exclusive of --master_ip.')
-    parser.add_argument('-MI', '--master_ip', required = False, default = None,
-                        help ="IP or hostname of host running for Spark master and HDFS namenode. Should be provided "
-                              "if pointing at a static (external or standalone) Spark cluster. The special value "
-                              "'auto' indicates the master of standalone cluster, i.e. one that is managed by the "
-                              "uberscript.")
-    parser.add_argument('-d', '--driver_memory', required = not mock_mode(),
-                        help = 'Amount of memory to allocate for Spark Driver.')
-    parser.add_argument('-q', '--executor_memory', required = not mock_mode(),
-                        help = 'Amount of memory to allocate per Spark Executor.')
-
-    # add GATK args
-    parser.add_argument('-P', '--phase', required = not mock_mode(),
-                        help = '1000G_phase1.indels.b37.vcf URL')
-    parser.add_argument('-M', '--mills', required = not mock_mode(),
-                        help = 'Mills_and_1000G_gold_standard.indels.b37.vcf URL')
-    parser.add_argument('-s', '--dbsnp', required = not mock_mode(),
-                        help = 'dbsnp_137.b37.vcf URL')
-    parser.add_argument('-O', '--omni', required = not mock_mode(),
-                        help = '1000G_omni.5.b37.vcf URL')
-    parser.add_argument('-H', '--hapmap', required = not mock_mode(),
-                        help = 'hapmap_3.3.b37.vcf URL')
-
-    # return built parser
-    return parser
-
-
-def sample_loop(job,
-                bucket_region,
-                s3_bucket,
-                uuid_list,
-                bwa_inputs,
-                adam_inputs,
-                gatk_preprocess_inputs,
-                gatk_adam_call_inputs,
-                gatk_gatk_call_inputs,
-                pipeline_to_run,
-                skip_alignment,
-                skip_preprocessing,
-                autoscale_cluster,
-                sequence_dir,
-                dir_suffix):
+def sample_loop(job, uuid_list, inputs):
   """
   Loops over the sample_ids (uuids) in the manifest, creating child jobs to process each
   """
@@ -255,58 +149,14 @@ def sample_loop(job,
     if len(uuid_items) > 1:
         rg_line = uuid_items[1]
 
-    uuid_bwa_inputs = copy.deepcopy(bwa_inputs)
-    uuid_adam_inputs = copy.deepcopy(adam_inputs)
-    uuid_gatk_preprocess_inputs = copy.deepcopy(gatk_preprocess_inputs)
-    uuid_gatk_adam_call_inputs = copy.deepcopy(gatk_adam_call_inputs)
-    uuid_gatk_gatk_call_inputs = copy.deepcopy(gatk_gatk_call_inputs)
-
-    ## set uuid inputs
-    uuid_bwa_inputs['lb'] = uuid
-    uuid_bwa_inputs['uuid'] = uuid
-    uuid_bwa_inputs['rg_line'] = rg_line
-    uuid_adam_inputs['outDir'] = 's3://{s3_bucket}/analysis{dir_suffix}/{uuid}'.format(**locals())
-    uuid_adam_inputs['bamName'] = 's3://{s3_bucket}/alignment{dir_suffix}/{uuid}.bam'.format(**locals())
-    uuid_gatk_preprocess_inputs['s3_dir'] = '{s3_bucket}/analysis{dir_suffix}/{uuid}'.format(**locals())
-    uuid_gatk_adam_call_inputs['s3_dir'] = '{s3_bucket}/analysis{dir_suffix}/{uuid}'.format(**locals())
-    uuid_gatk_gatk_call_inputs['s3_dir'] = '{s3_bucket}/analysis{dir_suffix}/{uuid}'.format(**locals())
-
     # are we autoscaling? if so, bump the cluster size by one now
-    if autoscale_cluster:
+    if inputs.autoscale_cluster:
         Samples.increase_nodes(uuid, 1)
 
-    job.addChildJobFn(static_dag,
-                      bucket_region,
-                      s3_bucket,
-                      uuid,
-                      uuid_bwa_inputs,
-                      uuid_adam_inputs,
-                      uuid_gatk_preprocess_inputs,
-                      uuid_gatk_adam_call_inputs,
-                      uuid_gatk_gatk_call_inputs,
-                      pipeline_to_run,
-                      skip_alignment,
-                      skip_preprocessing,
-                      autoscale_cluster,
-                      sequence_dir,
-                      dir_suffix)
+    job.addChildJobFn(static_dag, uuid, rg_line, inputs)
 
 
-def static_dag(job,
-               bucket_region,
-               s3_bucket,
-               uuid,
-               bwa_inputs,
-               adam_inputs,
-               gatk_preprocess_inputs,
-               gatk_adam_call_inputs,
-               gatk_gatk_call_inputs,
-               pipeline_to_run,
-               skip_alignment,
-               skip_preprocessing,
-               autoscale_cluster,
-               sequence_dir,
-               dir_suffix):
+def static_dag(job, uuid, rg_line, inputs):
     """
     Prefer this here as it allows us to pull the job functions from other jobs
     without rewrapping the job functions back together.
@@ -321,68 +171,53 @@ def static_dag(job,
     # get work directory
     work_dir = job.fileStore.getLocalTempDir()
 
-    # what region is our bucket in?
-    if bucket_region == "us-east-1":
-        bucket_region = ""
-    else:
-        bucket_region = "-%s" % bucket_region
-
-    # write config for bwa
-    bwa_config_path = os.path.join(work_dir, '{uuid}_bwa_config.csv'.format(**locals()))
-    bwafp = open(bwa_config_path, "w")
-    print >> bwafp, ('{uuid}'
-                     ',s3://{s3_bucket}/{sequence_dir}/{uuid}_1.fastq.gz'
-                     ',s3://{s3_bucket}/{sequence_dir}/{uuid}_2.fastq.gz'.format(**locals()))
-    bwafp.flush()
-    bwafp.close()
-    bwa_inputs['config'] = job.fileStore.writeGlobalFile(bwa_config_path)
-
-    # write config for GATK preprocessing
-    gatk_preprocess_config_path = os.path.join(work_dir, '{uuid}_gatk_preprocess_config.csv'.format(**locals()))
-    gatk_preprocess_fp = open(gatk_preprocess_config_path, "w")
-    print >> gatk_preprocess_fp, '{uuid},s3://{s3_bucket}/alignment{dir_suffix}/{uuid}.bam'.format(**locals())
-    gatk_preprocess_fp.flush()
-    gatk_preprocess_fp.close()
-    gatk_preprocess_inputs['cpu_count'] = multiprocessing.cpu_count()
-    gatk_preprocess_inputs['config'] = job.fileStore.writeGlobalFile(gatk_preprocess_config_path)
-
-    # write config for GATK haplotype caller for the result of ADAM preprocessing
-    gatk_adam_call_config_path = os.path.join(work_dir, '{uuid}_gatk_adam_call_config.csv'.format(**locals()))
-    gatk_adam_call_fp = open(gatk_adam_call_config_path, "w")
-    print >> gatk_adam_call_fp, '{uuid},s3://{s3_bucket}/analysis{dir_suffix}/{uuid}/{uuid}.adam.bam'.format(**locals())
-    gatk_adam_call_fp.flush()
-    gatk_adam_call_fp.close()
-    gatk_adam_call_inputs['cpu_count'] = multiprocessing.cpu_count()
-    gatk_adam_call_inputs['config'] = job.fileStore.writeGlobalFile(gatk_adam_call_config_path)
-
-    # write config for GATK haplotype caller for the result of GATK preprocessing
-    gatk_gatk_call_config_path = os.path.join(work_dir, '{uuid}_gatk_gatk_call_config.csv'.format(**locals()))
-    gatk_gatk_call_fp = open(gatk_gatk_call_config_path, "w")
-    print >> gatk_gatk_call_fp, '{uuid},s3://{s3_bucket}/analysis{dir_suffix}/{uuid}/{uuid}.gatk.bam'.format(**locals())
-    gatk_gatk_call_fp.flush()
-    gatk_gatk_call_fp.close()
-    gatk_gatk_call_inputs['cpu_count'] = multiprocessing.cpu_count()
-    gatk_gatk_call_inputs['config'] = job.fileStore.writeGlobalFile(gatk_gatk_call_config_path)
+    inputs.cpu_count = cpu_count()
+    args = {'uuid': uuid,
+            's3_bucket': inputs.s3_bucket,
+            'sequence_dir': inputs.sequence_dir,
+            'dir_suffix': inputs.dir_suffix}
 
     # get head BWA alignment job function and encapsulate it
     bwa = job.wrapJobFn(download_shared_files,
-                        bwa_inputs).encapsulate()
+                        inputs,
+                        [uuid,
+                         's3://{s3_bucket}/{sequence_dir}/{uuid}_1.fastq.gz'.format(**args),
+                         's3://{s3_bucket}/{sequence_dir}/{uuid}_2.fastq.gz'.format(**args)],
+                        's3://{s3_bucket}/alignment{dir_suffix}'.format(**args),
+                        rg_line).encapsulate()
 
     # get head ADAM preprocessing job function and encapsulate it
     adam_preprocess = job.wrapJobFn(static_adam_preprocessing_dag,
-                                    adam_inputs).encapsulate()
+                                    inputs,
+                                    's3://{s3_bucket}/alignment{dir_suffix}/{uuid}.bam'.format(**args),
+                                    's3://{s3_bucket}/analysis{dir_suffix}/{uuid}'.format(**args),
+                                    suffix='.adam').encapsulate()
 
     # get head GATK preprocessing job function and encapsulate it
     gatk_preprocess = job.wrapJobFn(download_gatk_files,
-                                    gatk_preprocess_inputs).encapsulate()
+                                    inputs,
+                                    [uuid,'s3://{s3_bucket}/alignment{dir_suffix}/{uuid}.bam'.format(**args)],
+                                    's3://{s3_bucket}/analysis{dir_suffix}/{uuid}'.format(**args),
+                                    suffix='.gatk').encapsulate()
+
+    adam_call_inputs = inputs
+    gatk_call_inputs = copy.deepcopy(inputs)
+    adam_call_inputs.indexed = False
+    gatk_call_inputs.indexed = True
 
     # get head GATK haplotype caller job function for the result of ADAM preprocessing and encapsulate it
     gatk_adam_call = job.wrapJobFn(batch_start,
-                                   gatk_adam_call_inputs).encapsulate()
+                                   adam_call_inputs,
+                                   [uuid,'s3://{s3_bucket}/analysis{dir_suffix}/{uuid}/{uuid}.adam.bam'.format(**args)],
+                                   's3://{s3_bucket}/analysis{dir_suffix}/{uuid}'.format(**args),
+                                   suffix='.adam').encapsulate()
 
     # get head GATK haplotype caller job function for the result of GATK preprocessing and encapsulate it
     gatk_gatk_call = job.wrapJobFn(batch_start,
-                                   gatk_gatk_call_inputs).encapsulate()
+                                   gatk_call_inputs,
+                                   [uuid,'s3://{s3_bucket}/analysis{dir_suffix}/{uuid}/{uuid}.gatk.bam'.format(**args)],
+                                   's3://{s3_bucket}/analysis{dir_suffix}/{uuid}'.format(**args),
+                                   suffix='.gatk').encapsulate()
 
     # add code to bump the number of jobs after alignment
     # start with -1 since we already have a single node for our sample
@@ -392,35 +227,36 @@ def static_dag(job,
     # - a spark driver
     # - a spark master/hdfs namenode
     # - _n_ spark workers/hdfs datanodes
-    if (pipeline_to_run == "adam" or
-        pipeline_to_run == "both"):
-        if adam_inputs['masterIP']:
+    if (inputs.pipeline_to_run == "adam" or
+        inputs.pipeline_to_run == "both"):
+        if inputs.master_ip:
             nodes_needed_after_alignment += 1
         else:
-            nodes_needed_after_alignment += (adam_inputs['numWorkers'] + 2)
+            nodes_needed_after_alignment += (inputs.num_nodes + 1)
 
     # gatk needs one node
-    if (pipeline_to_run == "gatk" or
-        pipeline_to_run == "both"):
+    if (inputs.pipeline_to_run == "gatk" or
+        inputs.pipeline_to_run == "both"):
         nodes_needed_after_alignment += 1
-
-    # create a job that runs after alignment and increases the number of nodes in the system
-    increase_nodes_after_alignment = job.wrapJobFn(increase_node_count,
-                                                   nodes_needed_after_alignment - 1,
-                                                   uuid)
 
     # since we evaluate this conditional repeatedly, just calculate it once
     # we should only schedule the job that increases the node count if we
     # are using autoscaling _and_ we are increasing the node count
-    autoscale_after_alignment = (nodes_needed_after_alignment > 1) and autoscale_cluster
+    autoscale_after_alignment = (nodes_needed_after_alignment > 1) and inputs.autoscale_cluster
 
-    # create a job that runs after ADAM's preprocessing to decrease the number of nodes
-    decrease_nodes_after_adam_preprocess = job.wrapJobFn(decrease_node_count,
-                                                         adam_inputs['numWorkers'] + 1,
-                                                         uuid)
+    if autoscale_after_alignment:
+        # create a job that runs after alignment and increases the number of nodes in the system
+        increase_nodes_after_alignment = job.wrapJobFn(increase_node_count,
+                                                       nodes_needed_after_alignment - 1,
+                                                       uuid)
+
+        # create a job that runs after ADAM's preprocessing to decrease the number of nodes
+        decrease_nodes_after_adam_preprocess = job.wrapJobFn(decrease_node_count,
+                                                             inputs.num_nodes,
+                                                             uuid)
 
     # wire up dag
-    if not skip_alignment:
+    if not inputs.skip_alignment:
         job.addChild(bwa)
 
         if autoscale_after_alignment:
@@ -428,10 +264,10 @@ def static_dag(job,
     elif autoscale_after_alignment:
         job.addChild(increase_nodes_after_alignment)
 
-    if (pipeline_to_run == "adam" or
-        pipeline_to_run == "both"):
+    if (inputs.pipeline_to_run == "adam" or
+        inputs.pipeline_to_run == "both"):
 
-        if skip_preprocessing:
+        if inputs.skip_preprocessing:
 
             # TODO: currently, we don't support autoscaling if you're just
             # running variant calling
@@ -439,23 +275,23 @@ def static_dag(job,
         else:
             if autoscale_after_alignment:
                 increase_nodes_after_alignment.addChild(adam_preprocess)
-            elif skip_alignment:
+            elif inputs.skip_alignment:
                 job.addChild(adam_preprocess)
             else:
                 bwa.addChild(adam_preprocess)
 
             # if we are running autoscaling, then we should decrease the cluster
             # size after adam completes
-            if autoscale_cluster and not adam_inputs['masterIP']:
+            if inputs.autoscale_cluster and not inputs.master_ip:
                 adam_preprocess.addChild(decrease_nodes_after_adam_preprocess)
                 decrease_nodes_after_adam_preprocess.addChild(gatk_adam_call)
             else:
                 adam_preprocess.addChild(gatk_adam_call)
 
-    if (pipeline_to_run == "gatk" or
-        pipeline_to_run == "both"):
+    if (inputs.pipeline_to_run == "gatk" or
+        inputs.pipeline_to_run == "both"):
 
-        if skip_preprocessing:
+        if inputs.skip_preprocessing:
 
             # TODO: currently, we don't support autoscaling if you're just
             # running variant calling
@@ -463,7 +299,7 @@ def static_dag(job,
         else:
             if autoscale_after_alignment:
                 increase_nodes_after_alignment.addChild(gatk_preprocess)
-            elif skip_alignment:
+            elif inputs.skip_alignment:
                 job.addChild(gatk_preprocess)
             else:
                 bwa.addChild(gatk_preprocess)
@@ -480,119 +316,196 @@ def decrease_node_count(job, nodes_to_add, uuid):
 
     Samples.decrease_nodes(uuid, nodes_to_add)
 
+def generate_mock_config():
 
-if __name__ == '__main__':
+    return textwrap.dedent(""" 
+        # ADAM/GATK Pipeline configuration file
+        # This configuration file is formatted in YAML. Simply write the value (at least one space) after the colon.
+        # Edit the values in this configuration file and then rerun the pipeline.
+        # This configuration file is pre-filled for use in MOCK MODE
+        ##############################################################################################################  
+        # MOCK INPUTS
+        pipeline-to-run: both
+        skip-alignment: False
+        skip-preprocessing: False
+        sequence-dir: sequence
+        autoscale-cluster: False
+        s3-bucket: adam-gatk-pipeline-mock-files
+        cpu-count:
+        program-unit: 12345
+        platform: ILLUMINA
+        ref: https://s3-us-west-2.amazonaws.com/adam-gatk-pipeline-mock-files/mock-pipeline-inputs/mock_ref.fa
+        amb: https://s3-us-west-2.amazonaws.com/adam-gatk-pipeline-mock-files/mock-pipeline-inputs/mock_ref.fa.amb
+        ann: https://s3-us-west-2.amazonaws.com/adam-gatk-pipeline-mock-files/mock-pipeline-inputs/mock_ref.fa.ann
+        bwt: https://s3-us-west-2.amazonaws.com/adam-gatk-pipeline-mock-files/mock-pipeline-inputs/mock_ref.fa.bwt
+        pac: https://s3-us-west-2.amazonaws.com/adam-gatk-pipeline-mock-files/mock-pipeline-inputs/mock_ref.fa.pac
+        sa: https://s3-us-west-2.amazonaws.com/adam-gatk-pipeline-mock-files/mock-pipeline-inputs/mock_ref.fa.sa
+        fai: https://s3-us-west-2.amazonaws.com/adam-gatk-pipeline-mock-files/mock-pipeline-inputs/mock_ref.fa.fai
+        alt: https://s3-us-west-2.amazonaws.com/adam-gatk-pipeline-mock-files/mock-pipeline-inputs/mock_ref.fa.alt
+        phase: https://s3-us-west-2.amazonaws.com/adam-gatk-pipeline-mock-files/mock-pipeline-inputs/mock_phase.vcf
+        mills: https://s3-us-west-2.amazonaws.com/adam-gatk-pipeline-mock-files/mock-pipeline-inputs/mock_mills.vcf
+        dbsnp: s3://adam-gatk-pipeline-mock-files/mock-pipeline-inputs/bqsr1.vcf
+        omni: https://s3-us-west-2.amazonaws.com/adam-gatk-pipeline-mock-files/mock-pipeline-inputs/mock_omni.vcf
+        hapmap: https://s3-us-west-2.amazonaws.com/adam-gatk-pipeline-mock-files/mock-pipeline-inputs/mock_hapmap.vcf
+        trim-adapters: False
+        file-size: 10M
+        s3-bucket: adam-gatk-pipeline-mock-files
+        memory: 2
+        dir-suffix: /mock
+        num-nodes: #3
+        master-ip: spark-master
+        ssec:
+    """[1:])
 
-    args_parser = build_parser()
-    Job.Runner.addToilOptions(args_parser)
-    args = args_parser.parse_args()
 
+def generate_config():
     if mock_mode():
-        from mock_inputs import mock_inputs
-        for k,v in mock_inputs.iteritems():
-            setattr(args, k, v)
+        return generate_mock_config()
 
-    ## Parse manifest file
-    uuid_list = []
-    with open(args.uuid_manifest) as f_manifest:
-      for uuid in f_manifest:
-        uuid_list.append(uuid.strip())
+    return textwrap.dedent("""
+        # ADAM/GATK Pipeline configuration file
+        # This configuration file is formatted in YAML. Simply write the value (at least one space) after the colon.
+        # Edit the values in this configuration file and then rerun the pipeline
+        # Comments (beginning with #) do not need to be removed. Optional parameters may be left blank.
+        ##############################################################################################################
+        pipeline-to-run: both     #
+        skip-alignment: False     #
+        skip-preprocessing: False #
+        sequence-dir: sequence    #
+        autoscale-cluster: False  #
+        s3-bucket:                # S3 Bucket URI
+        cpu-count:                # Optional:
+        program-unit: 12345       #
+        platform: ILLUMINA        #
+        ref:                      # Required: Reference fasta file
+        amb:                      # Required: Reference fasta file (amb)
+        ann:                      # Required: Reference fasta file (ann)
+        bwt:                      # Required: Reference fasta file (bwt)
+        pac:                      # Required: Reference fasta file (pac)
+        sa:                       # Required: Reference fasta file (sa)
+        fai:                      # Required: Reference fasta file (fai)
+        alt:                      # Optional: Alternate file for reference build (alt). Necessary for alt aware alignment.
+        phase:                    # Required: URL (1000G_phase1.indels.hg19.sites.fixed.vcf)
+        mills:                    # Required: URL (Mills_and_1000G_gold_standard.indels.hg19.sites.vcf)
+        dbsnp:                    # Required: URL (dbsnp_132_b37.leftAligned.vcf)
+        hapmap:                   # Required: URL (hapmap_3.3.b37.vcf)
+        omni:                     # Required: URL (1000G_omni.5.b37.vcf)
+        trim-adapters: False      # Trim adapters.
+        num-nodes: 9              # Number of nodes to use. Do not set if providing master_ip.
+        master-ip:                # Optional: IP or hostname of host running for Spark master and HDFS namenode.
+                                  # Should be provided instead of num-nodes if pointing at a static (external or
+                                  # standalone) Spark cluster. The special value 'auto' indicates the master of
+                                  # an externally autoscaled cgcloud spark cluster, i.e. one that is managed by
+                                  # the uberscript.
+        file-size: 100G           # Approximate input file size. Should be given as %d[TGMK], e.g.,
+                                  # for a 100 gigabyte file, use file_size: '100G'
+        ssec:                     # Optional: (string) Path to Key File for SSE-C Encryption
+        dir-suffix:               # Optional: suffix to add to output directory names.
+        memory:                   # Required: Amount of available memory on each worker node.                                   
+    """[1:])
 
-    bwa_inputs = {'ref.fa': args.ref,
-                  'ref.fa.amb': args.amb,
-                  'ref.fa.ann': args.ann,
-                  'ref.fa.bwt': args.bwt,
-                  'ref.fa.pac': args.pac,
-                  'ref.fa.sa': args.sa,
-                  'ref.fa.fai': args.fai,
-                  'ref.fa.alt': args.alt,
-                  'ssec': None,
-                  'output_dir': None,
-                  'sudo': args.sudo,
-                  's3_dir': "%s/alignment%s" % (args.s3_bucket, args.dir_suffix),
-                  'cpu_count': None,
-                  'file_size': args.file_size,
-                  'use_bwakit': args.use_bwakit,
-                  'sort': False,
-                  'trim': args.trim}
 
-    if bool(args.master_ip) == bool(args.num_nodes):
-        raise ValueError("Exactly one of --master_ip (%s) and --num_nodes (%d) must be provided." %
-                         (args.master_ip, args.num_nodes))
+def generate_mock_manifest():
+    return textwrap.dedent("""
+        # This manifest was generated for use in MOCK MODE
+        mouse_chrM_a
+        mouse_chrM_b
+        """[1:])
 
-    if args.num_nodes <= 1 and not args.master_ip:
-        raise ValueError("--num_nodes allocates one Spark/HDFS master and n-1 workers, and thus must be greater than 1. %d was passed." %
-                         args.num_nodes)
+def generate_manifest():
+    if mock_mode():
+        return generate_mock_manifest()
+    return textwrap.dedent("""
+        #   Edit this manifest to include information pertaining to each sample to be run.
+        #   There is a single column: UUID
+        #
+        #   UUID        This should be a unique identifier for the sample to be processed that corresponds to 
+        #               the prefix of the filenames of the input fastq files.
+        #   
+        #   Example:
+        #   If your input fastq file pairs were input_file_name_1.illumina_1.fastq.gz, input_file_name_1.illumina_2.fastq.gz and 
+        #   input_file_name_2.illumina_1.fastq.gz, input_file_name_2.illumina_2.fastq.gz, the manifest would be:
+        #
+        #   input_file_name_1.illumina
+        #   input_file_name_2.illumina   
+        #
+        #   Input fastq files MUST be named according to the filename_1.fastq.gz, filename_2.fastq.gz convention
+        #
+        #   Place your samples below, one per line.
+        """[1:])
 
-    adam_inputs = {'numWorkers': args.num_nodes - 1,
-                   'knownSNPs':  args.dbsnp.replace("https://s3-us-west-2.amazonaws.com/", "s3://"),
-                   'driverMemory': args.driver_memory,
-                   'executorMemory': args.executor_memory,
-                   'sudo': args.sudo,
-                   'suffix': '.adam',
-                   'masterIP': args.master_ip}
 
-    gatk_preprocess_inputs = {'ref.fa': args.ref,
-                              'phase.vcf': args.phase,
-                              'mills.vcf': args.mills,
-                              'dbsnp.vcf': args.dbsnp,
-                              'output_dir': None,
-                              'sudo': args.sudo,
-                              'ssec': None,
-                              'cpu_count': None,
-                              'suffix': '.gatk',
-                              'memory': args.executor_memory}
+def main():
+    """
+    This is a Toil pipeline used to perform alignment of fastqs.
+    """
+    # Define Parser object and add to Toil
+    if mock_mode():
+        usage_msg = 'You have the TOIL_SCRIPTS_MOCK_MODE environment variable set, so this pipeline ' \
+                    'will run in mock mode. To disable mock mode, set TOIL_SCRIPTS_MOCK_MODE=0'
+    else:
+        usage_msg = None
 
-    gatk_adam_call_inputs = {'ref.fa': args.ref,
-                             'phase.vcf': args.phase,
-                             'mills.vcf': args.mills,
-                             'dbsnp.vcf': args.dbsnp,
-                             'hapmap.vcf': args.hapmap,
-                             'omni.vcf': args.omni,
-                             'output_dir': None,
-                             'uuid': None,
-                             'cpu_count': None,
-                             'ssec': None,
-                             'file_size': args.file_size,
-                             'suffix': '.adam',
-                             'indexed': False,
-                             'sudo': args.sudo,
-                             'memory': args.executor_memory}
+    parser = argparse.ArgumentParser(usage=usage_msg)
+    subparsers = parser.add_subparsers(dest='command')
+    subparsers.add_parser('generate-config', help='Generates an editable config in the current working directory.')
+    subparsers.add_parser('generate-manifest', help='Generates an editable manifest in the current working directory.')
+    subparsers.add_parser('generate', help='Generates a config and manifest in the current working directory.')
+    # Run subparser                                                                                                              
+    parser_run = subparsers.add_parser('run', help='Runs the ADAM/GATK pipeline')
+    default_config = 'adam-gatk-mock.config' if mock_mode() else 'adam-gatk.config'
+    default_manifest = 'adam-gatk-mock-manifest.csv' if mock_mode() else 'adam-gatk-manifest.csv'
+    parser_run.add_argument('--config', default=default_config, type=str,
+                            help='Path to the (filled in) config file, generated with "generate-config".')
+    parser_run.add_argument('--manifest', default=default_manifest,
+                            type=str, help='Path to the (filled in) manifest file, generated with "generate-manifest". '
+                                           '\nDefault value: "%(default)s".')
+    Job.Runner.addToilOptions(parser_run)
+    args = parser.parse_args()
 
-    gatk_gatk_call_inputs = {'ref.fa': args.ref,
-                             'phase.vcf': args.phase,
-                             'mills.vcf': args.mills,
-                             'dbsnp.vcf': args.dbsnp,
-                             'hapmap.vcf': args.hapmap,
-                             'omni.vcf': args.omni,
-                             'output_dir': None,
-                             'uuid': None,
-                             'cpu_count': None,
-                             'ssec': None,
-                             'file_size': args.file_size,
-                             'suffix': '.gatk',
-                             'indexed': True,
-                             'sudo': args.sudo,
-                             'memory': args.executor_memory,
-                             'sudo': args.sudo}
+    cwd = os.getcwd()
+    if args.command == 'generate-config' or args.command == 'generate':
+        generate_file(os.path.join(cwd, default_config), generate_config)
+    if args.command == 'generate-manifest' or args.command == 'generate':
+        generate_file(os.path.join(cwd, default_manifest), generate_manifest)
+    # Pipeline execution
+    elif args.command == 'run':
+        require(os.path.exists(args.config), '{} not found. Please run '
+                                             'generate-config'.format(args.config))
+        if not hasattr(args, 'sample'):
+            require(os.path.exists(args.manifest), '{} not found and no samples provided. Please '
+                                                   'run "generate-manifest"'.format(args.manifest))
+        # Parse config
+        parsed_config = {x.replace('-', '_'): y for x, y in yaml.load(open(args.config).read()).iteritems()}
+        inputs = argparse.Namespace(**parsed_config)
 
-    if (args.pipeline_to_run != "adam" and
-        args.pipeline_to_run != "gatk" and
-        args.pipeline_to_run != "both"):
-        raise ValueError("--pipeline_to_run must be either 'adam', 'gatk', or 'both'. %s was passed." % args.pipeline_to_run)
+        # Parse manifest file
+        uuid_list = []
+        with open(args.manifest) as f_manifest:
+            for line in f_manifest:
+                if not line.isspace() and not line.startswith('#'):
+                    uuid_list.append(line.strip())
 
-    Job.Runner.startToil(Job.wrapJobFn(sample_loop,
-                                       args.bucket_region,
-                                       args.s3_bucket,
-                                       uuid_list,
-                                       bwa_inputs,
-                                       adam_inputs,
-                                       gatk_preprocess_inputs,
-                                       gatk_adam_call_inputs,
-                                       gatk_gatk_call_inputs,
-                                       args.pipeline_to_run,
-                                       args.skip_alignment,
-                                       args.skip_preprocessing,
-                                       args.autoscale_cluster,
-                                       args.sequence_dir,
-                                       args.dir_suffix), args)
+        inputs.sort = False
+        if not inputs.dir_suffix:
+            inputs.dir_suffix = ''
+        if not inputs.s3_bucket:
+            inputs.s3_bucket = ''
+
+        if inputs.master_ip and inputs.num_nodes:
+            raise ValueError("Exactly one of master_ip (%s) and num_nodes (%d) must be provided." %
+                             (inputs.master_ip, inputs.num_nodes))
+
+        if not hasattr(inputs, 'master_ip') and inputs.num_nodes <= 1:
+            raise ValueError('num_nodes allocates one Spark/HDFS master and n-1 workers, and thus must be greater '
+                             'than 1. %d was passed.' % inputs.num_nodes)
+
+        if (inputs.pipeline_to_run != "adam" and
+            inputs.pipeline_to_run != "gatk" and
+            inputs.pipeline_to_run != "both"):
+            raise ValueError("pipeline_to_run must be either 'adam', 'gatk', or 'both'. %s was passed." % inputs.pipeline_to_run)
+
+        Job.Runner.startToil(Job.wrapJobFn(sample_loop, uuid_list, inputs), args)
+
+if __name__=="__main__":
+    main()

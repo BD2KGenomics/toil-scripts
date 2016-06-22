@@ -29,36 +29,24 @@ docker          - apt-get install docker (or 'docker.io' for linux)
 toil            - pip install --pre toil
 """
 from __future__ import print_function
+
 import argparse
 import errno
-import shutil
-import os
-import subprocess
 import multiprocessing
+import os
+import shutil
+import subprocess
 import sys
+import textwrap
 from collections import OrderedDict
+
+import yaml
 from toil.job import Job
-
 from toil_scripts import download_from_s3_url
-from toil_scripts.lib.urls import s3am_upload
+from toil_scripts.lib import require
 from toil_scripts.lib.programs import docker_call
-
-def build_parser():
-    """
-    Create parser object containing necessary input files
-    """
-    parser = argparse.ArgumentParser()
-    parser.add_argument('-r', '--reference', required=True, help="Reference Genome URL")
-    parser.add_argument('-f', '--config', required=True, help="Each line contains (CSV): UUID,Normal_URL,Tumor_URL")
-    parser.add_argument('-p', '--phase', required=True, help='1000G_phase1.indels.b37.vcf URL')
-    parser.add_argument('-m', '--mills', required=True, help='Mills_and_1000G_gold_standard.indels.b37.vcf URL')
-    parser.add_argument('-d', '--dbsnp', required=True, help='dbsnp_137.b37.vcf URL')
-    parser.add_argument('-n', '--omni', required=True, help='1000G_omni.5.b37.vcf URL')
-    parser.add_argument('-t', '--hapmap', required=True, help='hapmap_3.3.b37.vcf URL')
-    parser.add_argument('-o', '--output_dir', default="./data", help='Full path to final output dir')
-    parser.add_argument('-se', '--file_size', default='100G', help='Approximate input file size. Should be given as %d[TGMK], e.g., for a 100 gigabyte file, use --file_size 100G')
-    parser.add_argument('-x', '--suffix', default="", help='additional suffix, if any')
-    return parser
+from toil_scripts.lib.urls import s3am_upload
+from toil_scripts.rnaseq_cgl.rnaseq_cgl_pipeline import generate_file
 
 
 # Convenience functions used in the pipeline
@@ -171,7 +159,7 @@ def move_to_output_dir(work_dir, output_dir, *filenames):
         shutil.move(origin, dest)
 
 
-def batch_start(job, input_args):
+def batch_start(job, input_args, sample, output_dir, suffix=''):
     """ 
     Downloads reference data and stores fileStore promises,
     spawns next step in pipeline - reference indexing
@@ -181,10 +169,14 @@ def batch_start(job, input_args):
 
     :returns: None
     """
-    shared_files = ['ref.fa', 'phase.vcf', 'omni.vcf', 'dbsnp.vcf', 'hapmap.vcf', 'mills.vcf']
+    input_args.sample = sample
+    input_args.output_dir = output_dir
+    input_args.suffix = suffix
+    shared_file_names = ['phase.vcf', 'omni.vcf', 'dbsnp.vcf', 'hapmap.vcf', 'mills.vcf']
+    shared_files = [input_args.phase, input_args.omni, input_args.dbsnp, input_args.hapmap, input_args.mills]
     shared_ids = {}
-    for file_name in shared_files:
-        url = input_args[file_name]
+    shared_ids['ref.fa'] = job.addChildJobFn(download_url, input_args.ref, 'ref.fa').rv()
+    for file_name,url in zip(shared_file_names, shared_files):
         shared_ids[file_name] = job.addChildJobFn(download_url, url, file_name).rv()
     job.addFollowOnJobFn(create_reference_index_hc, shared_ids, input_args)
 
@@ -212,8 +204,7 @@ def create_reference_index_hc(job, shared_ids, input_args):
                 parameters = faidx_command,
                 tool = 'quay.io/ucsc_cgl/samtools',
                 inputs=inputs,
-                outputs=outputs,
-                sudo = input_args['sudo'])
+                outputs=outputs)
     # Update fileStore for output
     shared_ids['ref.fa.fai'] = job.fileStore.writeGlobalFile(faidx_output)
     job.addChildJobFn(create_reference_dict_hc, shared_ids, input_args)
@@ -239,12 +230,11 @@ def create_reference_dict_hc(job, shared_ids, input_args):
     inputs=['ref.fa']
     outputs={picard_output: None}
     docker_call(work_dir = work_dir,
-                env={'JAVA_OPTS':'-Xmx%sg' % input_args['memory']},
+                env={'JAVA_OPTS':'-Xmx%sg' % input_args.memory},
                 parameters = command,
                 tool = 'quay.io/ucsc_cgl/picardtools',
                 inputs=inputs,
-                outputs=outputs,
-                sudo = input_args['sudo'])
+                outputs=outputs)
     # Update fileStore for output
     shared_ids['ref.dict'] = job.fileStore.writeGlobalFile(picard_output)
     job.addChildJobFn(spawn_batch_variant_calling, shared_ids, input_args)
@@ -258,22 +248,28 @@ def spawn_batch_variant_calling(job, shared_ids, input_args):
     :param shared_ids: dictionary of shared file promises
     :param input_args: dictionary of input arguments
     """
-    # Names for every input file used in the pipeline by each sample
-    samples = []
-    config = input_args['config']
 
-    # does the config file exist locally? if not, try to read from job store
-    if not os.path.exists(config):
+    if input_args.sample:
+        samples = [input_args.sample]
+    else:
+        # Names for every input file used in the pipeline by each sample
+        samples = []
 
-        work_dir = job.fileStore.getLocalTempDir()
-        config_path = os.path.join(work_dir, 'config.txt')
-        job.fileStore.readGlobalFile(config, config_path)
-        config = config_path
+        # does the config file exist locally? if not, try to read from job store
+        if not os.path.exists(input_args.manifest):
+            work_dir = job.fileStore.getLocalTempDir()
+            samples_path = os.path.join(work_dir, 'config.txt')
+            job.fileStore.readGlobalFile(input_args.manifest, samples_path)
+            samples_file = samples_path
+        else:
+            samples_file = input_args.manifest
 
-    with open(config, 'r') as f:
-        for line in f.readlines():
-            if not line.isspace():
-                samples.append(line.strip().split(','))
+        with open(samples_file, 'r') as f:
+            for line in f.readlines():
+                if not line.isspace() and not line.startswith('#'):
+                    samples.append(line.strip().split('\t'))
+
+
     for sample in samples:
         job.addChildJobFn(start, shared_ids, input_args, sample)
 
@@ -291,21 +287,21 @@ def start(job, shared_ids, input_args, sample):
     uuid, url = sample
     ids = shared_ids.copy()
     # Update input
-    input_args['uuid'] = uuid
+    input_args.uuid = uuid
     # Sample bam file holds a url?
-    input_args['bam_url'] = url
+    input_args.bam_url = url
 
-    if input_args['output_dir']:
-        input_args['output_dir'] = os.path.join(input_args['output_dir'], uuid)
+    if not input_args.output_dir.startswith('s3://'):
+        output_dir = os.path.join(input_args.output_dir, uuid)
 
-    if input_args['ssec'] is None:
+    if input_args.ssec is None:
         ids['toil.bam'] = job.addChildJobFn(download_url, url, 'toil.bam').rv()
     else:
         pass
 
-    if input_args['indexed']:
+    if input_args.indexed:
         ids['toil.bam.bai'] = job.addChildJobFn(download_url, "%s.bai" % url, 'toil.bam.bai').rv()
-        job.addFollowOnJobFn(haplotype_caller, ids, input_args, cores = input_args['cpu_count'])
+        job.addFollowOnJobFn(haplotype_caller, ids, input_args, cores = input_args.cpu_count)
     else:
         job.addFollowOnJobFn(index, ids, input_args)
 
@@ -320,7 +316,6 @@ def index(job, shared_ids, input_args):
     """
     work_dir = job.fileStore.getLocalTempDir()
     # Retrieve file path
-    # FIXME: unused variable
     bam_path = return_input_paths(job, work_dir, shared_ids, 'toil.bam')
     output_path = os.path.join(work_dir, 'toil.bam.bai')
     # Call: index the normal.bam
@@ -331,11 +326,10 @@ def index(job, shared_ids, input_args):
                 parameters = parameters,
                 tool = 'quay.io/ucsc_cgl/samtools',
                 inputs=inputs,
-                outputs=outputs,
-                sudo = input_args['sudo'])
+                outputs=outputs)
     # Update FileStore and call child
     shared_ids['toil.bam.bai'] = job.fileStore.writeGlobalFile(output_path)
-    job.addChildJobFn(haplotype_caller, shared_ids, input_args, cores = input_args['cpu_count'])
+    job.addChildJobFn(haplotype_caller, shared_ids, input_args, cores = input_args.cpu_count)
 
 
 def haplotype_caller(job, shared_ids, input_args):
@@ -350,12 +344,11 @@ def haplotype_caller(job, shared_ids, input_args):
     work_dir = job.fileStore.getLocalTempDir()
     input_files = ['ref.fa', 'ref.fa.fai', 'ref.dict', 'toil.bam', 'toil.bam.bai']
     read_from_filestore_hc(job, work_dir, shared_ids, *input_files)
-    output = '%s.raw.BOTH%s.gvcf' % (input_args['uuid'],
-                                     input_args['suffix'])
-    
+    output = '%s.raw.BOTH%s.gvcf' % (input_args.uuid, input_args.suffix)
+
     # Call GATK -- HaplotypeCaller
     command = ['-U', 'ALLOW_SEQ_DICT_INCOMPATIBILITY', # RISKY! (?) See #189
-               '-nct', str(input_args['cpu_count']),
+               '-nct', str(input_args.cpu_count),
                '-R', 'ref.fa',
                '-T', 'HaplotypeCaller',
                '--genotyping_mode', 'Discovery',
@@ -372,12 +365,11 @@ def haplotype_caller(job, shared_ids, input_args):
         inputs=input_files
         outputs={output: None}
         docker_call(work_dir = work_dir,
-                    env={'JAVA_OPTS':'-Xmx%sg' % input_args['memory']},
+                    env={'JAVA_OPTS':'-Xmx%sg' % input_args.memory},
                     parameters = command,
                     tool = 'quay.io/ucsc_cgl/gatk:3.5--dba6dae49156168a909c43330350c6161dc7ecc2',
                     inputs=inputs,
-                    outputs=outputs,
-                    sudo = input_args['sudo'])
+                    outputs=outputs)
     except:
         sys.stderr.write("Running haplotype caller with %s in %s failed." % (
             " ".join(command), work_dir))
@@ -387,10 +379,10 @@ def haplotype_caller(job, shared_ids, input_args):
     shared_ids[output] = job.fileStore.writeGlobalFile(os.path.join(work_dir, output))
 
     # upload gvcf
-    upload_or_move_hc(work_dir, input_args, output)
+    upload_or_move_hc(work_dir, input_args.output_dir, output, ssec=None)
 
     # call variants prior to vqsr
-    job.addChildJobFn(genotype_gvcf, shared_ids, input_args, cores = input_args['cpu_count'])
+    job.addChildJobFn(genotype_gvcf, shared_ids, input_args, cores = input_args.cpu_count)
 
 
 def genotype_gvcf(job, shared_ids, input_args):
@@ -404,17 +396,16 @@ def genotype_gvcf(job, shared_ids, input_args):
     """
 
     work_dir = job.fileStore.getLocalTempDir()
-    input_files = ['%s.raw.BOTH%s.gvcf' % (input_args['uuid'],
-                                           input_args['suffix']),
+    input_files = ['%s.raw.BOTH%s.gvcf' % (input_args.uuid, input_args.suffix),
                    'ref.fa', 'ref.fa.fai', 'ref.dict']
     read_from_filestore_hc(job, work_dir, shared_ids, *input_files)
     output = 'unified.raw.BOTH.gatk.vcf'
     
     command = ['-U', 'ALLOW_SEQ_DICT_INCOMPATIBILITY', # RISKY! (?) See #189
-               '-nt', str(input_args['cpu_count']),
+               '-nt', str(input_args.cpu_count),
                '-R', 'ref.fa',
                '-T', 'GenotypeGVCFs',
-               '--variant', '%s.raw.BOTH.gatk.gvcf' % input_args['uuid'],
+               '--variant', '%s.raw.BOTH.gatk.gvcf' % input_args.uuid,
                '--out', output,
                '-stand_emit_conf', '10.0',
                '-stand_call_conf', '30.0']
@@ -423,12 +414,11 @@ def genotype_gvcf(job, shared_ids, input_args):
         inputs=input_files
         outputs={output: None}
         docker_call(work_dir = work_dir,
-                    env={'JAVA_OPTS':'-Xmx%sg' % input_args['memory']},
+                    env={'JAVA_OPTS':'-Xmx%sg' % input_args.memory},
                     parameters = command,
                     tool = 'quay.io/ucsc_cgl/gatk:3.5--dba6dae49156168a909c43330350c6161dc7ecc2',
                     inputs=inputs,
-                    outputs=outputs,
-                    sudo = input_args['sudo'])
+                    outputs=outputs)
     except:
         sys.stderr.write("Running GenotypeGVCFs with %s in %s failed." % (
             " ".join(command), work_dir))
@@ -438,8 +428,8 @@ def genotype_gvcf(job, shared_ids, input_args):
     shared_ids[output] = job.fileStore.writeGlobalFile(os.path.join(work_dir, output))
 
     # run vqsr
-    job.addChildJobFn(vqsr_snp, shared_ids, input_args, cores = input_args['cpu_count'])
-    job.addChildJobFn(vqsr_indel, shared_ids, input_args, cores = input_args['cpu_count'])
+    job.addChildJobFn(vqsr_snp, shared_ids, input_args, cores = input_args.cpu_count)
+    job.addChildJobFn(vqsr_indel, shared_ids, input_args, cores = input_args.cpu_count)
 
 
 def vqsr_snp(job, shared_ids, input_args):
@@ -460,7 +450,7 @@ def vqsr_snp(job, shared_ids, input_args):
                '-T', 'VariantRecalibrator',
                '-R', 'ref.fa',
                '-input', 'unified.raw.BOTH.gatk.vcf',
-               '-nt', str(input_args['cpu_count']),
+               '-nt', str(input_args.cpu_count),
                '-resource:hapmap,known=false,training=true,truth=true,prior=15.0', 'hapmap.vcf',
                '-resource:omni,known=false,training=true,truth=false,prior=12.0', 'omni.vcf',
                '-resource:dbsnp,known=true,training=false,truth=false,prior=2.0', 'dbsnp.vcf',
@@ -473,12 +463,11 @@ def vqsr_snp(job, shared_ids, input_args):
     inputs=input_files + ['hapmap.vcf','omni.vcf', 'dbsnp.vcf', 'phase.vcf']
     outputD={'HAPSNP.recal': None, 'HAPSNP.tranches': None, 'HAPSNP.plots': None}
     docker_call(work_dir = work_dir,
-                env={'JAVA_OPTS':'-Xmx%sg' % input_args['memory']},
+                env={'JAVA_OPTS':'-Xmx%sg' % input_args.memory},
                 parameters = command,
                 tool ='quay.io/ucsc_cgl/gatk:3.5--dba6dae49156168a909c43330350c6161dc7ecc2',
                 inputs=inputs,
-                outputs=outputD,
-                sudo = input_args['sudo'])
+                outputs=outputD)
     shared_ids = write_to_filestore(job, work_dir, shared_ids, *outputs)
     job.addChildJobFn(apply_vqsr_snp, shared_ids, input_args)
 
@@ -494,8 +483,8 @@ def apply_vqsr_snp(job, shared_ids, input_args):
     """
     work_dir = job.fileStore.getLocalTempDir()
 
-    uuid = input_args['uuid']
-    suffix = input_args['suffix']
+    uuid = input_args.uuid
+    suffix = input_args.suffix
     input_files = ['ref.fa', 'ref.fa.fai', 'ref.dict', 'unified.raw.BOTH.gatk.vcf',
                    'HAPSNP.tranches', 'HAPSNP.recal']
     read_from_filestore_hc(job, work_dir, shared_ids, *input_files)
@@ -513,35 +502,28 @@ def apply_vqsr_snp(job, shared_ids, input_args):
     inputs=input_files
     outputs={output: None}
     docker_call(work_dir = work_dir,
-                env={'JAVA_OPTS':'-Xmx%sg' % input_args['memory']},
+                env={'JAVA_OPTS':'-Xmx%sg' % input_args.memory},
                 parameters = command,
                 tool = 'quay.io/ucsc_cgl/gatk:3.5--dba6dae49156168a909c43330350c6161dc7ecc2',
                 inputs=inputs,
-                outputs=outputs,
-                sudo = input_args['sudo'])
+                outputs=outputs)
 
-    upload_or_move_hc(work_dir, input_args, output)
+    upload_or_move_hc(work_dir, input_args.output_dir, output, ssec=None)
 
 
-def upload_or_move_hc(work_dir, input_args, output):
-
+def upload_or_move_hc(work_dir, output_dir, output, ssec=None):
     # are we moving this into a local dir, or up to s3?
-    if input_args['output_dir']:
-        # get output path and 
-        output_dir = input_args['output_dir']
-
+    if output_dir.startswith('s3://'):
+        #if ssec is None:
+        #    raise ValueError('s3 output_dir provided, but ssec is missing')
+        s3am_upload(fpath=os.path.join(work_dir, output),
+                    s3_dir=output_dir,
+                    s3_key_path=ssec)
+    else:
+        # FIXME: undefined function                                                                                                  
         make_directory(output_dir)
         move_to_output_dir(work_dir, output_dir, output)
 
-    elif input_args['s3_dir']:
-
-        s3am_upload(fpath=os.path.join(work_dir, output),
-                    s3_dir=input_args['s3_dir'],
-                    s3_key_path=input_args['ssec'])
-
-    else:
-
-        raise ValueError('No output_directory or s3_dir defined. Cannot determine where to store %s' % output)
 
 # Indel Recalibration
 def vqsr_indel(job, shared_ids, input_args):
@@ -561,7 +543,7 @@ def vqsr_indel(job, shared_ids, input_args):
                '-T', 'VariantRecalibrator',
                '-R', 'ref.fa',
                '-input', 'unified.raw.BOTH.gatk.vcf',
-               '-nt', str(input_args['cpu_count']),
+               '-nt', str(input_args.cpu_count),
                '-resource:mills,known=true,training=true,truth=true,prior=12.0', 'mills.vcf',
                '-an', 'DP', '-an', 'FS', '-an', 'ReadPosRankSum',
                '-mode', 'INDEL',
@@ -573,12 +555,11 @@ def vqsr_indel(job, shared_ids, input_args):
     inputs=input_files
     outputD={'HAPINDEL.recal': None, 'HAPINDEL.tranches': None, 'HAPINDEL.plots': None}
     docker_call(work_dir = work_dir,
-                env={'JAVA_OPTS':'-Xmx%sg' % input_args['memory']},
+                env={'JAVA_OPTS':'-Xmx%sg' % input_args.memory},
                 parameters = command,
                 tool ='quay.io/ucsc_cgl/gatk:3.5--dba6dae49156168a909c43330350c6161dc7ecc2',
                 inputs=inputs,
-                outputs=outputD,
-                sudo = input_args['sudo'])
+                outputs=outputD)
     shared_ids = write_to_filestore(job, work_dir, shared_ids, *outputs)
     job.addChildJobFn(apply_vqsr_indel, shared_ids, input_args)
 
@@ -593,8 +574,8 @@ def apply_vqsr_indel(job, shared_ids, input_args):
     :param input_args: dictionary of input arguments
     """
     work_dir = job.fileStore.getLocalTempDir()
-    uuid = input_args['uuid']
-    suffix = input_args['suffix']
+    uuid = input_args.uuid
+    suffix = input_args.suffix
     input_files = ['ref.fa', 'ref.fa.fai', 'ref.dict', 'unified.raw.BOTH.gatk.vcf',
                    'HAPINDEL.recal', 'HAPINDEL.tranches', 'HAPINDEL.plots']
     read_from_filestore_hc(job, work_dir, shared_ids, *input_files)
@@ -612,36 +593,96 @@ def apply_vqsr_indel(job, shared_ids, input_args):
     inputs=input_files
     outputs={output: None}
     docker_call(work_dir = work_dir,
-                env={'JAVA_OPTS':'-Xmx%sg' % input_args['memory']},
+                env={'JAVA_OPTS':'-Xmx%sg' % input_args.memory},
                 parameters = command,
                 tool = 'quay.io/ucsc_cgl/gatk:3.5--dba6dae49156168a909c43330350c6161dc7ecc2',
                 inputs = inputs,
-                outputs = outputs,
-                sudo = input_args['sudo'])
+                outputs = outputs)
 
-    upload_or_move_hc(work_dir, input_args, output)
+    upload_or_move_hc(work_dir, input_args.output_dir, output, ssec=None)
+
+
+def generate_config():
+    return textwrap.dedent("""
+        # GATK Preprocessing Pipeline configuration file
+        # This configuration file is formatted in YAML. Simply write the value (at least one space) after the colon.
+        # Edit the values in this configuration file and then rerun the pipeline
+        # Comments (beginning with #) do not need to be removed. Optional parameters may be left blank.
+        ##############################################################################################################
+        ref:                      # Required: Reference Genome URL 
+        phase:                    # Required: URL (1000G_phase1.indels.hg19.sites.fixed.vcf)
+        mills:                    # Required: URL (Mills_and_1000G_gold_standard.indels.hg19.sites.vcf)
+        dbsnp:                    # Required: URL (dbsnp_132_b37.leftAligned.vcf URL)
+        hapmap:                   # Required: URL (hapmap_3.3.b37.vcf)
+        omni:                     # Required: URL (1000G_omni.5.b37.vcf)
+        file-size: 100G           # Approximate input file size. Should be given as %d[TGMK], e.g.,
+                                  # for a 100 gigabyte file, use file-size: 100G
+        indexed': False           # Set to True if the input file is already indexed and a .bam.bai file is
+                                  # present at the same url as the .bam file
+        ssec:                     # Optional: (string) Path to Key File for SSE-C Encryption
+    """[1:])
+
+def generate_manifest():
+    return textwrap.dedent("""
+        #   Edit this manifest to include information pertaining to each sample to be run.
+        #   There are 2 tab-separated columns: UUID and URL
+        #
+        #   UUID        This should be a unique identifier for the sample to be processed
+        #   URL         A URL (http://, ftp://, file://, s3://) pointing to the input SAM or BAM file
+        #
+        #   Example below. Lines beginning with # are ignored.
+        #
+        #   UUID_1    file:///path/to/sample.bam
+        #
+        #   Place your samples below, one per line.
+    """[1:])
 
 
 if __name__ == '__main__':
-    args_parser = build_parser()
-    Job.Runner.addToilOptions(args_parser)
-    args = args_parser.parse_args()
 
-    inputs = {'ref.fa': args.reference,
-              'config': args.config,
-              'phase.vcf': args.phase,
-              'mills.vcf': args.mills,
-              'dbsnp.vcf': args.dbsnp,
-              'hapmap.vcf': args.hapmap,
-              'omni.vcf': args.omni,
-              'output_dir': args.output_dir,
-              'suffix': args.suffix,
-              'uuid': None,
-              'cpu_count': multiprocessing.cpu_count(), # FIXME: should not be called from toil-leader, see #186
-              'file_size': args.file_size,
-              'ssec': None,
-              'sudo': False,
-              'indexed': False, # FIXME: should be parametrized
-              'memory': '15'}
+    # Define Parser object and add to jobTree
+    parser = argparse.ArgumentParser()
+    subparsers = parser.add_subparsers(dest='command')
+    # Generate subparsers
+    subparsers.add_parser('generate-config', help='Generates an editable config in the current working directory.')
+    subparsers.add_parser('generate-manifest', help='Generates an editable manifest in the current working directory.')
+    subparsers.add_parser('generate', help='Generates a config and manifest in the current working directory.')
+    # Run subparser
+    parser_run = subparsers.add_parser('run', help='Runs the GATK germline pipeline')
+    group = parser_run.add_mutually_exclusive_group(required=True)
+    parser_run.add_argument('--config', default='gatk_germline.config', type=str,
+                            help='Path to the (filled in) config file, generated with "generate-config".')
+    group.add_argument('--manifest', default='gatk-germline-manifest.tsv', type=str,
+                       help='Path to the (filled in) manifest file, generated with "generate-manifest". '
+                            '\nDefault value: "%(default)s".')
+    group.add_argument('--sample', default=None, nargs='2', type=str,
+                       help='Space delimited sample UUID and BAM file in the format: uuid url')
+    parser_run.add_argument('--output-dir', default=None, help='Full path to directory or filename where '
+                                                               'final results will be output')    
+    parser_run.add_argument('-s', '--suffix', default='.bqsr', help='Additional suffix to add to the names of the output files')
+    Job.Runner.addToilOptions(parser_run)
+    options = parser.parse_args()
+
+    cwd = os.getcwd()
+    if options.command == 'generate-config' or options.command == 'generate':
+        generate_file(os.path.join(cwd, 'gatk-preprocessing.config'), generate_config)
+    if options.command == 'generate-manifest' or options.command == 'generate':
+        generate_file(os.path.join(cwd, 'gatk-preprocessing-manifest.tsv'), generate_manifest)
+
+    # Pipeline execution
+    elif options.command == 'run':
+        require(os.path.exists(options.config), '{} not found. Please run '
+                                             '"generate-config"'.format(options.config))
+        if not options.sample:
+            require(os.path.exists(options.manifest), '{} not found and no sample provided. Please '
+                                                       'run "generate-manifest"'.format(options.manifest))
+        # Parse config
+        parsed_config = {x.replace('-', '_'): y for x, y in yaml.load(open(options.config).read()).iteritems()}
+        inputs = argparse.Namespace(**parsed_config)
+        if options.manifest:
+            inputs.manifest = options.manifest
     
-    Job.Runner.startToil(Job.wrapJobFn(batch_start, inputs), args)
+    inputs.cpu_count = multiprocessing.cpu_count() # FIXME: should not be called from toil-leader, see #186
+    inputs.memory = '15'
+    
+    Job.Runner.startToil(Job.wrapJobFn(batch_start, inputs, options.sample, options.output_dir, options.suffix), options)
