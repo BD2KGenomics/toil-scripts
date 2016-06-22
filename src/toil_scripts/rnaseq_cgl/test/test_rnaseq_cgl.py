@@ -1,28 +1,30 @@
 import os
-import subprocess
 import shutil
+import subprocess
 import textwrap
+from uuid import uuid4
 
+from bd2k.util.files import mkdir_p
 from boto.s3.connection import S3Connection, Bucket, Key
 
 
 def test_rnaseq_cgl(tmpdir):
-    work_dir = str(tmpdir)
-    create_config_and_manifest(work_dir)
     subdir = '/mnt/ephemeral/toil-scripts/rnaseq/'
-    os.makedirs(os.path.join(subdir, 'workDir'))
+    work_dir = os.path.join(subdir, str(uuid4()))
+    mkdir_p(work_dir)
+    create_config_and_manifest(work_dir)
     sample = 's3://cgl-pipeline-inputs/rnaseq_cgl/ci/chr6_sample.tar.gz'
     # Call Pipeline
     try:
         base_command = ['toil-rnaseq', 'run',
-                        '--config', os.path.join(work_dir, 'toil-rnaseq.config'),
-                        os.path.join(subdir, 'jstore'),
+                        '--config', os.path.join(work_dir, 'config-toil-rnaseq.yaml'),
+                        os.path.join(work_dir, 'jstore'),
                         '--retryCount', '1',
-                        '--workDir', os.path.join(subdir, 'workDir')]
+                        '--workDir', work_dir]
         # Run with --samples
         subprocess.check_call(base_command + ['--samples', sample])
         # Run with manifest
-        subprocess.check_call(base_command + ['--manifest', os.path.join(work_dir, 'toil-rnaseq-manifest.tsv')])
+        subprocess.check_call(base_command + ['--manifest', os.path.join(work_dir, 'manifest-toil-rnaseq.tsv')])
     finally:
         shutil.rmtree(subdir)
         conn = S3Connection()
@@ -34,8 +36,8 @@ def test_rnaseq_cgl(tmpdir):
 
 def create_config_and_manifest(path):
     """Creates config file for test at path"""
-    config_path = os.path.join(path, 'toil-rnaseq.config')
-    manifest_path = os.path.join(path, 'toil-rnaseq-manifest.tsv')
+    config_path = os.path.join(path, 'config-toil-rnaseq.yaml')
+    manifest_path = os.path.join(path, 'manifest-toil-rnaseq.tsv')
     with open(config_path, 'w') as f:
         f.write(generate_config())
     with open(manifest_path, 'w') as f:
