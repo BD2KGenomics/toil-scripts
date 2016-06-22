@@ -1,30 +1,26 @@
 import os
-import subprocess
 import shutil
+import subprocess
 import textwrap
 
 from boto.s3.connection import S3Connection, Bucket, Key
 
+from toil_scripts.lib import get_work_directory
+
 
 def test_exome(tmpdir):
-    work_dir = str(tmpdir)
-    create_config_and_manifest(work_dir)
-    subdir = '/mnt/ephemeral/toil-scripts/exome/'
-    os.makedirs(os.path.join(subdir, 'workDir'))
-    # normal_bam = 's3://cgl-pipeline-inputs/exome/ci/chr6.normal.bam'
-    # tumor_bam = 's3://cgl-pipeline-inputs/exome/ci/chr6.tumor.bam'
+    workdir = get_work_directory()
+    create_config_and_manifest(workdir)
     # Call Pipeline
     try:
         base_command = ['toil-exome', 'run',
-                        '--config', os.path.join(work_dir, 'toil-exome.config'),
-                        os.path.join(subdir, 'jstore'),
-                        '--workDir', os.path.join(subdir, 'workDir')]
-        # Run with --samples
-        # subprocess.check_call(base_command + ['--samples', sample])
+                        '--config', os.path.join(workdir, 'config-toil-exome.yaml'),
+                        os.path.join(workdir, 'jstore'),
+                        '--workDir', workdir]
         # Run with manifest
-        subprocess.check_call(base_command + ['--manifest', os.path.join(work_dir, 'toil-exome-manifest.tsv')])
+        subprocess.check_call(base_command + ['--manifest', os.path.join(workdir, 'manifest-toil-exome.tsv')])
     finally:
-        shutil.rmtree(subdir)
+        shutil.rmtree(workdir)
         conn = S3Connection()
         b = Bucket(conn, 'cgl-driver-projects')
         k = Key(b)
@@ -34,8 +30,8 @@ def test_exome(tmpdir):
 
 def create_config_and_manifest(path):
     """Creates config file for test at path"""
-    config_path = os.path.join(path, 'toil-exome.config')
-    manifest_path = os.path.join(path, 'toil-exome-manifest.tsv')
+    config_path = os.path.join(path, 'config-toil-exome.yaml')
+    manifest_path = os.path.join(path, 'manifest-toil-exome.tsv')
     with open(config_path, 'w') as f:
         f.write(generate_config())
     with open(manifest_path, 'w') as f:

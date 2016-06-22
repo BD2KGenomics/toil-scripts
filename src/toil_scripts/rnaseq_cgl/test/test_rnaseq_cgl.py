@@ -2,31 +2,29 @@ import os
 import shutil
 import subprocess
 import textwrap
-from uuid import uuid4
 
-from bd2k.util.files import mkdir_p
 from boto.s3.connection import S3Connection, Bucket, Key
+
+from toil_scripts.lib import get_work_directory
 
 
 def test_rnaseq_cgl(tmpdir):
-    subdir = '/mnt/ephemeral/toil-scripts/rnaseq/'
-    work_dir = os.path.join(subdir, str(uuid4()))
-    mkdir_p(work_dir)
-    create_config_and_manifest(work_dir)
+    workdir = get_work_directory()
+    create_config_and_manifest(workdir)
     sample = 's3://cgl-pipeline-inputs/rnaseq_cgl/ci/chr6_sample.tar.gz'
     # Call Pipeline
     try:
         base_command = ['toil-rnaseq', 'run',
-                        '--config', os.path.join(work_dir, 'config-toil-rnaseq.yaml'),
-                        os.path.join(work_dir, 'jstore'),
+                        '--config', os.path.join(workdir, 'config-toil-rnaseq.yaml'),
+                        os.path.join(workdir, 'jstore'),
                         '--retryCount', '1',
-                        '--workDir', work_dir]
+                        '--workDir', workdir]
         # Run with --samples
         subprocess.check_call(base_command + ['--samples', sample])
         # Run with manifest
-        subprocess.check_call(base_command + ['--manifest', os.path.join(work_dir, 'manifest-toil-rnaseq.tsv')])
+        subprocess.check_call(base_command + ['--manifest', os.path.join(workdir, 'manifest-toil-rnaseq.tsv')])
     finally:
-        shutil.rmtree(subdir)
+        shutil.rmtree(workdir)
         conn = S3Connection()
         b = Bucket(conn, 'cgl-driver-projects')
         k = Key(b)
