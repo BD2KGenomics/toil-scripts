@@ -82,7 +82,14 @@ def launch_cluster(params):
                 'toil-leader',
                 '-a',
                 params.share.rstrip('/'), ':'])
-
+    check_call(['cgcloud',
+                'rsync',
+                '--zone', params.zone,
+                '--cluster-name', params.cluster_name,
+                '--ssh-opts="-o StrictHostKeyChecking=no"',
+                'toil-leader',
+                '-a',
+                params.config_path, ':~/config'])
 
 def place_boto_on_leader(params):
     log.info('Adding a .boto to leader to avoid credential timeouts.')
@@ -128,7 +135,7 @@ def launch_pipeline(params):
                             '--mesosMaster $(hostname -i):5050',
                             '--workDir /var/lib/toil',
                             '--logInfo',
-                            '--config {config}',
+                            '--config ~/config',
                             '--manifest ~/manifest']
         if mock_mode():
             pipeline_command = ['TOIL_SCRIPTS_MOCK_MODE=1'] + \
