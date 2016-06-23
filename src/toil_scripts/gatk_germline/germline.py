@@ -198,8 +198,8 @@ def create_reference_index_hc(job, shared_ids, input_args):
     faidx_output = os.path.join(work_dir, 'ref.fa.fai')
     # Call: Samtools
     faidx_command = ['faidx', 'ref.fa']
-    inputs= ref_path
-    outputs={'ref.fa.fai': None}
+    inputs = ref_path
+    outputs = {faidx_output: None}
     docker_call(work_dir = work_dir,
                 parameters = faidx_command,
                 tool = 'quay.io/ucsc_cgl/samtools',

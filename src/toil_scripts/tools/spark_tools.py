@@ -7,6 +7,7 @@ ADAM/Spark pipeline
 """
 
 from toil_scripts.adam_uberscript.automated_scaling import SparkMasterAddress
+from toil_scripts.lib import require
 from toil_scripts.lib.programs import docker_call
 
 
@@ -115,7 +116,7 @@ def call_conductor(master_ip, src, dst, memory=None, override_parameters=None):
     :type override_parameters: list of string or None
     """
 
-    arguments = ["--", "-C", src, dst]
+    arguments = ["-C", src, dst]
 
     docker_call(rm=False,
                 tool="quay.io/ucsc_cgl/conductor",
