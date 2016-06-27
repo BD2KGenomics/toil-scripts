@@ -21,7 +21,6 @@ Tree structure
 8 = Exon filter
 """
 
-
 from __future__ import print_function
 import sys
 import os
@@ -30,77 +29,22 @@ import csv
 import argparse
 import shutil
 import yaml
+import textwrap
 import multiprocessing
 import defuse_lib as lib
 import defuse_exon as exon_lib
 
-
+from toil.job import Job
+from toil_scripts.lib import require
 from toil_scripts.lib.programs import docker_call
 from toil_scripts.lib.urls import download_url_job
+from bd2k.util.processes import which
+from urlparse import urlparse
 
 
-from toil.job import Job
+def download_shared_files(job, config):
+    print(config, file=sys.stderr)
 
-
-def parse_config(config_path):
-    writeToDebug("Parse_config")
-    if not os.path.exists(config_path):
-        raise ValueError("Could not locate config file")
-    if os.stat(config_path).st_size == 0:
-        raise ValueError('Config file is empty')
-    with open(config_path, 'r') as stream:
-        return yaml.load(stream)
-
-
-def get_shared_files(job, config, tool_options):
-
-    job.fileStore.logToMaster('Downloading shared files')
-
-    important_params = {
-        'defuse':   {'index_url': ('required', 'download', 'index', None),
-                     'mock': ('optional', None, 'mock', None),
-                     'output': ('optional', None, 'output', None)},
-
-        'gencode': {'url': ('optional', 'download', 'gencode_gtf', None)},
-
-        'bedtools': {'mock': ('optional', None, 'mock', None),
-                    'output': ('optional', None, 'output', None)},
-
-        'star':     {'type': ('optional', None, 'type', None),
-                     'ncores': ('optional', None, 'ncores', None),
-                     'index_url': ('optional', 'download', 'index', None),
-                     'mock': ('optional', None, 'mock', None),
-                     'rnaAligned.toTranscriptome.out.bam': ('optional', None, 'rnaAligned.toTranscriptome.out.bam', None),
-                     'rnaAligned.sortedByCoord.out.bam': ('optional', None, 'rnaAligned.sortedByCoord.out.bam', None),
-                     'rnaAligned.sortedByCoord.out.bam.bai': ('optional', None, 'rnaAligned.sortedByCoord.out.bam.bai', None)},
-
-        'rsem':     {'index_url': ('optional', 'download', 'index', None),
-                     'ncores': ('optional', None, 'ncores', None),
-                     'mock': ('optional', None, 'mock', None),
-                     'output': ('optional', None, 'output', None)}
-                    }
-
-    for tool, parameters in important_params.iteritems():
-        for parameter, (status, action, name, default) in parameters.iteritems():
-            if tool not in tool_options:
-                tool_options[tool] = {}
-            try:
-                value = config[tool][parameter]
-
-                if action == 'download':
-                    tool_options[tool][name] = job.addChildJobFn(download_url_job, value, name=name,
-                                                                 s3_key_path=tool_options['ssec']).rv()
-                else:
-                    tool_options[tool][name] = value
-
-            except KeyError:
-                if status == 'required':
-                    raise KeyError('Tool {} requires parameter {}'.format(tool, parameter))
-                elif status == 'optional':
-                    msg = 'Depending on configuration, tool {} may require {}'.format(tool, parameter)
-                    job.fileStore.logToMaster(msg)
-                    tool_options[tool][name] = default
-    return tool_options
 
 
 def start_pipeline(job, manifest, univ_options):
@@ -116,7 +60,7 @@ def start_pipeline(job, manifest, univ_options):
                 raise ValueError(msg)
 
 
-def defuse_pipeline(job, sample_options, tool_options):
+def defuse_pipeline(job, uuid, sample_parameters, tool_parameters):
     """
     Runs defuse pipeline
 
@@ -125,12 +69,15 @@ def defuse_pipeline(job, sample_options, tool_options):
     :param dict tool_options: paramters for bioinformatics tools
     :return:
     """
-    if sample_options['url'].endswith('.gz'):
-        sample_options['gzipped'] = True
-    else:
-        sample_options['gzipped'] = False
+    job.fileStore.logToMaster('Started deFuse pipeline for {}'.format(uuid))
 
-    sample = job.wrapJobFn(download_sample, sample_options)
+    if sample_parameters['url'].endswith('.gz'):
+        sample_parameters['is_gzipped'] = True
+    else:
+        sample_parameters['is_gzipped'] = False
+
+    sample = job.wrapJobFn(download_sample, sample_parameters['url'], url2=sample_parameters['url2'],
+                           is_gzipped=sample_parameters['is_gzipped'])
     cutadapt = job.wrapJobFn(lib.run_cutadapt, sample.rv(0), sample.rv(1), sample_options)
     defuse = job.wrapJobFn(run_defuse, cutadapt.rv(0), cutadapt.rv(1), sample_options, tool_options['defuse'])
     defuse_out = job.wrapJobFn(move_file, defuse.rv(), '{}.results.tsv'.format(sample_options['patient_id']),
@@ -142,20 +89,7 @@ def defuse_pipeline(job, sample_options, tool_options):
     awk_out = job.wrapJobFn(move_file, awk.rv(), '{}.results.awk.tsv'.format(sample_options['patient_id']),
                             tool_options)
 
-
     job.addFollowOn(sample)
-    sample.addFollowOn(cutadapt)
-
-    if tool_options['filter'] == 'awk':
-        cutadapt.addFollowOn(defuse)
-        defuse.addFollowOn(awk)
-        awk.addFollowOn(awk_out)
-    elif tool_options['filter'] == 'exon':
-        cutadapt.addFollowOn(exon_filter)
-    else:
-        cutadapt.addFollowOn(defuse)
-        defuse.addFollowOn(defuse_out)
-
 
 def move_file(job, fileStoreID, filename, univ_options):
     work_dir = job.fileStore.getLocalTempDir()
@@ -171,13 +105,11 @@ def move_file(job, fileStoreID, filename, univ_options):
         shutil.copy(src, dest)
 
 
-def download_sample(job, sample_options):
+def download_sample(job, url, url2=None, is_gzipped=False):
 
     fq, gz = '', ''
 
-    url = sample_options['url']
-
-    if url.endswith('.gz'):
+    if is_gzipped:
         basname_fq, gz = os.path.splitext(url)
         basename, fq = os.path.splitext(basname_fq)
     else:
@@ -187,11 +119,10 @@ def download_sample(job, sample_options):
         basename2 = re.sub('1$', '2', basename)
         url2 = ''.join([basename2, fq, gz])
 
-    elif 'url2' in sample_options.keys():
-        url2 = sample_options['url2']
-
     else:
-        raise ValueError('Could not find paired sample. Use url2 parameter to specify paired reads')
+        if url2 is None:
+            raise ValueError('Could not find paired sample. Use url2 parameter to specify paired reads')
+
 
     file_id1 = job.addChildJobFn(download_url_job, url).rv()
     file_id2 = job.addChildJobFn(download_url_job, url2).rv()
@@ -279,6 +210,56 @@ def run_simple_filter(job, tsvID):
         raise ValueError('No gene fusions passed the simple filter')
     return job.fileStore.writeGlobalFile(outpath)
 
+def generate_config():
+    return textwrap.dedent("""
+    # CGL Germline Variant Pipeline configuration file
+    # This configuration file is formatted in YAML. Simply write the value (at least one space) after the colon.
+    # Edit the values in this configuration file and then rerun the pipeline: "toil-variant run"
+    # URLs can take the form: http://, file://, s3://, gnos://.
+    # Comments (beginning with #) do not need to be removed. Optional parameters may be left blank
+    ####################################################################################################################
+    # Required: URL to reference genome
+    index: https://s3-us-west-2.amazonaws.com/pimmuno-test-data/CI_test_input/references/defuse_input_gencode74_with_config.tgz
+
+    # Optional: Provide a full path to where results will appear
+    output-dir:
+
+    # Optional: Provide a full path to a 32-byte key used for SSE-C Encryption in Amazon
+    ssec:
+
+    # Optional: Add True to run in mock mode
+    mock:
+    """[1:])
+
+
+def generate_manifest():
+    return textwrap.dedent("""
+        #   Edit this manifest to include information pertaining to each sample pair to be run.
+        #   There are 2tab-separated columns: UUID, Sample BAM URL
+        #
+        #   UUID            This should be a unique identifier for the sample to be processed
+        #   Sample URL      A URL (http://, file://, s3://, gnos://) pointing to the normal bam
+        #
+        #   Examples of several combinations are provided below. Lines beginning with # are ignored.
+        #
+        #   UUID_1:
+        #    url1: file:///path/to/sample_R1.fq
+        #    url2: file:///path/to/sample_R2.fq
+        #    adapter1: AGATCGGAAGAG
+        #    adapter2: AGATCGGAAGAG
+        #   UUID_2:
+        #    url1: http://sample-depot.com/sample_R1.fq
+        #    url2: http://sample-depot.com/sample_R2.fq
+        #    adapter1: AGATCGGAAGAG
+        #    adapter2: AGATCGGAAGAG
+        #   UUID_3:
+        #    url1: s3://my-bucket-name/directory/sample_R1.fq
+        #    url2: s3://my-bucket-name/directory/sample_R2.fq
+        #    adapter1: AGATCGGAAGAG
+        #    adapter2: AGATCGGAAGAG
+        #
+        #   Place your samples below, one per line.
+        """[1:])
 
 def writeToDebug(msgs, outfile='/tmp/toil_debug'):
     if isinstance(msgs, str):
@@ -286,6 +267,13 @@ def writeToDebug(msgs, outfile='/tmp/toil_debug'):
     with open(outfile, 'a') as f:
         for msg in msgs:
             f.write(msg + '\n')
+
+
+def generate_file(file_path, generate_func):
+    require(not os.path.exists(file_path), file_path + ' already exists!')
+    with open(file_path, 'w') as f:
+        f.write(generate_func())
+    print('\t{} has been generated in the current working directory.'.format(os.path.basename(file_path)))
 
 def main():
     """
@@ -298,12 +286,26 @@ def main():
     """
     # Define Parser object and add to jobTree
     parser = argparse.ArgumentParser(description=main.__doc__, formatter_class=argparse.RawTextHelpFormatter)
-    parser.add_argument('-c', '--config', required=True, help='Config for deFuse Toil workflow')
-    parser.add_argument('-m', '--manifest', required=True, help='Manifest of sample URLs')
-    parser.add_argument('-o', '--output_dir', required=True, help='Full path to final output dir')
-    parser.add_argument('-f', '--filter', default=None, help='Filter deFuse output')
-    parser.add_argument('-s', '--ssec', default=None, help='A key that can be used to fetch encrypted data')
-    parser.add_argument('-3', '--s3_dir', default=None, help='S3 Directory, starting with bucket name.')
+    subparsers = parser.add_subparsers(dest='command')
+    subparsers.add_parser('generate-config', help='Generates an editable config in the current working directory.')
+    subparsers.add_parser('generate-manifest', help='Generates an editable manifest in the current working directory.')
+    subparsers.add_parser('generate', help='Generates a config and manifest in the current working directory.')
+
+    # Run subparser
+    parser_run = subparsers.add_parser('run', help='Runs the CGL defuse pipeline')
+    parser_run.add_argument('--config', default='config-toil-defuse.yaml', type=str,
+                            help='Path to the (filled in) config file, generated with "generate-config". '
+                                 '\nDefault value: "%(default)s"')
+    parser_run.add_argument('--manifest', default='manifest-toil-defuse.tsv', type=str,
+                            help='Path to the (filled in) manifest file, generated with "generate-manifest". '
+                                 '\nDefault value: "%(default)s"')
+    parser_run.add_argument('--fq', default=None, type=str,
+                            help='URL for the sample BAM. URLs can take the form: http://, file://, s3://, '
+                                 'and gnos://. The UUID for the sample must be given with the "--uuid" flag.')
+    parser_run.add_argument('--uuid', default=None, type=str, help='Provide the UUID of a sample when using the'
+                                                                   '"--bam" option')
+
+    # If no arguments provided, print full help menu
     if len(sys.argv) == 1:
         parser.print_help()
         sys.exit(1)
@@ -312,27 +314,42 @@ def main():
 
     Job.Runner.addToilOptions(parser)
 
-    params = parser.parse_args()
+    args = parser.parse_args()
 
-    if params.filter not in {None, 'awk', 'exon'}:
-        raise ValueError('Filter must be either None, awk, or exon')
+    cwd = os.getcwd()
+    if args.command == 'generate-config' or args.command == 'generate':
+        generate_file(os.path.join(cwd, 'config-toil-defuse.yaml'), generate_config)
+    if args.command == 'generate-manifest' or args.command == 'generate':
+        generate_file(os.path.join(cwd, 'manifest-toil-defuse.tsv'), generate_manifest)
+    if 'generate' in args.command:
+        sys.exit()
+    if args.command == 'run':
+        config = {x.replace('-', '_'): y for x, y in yaml.load(open(args.config).read()).iteritems()}
 
-    global_options = {'ssec': params.ssec,
-                      'output_dir': os.path.abspath(params.output_dir),
-                      's3_dir': params.s3_dir,
-                      'filter': params.filter}
+        require(set(config) > {'index'},
+                'deFuse pipeline is missing reference data. Check config file')
 
-    root = Job.wrapFn(parse_config, os.path.abspath(params.config))
-    download_refs = Job.wrapJobFn(get_shared_files, root.rv(), global_options)
-    update_parameters = Job.wrapJobFn(exon_lib.prepare_gtf, download_refs.rv())
-    start = Job.wrapJobFn(start_pipeline, os.path.abspath(params.manifest), update_parameters.rv())
+        # Program checks
+        for program in ['curl', 'docker']:
+            require(next(which(program)), program + ' must be installed on every node.'.format(program))
 
-    root.addFollowOn(download_refs)
-    download_refs.addFollowOn(update_parameters)
-    update_parameters.addFollowOn(start)
+        if args.fq or args.uuid:
+            require(args.fq and args.uuid, '"--fq" and "--uuid" must supplied')
+            samples = [[args.uuid, args.fq,]]
+        else:
+            samples = yaml.load(open(args.manifest))
 
+        shared_files = Job.wrapJobFn(download_shared_files, config)
 
-    Job.Runner.startToil(root, params)
+        required_params = {'url1', 'adapter1', 'adapter2'}
+        for uuid, parameters in samples.iteritems():
+            given_params = set(parameters)
+            parameter_diff = required_params - given_params
+            require(given_params >= required_params,
+                    'Sample {} does not have all required parameters\n{}'.format(uuid, parameter_diff))
+            shared_files.addFollowOnJobFn(defuse_pipeline, uuid, parameters, shared_files.rv())
+
+    Job.Runner.startToil(shared_files, args)
 
 if __name__ == '__main__':
     main()

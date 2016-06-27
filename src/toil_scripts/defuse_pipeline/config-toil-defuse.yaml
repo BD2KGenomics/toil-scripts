@@ -1,0 +1,26 @@
+# CGL Germline Variant Pipeline configuration file
+# This configuration file is formatted in YAML. Simply write the value (at least one space) after the colon.
+# Edit the values in this configuration file and then rerun the pipeline: "toil-variant run"
+# URLs can take the form: http://, file://, s3://, gnos://.
+# Comments (beginning with #) do not need to be removed. Optional parameters may be left blank
+####################################################################################################################
+# Required: URL to reference genome
+index: https://s3-us-west-2.amazonaws.com/pimmuno-test-data/CI_test_input/references/defuse_input_gencode74_with_config.tgz
+
+# Optional: Provide a full path to where results will appear
+output-dir: ~/toil-scripts-test-output
+
+# Optional: Provide a full path to a 32-byte key used for SSE-C Encryption in Amazon
+ssec:
+
+# Optional: Provide a full path to a CGHub Key used to access GNOS hosted data
+gtkey:
+
+# Optional: Provide a suffix for naming output files
+suffix:
+
+# Optional: Provide a RAM specification
+memory:
+
+# Optional: Provide a boolean to run in mock mode
+mock: True
