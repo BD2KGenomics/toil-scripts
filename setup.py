@@ -21,9 +21,9 @@ from setuptools.command.test import test as TestCommand
 from version import version
 from pkg_resources import parse_version, require, DistributionNotFound
 
-toil_min_version = '3.1.6'
-toil_max_version = '3.2.0'
-bpl_min_version = '1.10.dev6'
+toil_min_version = '3.2.1'
+toil_max_version = '3.3.0'
+bpl_min_version = '1.13.dev21'
 
 # Toil version check -- Raise warning instead of using intall_requires to avoid virtualenv conflicts
 try:
