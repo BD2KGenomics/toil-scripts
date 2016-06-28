@@ -87,7 +87,7 @@ def get_files_from_filestore(job, files, work_dir, cache=True, docker=False):
         # we want the /data prefixed path to the file
         name = os.path.basename(outpath)
         if docker:
-            files[name] = docker_path(files[name])
+            files[name] = docker_path(name)
         else:
             files[name] = outpath
     return files
