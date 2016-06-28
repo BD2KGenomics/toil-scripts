@@ -1,6 +1,6 @@
+import argparse
 import os
 import tempfile
-
 
 def flatten(x):
     """
@@ -59,3 +59,22 @@ class UserError(Exception):
 def require(expression, message):
     if not expression:
         raise UserError('\n\n' + message + '\n\n')
+
+
+def required_length(nmin, nmax):
+    """
+    For use with argparse's action argument. Allows setting a range for nargs.
+    Example: nargs='+', action=required_length(2, 3)
+
+    :param int nmin: Minimum number of arguments
+    :param int nmax: Maximum number of arguments
+    :return: RequiredLength object
+    """
+    class RequiredLength(argparse.Action):
+        def __call__(self, parser, args, values, option_string=None):
+            if not nmin <= len(values) <= nmax:
+                msg = 'argument "{f}" requires between {nmin} and {nmax} arguments'.format(
+                    f=self.dest, nmin=nmin, nmax=nmax)
+                raise argparse.ArgumentTypeError(msg)
+            setattr(args, self.dest, values)
+    return RequiredLength

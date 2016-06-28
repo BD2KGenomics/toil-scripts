@@ -178,13 +178,13 @@ def static_dag(job, uuid, rg_line, inputs):
             'dir_suffix': inputs.dir_suffix}
 
     # get head BWA alignment job function and encapsulate it
-    bwa = job.wrapJobFn(download_shared_files,
+    inputs.rg_line = rg_line
+    inputs.output_dir = 's3://{s3_bucket}/alignment{dir_suffix}'.format(**args)
+    bwa = job.wrapJobFn(download_reference_files,
                         inputs,
                         [uuid,
                          's3://{s3_bucket}/{sequence_dir}/{uuid}_1.fastq.gz'.format(**args),
-                         's3://{s3_bucket}/{sequence_dir}/{uuid}_2.fastq.gz'.format(**args)],
-                        's3://{s3_bucket}/alignment{dir_suffix}'.format(**args),
-                        rg_line).encapsulate()
+                         's3://{s3_bucket}/{sequence_dir}/{uuid}_2.fastq.gz'.format(**args)]).encapsulate()
 
     # get head ADAM preprocessing job function and encapsulate it
     adam_preprocess = job.wrapJobFn(static_adam_preprocessing_dag,
