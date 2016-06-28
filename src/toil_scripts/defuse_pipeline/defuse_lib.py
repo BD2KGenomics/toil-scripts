@@ -313,7 +313,7 @@ def bam2fastq(job, bamfile, univ_options):
     return first_fastq
 
 
-def run_cutadapt(job, fastq1, fastq2, sample_options):
+def run_cutadapt(job, uuid, fastq1, fastq2, adapter3, adapter5, is_gzipped=False, mock=False):
     """
     This module runs cutadapt on the input RNA fastq files and then calls the RNA aligners.
 
@@ -336,21 +336,22 @@ def run_cutadapt(job, fastq1, fastq2, sample_options):
 
     This module corresponds to node 2 on the tree
     """
-    job.fileStore.logToMaster('Running cutadapt on %s' % sample_options['patient_id'])
+    job.fileStore.logToMaster('Running cutadapt on %s' % uuid)
     work_dir = job.fileStore.getLocalTempDir()
-    fq_extn = '.gz' if sample_options['gzipped'] else ''
-    input_files = {
-        'rna_1.fastq' + fq_extn: fastq1,
-        'rna_2.fastq' + fq_extn: fastq2}
-    input_files = get_files_from_filestore(job, input_files, work_dir, docker=True)
-    parameters = ['-a', sample_options['adapter3'],  # Fwd read 3' adapter
-                  '-A', sample_options['adapter5'],  # Rev read 3' adapter
+    fq_extn = '.gz' if is_gzipped else ''
+    inputs = {'rna_1.fastq' + fq_extn: fastq1, 'rna_2.fastq' + fq_extn: fastq2}
+    inputs = get_files_from_filestore(job, inputs, work_dir, docker=True)
+    parameters = ['-a', adapter3,  # Fwd read 3' adapter
+                  '-A', adapter5,  # Rev read 3' adapter
                   '-m', '35',  # Minimum size of read
                   '-o', docker_path('rna_cutadapt_1.fastq'),  # Output for R1
                   '-p', docker_path('rna_cutadapt_2.fastq'),  # Output for R2
-                  input_files['rna_1.fastq'],
-                  input_files['rna_2.fastq']]
-    docker_call(tool='aarjunrao/cutadapt:latest', parameters=parameters, work_dir=work_dir)
+                  inputs['rna_1.fastq'],
+                  inputs['rna_2.fastq']]
+
+    docker_call(tool='aarjunrao/cutadapt:latest', parameters=parameters, work_dir=work_dir,
+                inputs=inputs.keys(), outputs={'rna_cutadapt_1.fastq': None, 'rna_cutadapt_2.fastq': None},
+                mock=mock)
 
     file_id1 = job.fileStore.writeGlobalFile('/'.join([work_dir, 'rna_cutadapt_1.fastq']))
     file_id2 = job.fileStore.writeGlobalFile('/'.join([work_dir, 'rna_cutadapt_2.fastq']))
