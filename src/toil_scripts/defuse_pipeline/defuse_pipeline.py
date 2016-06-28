@@ -131,7 +131,7 @@ def run_defuse(job, uuid, fastq1, fastq2, tool_options, mock=False, is_gzipped=F
     fq_extn = '.gz' if is_gzipped else ''
     input = {'rna_1.fastq' + fq_extn: fastq1,
              'rna_2.fastq' + fq_extn: fastq2,
-             'defuse_index': tool_options['index']}
+             'defuse_index.tar.gz': tool_options['index']}
     input = lib.get_files_from_filestore(job, input, work_dir, docker=True)
     parameters = ['--config', '/data/defuse_index',
                   '--output', '/data',
