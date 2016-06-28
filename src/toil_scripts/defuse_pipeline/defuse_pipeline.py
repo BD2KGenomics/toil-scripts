@@ -38,7 +38,10 @@ def download_shared_files(job, config):
         for (key, name) in url_keys:
             if name is None:
                 name = key
-            config[tool][name] = job.addChildJobFn(download_url_job, config[tool][key], s3_key_path=config['ssec']).rv()
+            url = config[tool][key]
+            ext = re.search(r'(\.tar\.gz|\.gz|\.tgz|\.tar)$', url)
+            name = name + ext
+            config[tool][name] = job.addChildJobFn(download_url_job, url, s3_key_path=config['ssec']).rv()
     return config
 
 
@@ -268,6 +271,7 @@ def generate_file(file_path, generate_func):
         f.write(generate_func())
     print('\t{} has been generated in the current working directory.'.format(os.path.basename(file_path)))
 
+
 def check_for_required_parameters(config):
     """
     Parses config dictionary and checks for missing parameters
@@ -283,7 +287,8 @@ def check_for_required_parameters(config):
             except KeyError:
                 missing_params.append((tool, param))
     if missing_params:
-        raise ValueError("Missing following parameters in config file:\n{}".format('\n'.join(missing_params)))
+        msg = ['{}: {}'.format(tool,param) for (tool, param) in missing_params]
+        raise ValueError("Missing following parameters in config file:\n{}".format('\n'.join(msg)))
 
 
 def main():
