@@ -40,24 +40,25 @@ def download_sample(job, sample, config):
     config.file_type, config.paired, config.uuid, config.url = sample
     config.paired = True if config.paired == 'paired' else False
     config.cores = min(config.maxCores, multiprocessing.cpu_count())
+    disk = '2G' if config.ci_test else '20G'
     job.fileStore.logToMaster('UUID: {}\nURL: {}\nPaired: {}\nFile Type: {}\nCores: {}\nCIMode: {}'.format(
         config.uuid, config.url, config.paired, config.file_type, config.cores, config.ci_test))
     # Download or locate local file and place in the jobStore
     tar_id, r1_id, r2_id = None, None, None
     if config.file_type == 'tar':
         tar_id = job.addChildJobFn(download_url_job, config.url, cghub_key_path=config.gtkey,
-                                   s3_key_path=config.ssec, disk='20G').rv()
+                                   s3_key_path=config.ssec, disk=disk).rv()
     else:
         if config.paired:
             require(len(config.url.split(',')) == 2, 'Fastq pairs must have 2 URLS separated by comma')
             r1_url, r2_url = config.url.split(',')
             r1_id = job.addChildJobFn(download_url_job, r1_url, cghub_key_path=config.gtkey,
-                                      s3_key_path=config.ssec, disk='20G').rv()
+                                      s3_key_path=config.ssec, disk=disk).rv()
             r2_id = job.addChildJobFn(download_url_job, r2_url, cghub_key_path=config.gtkey,
-                                      s3_key_path=config.ssec, disk='20G').rv()
+                                      s3_key_path=config.ssec, disk=disk).rv()
         else:
             r1_id = job.addChildJobFn(download_url_job, config.url, cghub_key_path=config.gtkey,
-                                      s3_key_path=config.ssec, disk='20G').rv()
+                                      s3_key_path=config.ssec, disk=disk).rv()
     job.addFollowOnJobFn(preprocessing_declaration, config, tar_id, r1_id, r2_id)
 
 
@@ -176,7 +177,7 @@ def process_sample_tar(job, config, tar_id):
     tar_path = os.path.join(work_dir, 'sample.tar')
     # Untar File and concat
     subprocess.check_call(['tar', '-xvf', tar_path, '-C', work_dir], stderr=PIPE, stdout=PIPE)
-    os.remove(os.path.join(work_dir, 'sample.tar'))
+    job.fileStore.deleteLocalFile(os.path.join(work_dir, 'sample.tar'))
     fastqs = []
     for root, subdir, files in os.walk(work_dir):
         fastqs.extend([os.path.join(root, x) for x in files])
