@@ -163,8 +163,12 @@ def call_adam(master_ip, arguments,
                   "--conf", ("spark.hadoop.fs.default.name=hdfs://%s:%s" % (master_ip, HDFS_MASTER_PORT)),]
         work_dir = '.'
 
-    default_params = (master +
-                      ["--conf", "spark.driver.maxResultSize=0"]) # set max result size to unlimited, see #177
+    default_params = (master + [
+            # set max result size to unlimited, see #177
+            "--conf", "spark.driver.maxResultSize=0",
+            "--conf", "spark.storage.memoryFraction=0.3",
+            "--conf", "spark.storage.unrollFraction=0.1",
+            "--conf", "spark.network.timeout=300s"])
 
     # are we running adam via docker, or do we have a native path?
     if native_adam_path is None:
