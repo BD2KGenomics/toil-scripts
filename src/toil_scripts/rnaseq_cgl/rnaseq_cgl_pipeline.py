@@ -173,11 +173,10 @@ def process_sample_tar(job, config, tar_id):
     work_dir = job.fileStore.getLocalTempDir()
     r1_id, r2_id = None, None
     # I/O
-    job.fileStore.readGlobalFile(tar_id, os.path.join(work_dir, 'sample.tar'), mutable=True)
+    job.fileStore.readGlobalFile(tar_id, os.path.join(work_dir, 'sample.tar'))
     tar_path = os.path.join(work_dir, 'sample.tar')
     # Untar File and concat
     subprocess.check_call(['tar', '-xvf', tar_path, '-C', work_dir], stderr=PIPE, stdout=PIPE)
-    job.fileStore.deleteLocalFile(os.path.join(work_dir, 'sample.tar'))
     fastqs = []
     for root, subdir, files in os.walk(work_dir):
         fastqs.extend([os.path.join(root, x) for x in files])
