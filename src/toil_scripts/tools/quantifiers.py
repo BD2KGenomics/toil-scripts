@@ -107,8 +107,8 @@ def run_rsem_postprocess(job, uuid, rsem_gene_id, rsem_isoform_id):
     """
     work_dir = job.fileStore.getLocalTempDir()
     # I/O
-    job.fileStore.readGlobalFile(rsem_gene_id, os.path.join(work_dir, 'rsem_gene.tab'))
-    job.fileStore.readGlobalFile(rsem_isoform_id, os.path.join(work_dir, 'rsem_isoform.tab'))
+    job.fileStore.readGlobalFile(rsem_gene_id, os.path.join(work_dir, 'rsem_gene.tab'), mutable=True)
+    job.fileStore.readGlobalFile(rsem_isoform_id, os.path.join(work_dir, 'rsem_isoform.tab'), mutable=True)
     # Convert RSEM files into individual .tab files.
     docker_call(tool='jvivian/rsem_postprocess', parameters=[uuid], work_dir=work_dir)
     os.rename(os.path.join(work_dir, 'rsem_gene.tab'), os.path.join(work_dir, 'rsem_genes.results'))
