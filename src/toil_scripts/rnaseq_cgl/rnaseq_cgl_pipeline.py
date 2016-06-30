@@ -468,6 +468,7 @@ def static_dag_launchpoint(job, job_vars):
     job_vars: tuple     Tuple of dictionaries: input_args and ids
     """
     input_args, ids = job_vars
+    ids['R.fastq'] = None
     if 'sample.tar' in ids:
         a = job.wrapJobFn(process_sample_tar, job_vars, disk='70G').encapsulate()
     else:
@@ -488,7 +489,6 @@ def process_sample_tar(job, job_vars):
     # Unpack variables
     input_args, ids = job_vars
     work_dir = job.fileStore.getLocalTempDir()
-    ids['R.fastq'] = None
     # I/O
     read_from_filestore(job, work_dir, ids, 'sample.tar')
     sample_tar = os.path.join(work_dir, 'sample.tar')
