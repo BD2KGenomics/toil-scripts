@@ -815,10 +815,9 @@ def consolidate_output(job, job_vars, output_ids_and_values):
     # I/O
     if improper_pair:
         uuid = 'IMPROPERLY_PAIRED.{}'.format(uuid)
-        input_args['uuid'] = uuid
     if single_end:
         uuid = 'SINGLE-END.{}'.format(uuid)
-        input_args['uuid'] = uuid
+    input_args['uuid'] = uuid
     out_tar = os.path.join(work_dir, uuid + '.tar.gz')
     # Consolidate separate tarballs into one as streams (avoids unnecessary untaring)
     with tarfile.open(os.path.join(work_dir, out_tar), 'w:gz') as f_out:
@@ -877,10 +876,7 @@ def upload_to_s3(job, job_vars):
     else:
         read_from_filestore(job, work_dir, ids, 'uuid.tar.gz')
         uuid_tar = os.path.join(work_dir, 'uuid.tar.gz')
-        if 'R.fastq' in ids:
-            k.key = os.path.join(bucket_dir, uuid + 'single-end' + '.tar.gz')
-        else:
-            k.key = os.path.join(bucket_dir, uuid + '.tar.gz')
+        k.key = os.path.join(bucket_dir, uuid + '.tar.gz')
         k.set_contents_from_filename(uuid_tar)
 
 
