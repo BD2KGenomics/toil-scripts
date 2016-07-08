@@ -1,12 +1,15 @@
 import os
 from toil.job import Job
+from toil_scripts.lib import get_work_directory
 
 
-def test_sample_batcher(tmpdir):
+def test_map_job(tmpdir):
     from toil_scripts.lib.jobs import map_job
-    options = Job.Runner.getDefaultOptions(os.path.join(str(tmpdir), 'test_store'))
+    work_dir = get_work_directory()
+    options = Job.Runner.getDefaultOptions(os.path.join(work_dir, 'test_store'))
+    options.workDir = work_dir
     samples = [x for x in xrange(200)]
-    j = Job.wrapJobFn(map_job, _test_batch, samples, 'a', 'b', 'c')
+    j = Job.wrapJobFn(map_job, _test_batch, samples, 'a', 'b', 'c', disk='1K')
     Job.Runner.startToil(j, options)
 
 
