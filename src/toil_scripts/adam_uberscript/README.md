@@ -36,8 +36,8 @@ This document assumes that all machines are run in a separate
 3. Running the pipelines:
     These should be run in succession, each in a separate screen, from the head node.     
     - Launch Cluster:
-        `PYTHONPATH=$PYTHONPATH:~/toil-scripts/src python -m toil_scripts.adam_uberscript.adam_uberscript launch-cluster -c <cluster name> -S ~/toil-scripts/ -t r3.8xlarge -b ~/.boto -M <manifest file>`
+        `PYTHONPATH=$PYTHONPATH:~/toil-scripts/src python -m toil_scripts.adam_uberscript.adam_uberscript launch-cluster -c <cluster name> -S ~/toil-scripts/ -t r3.8xlarge -b ~/.boto -M <manifest file> -C <path to config file>`
     - Launch Pipeline:
-        `PYTHONPATH=$PYTHONPATH:~/toil-scripts/src python -m toil_scripts.adam_uberscript.adam_uberscript launch-pipeline -c <cluster name> -j <jobstore> -B <data bucket> -m <memory per worker node> -s <spark cluster size including master>`
+        `PYTHONPATH=$PYTHONPATH:~/toil-scripts/src python -m toil_scripts.adam_uberscript.adam_uberscript launch-pipeline -c <cluster name> -j <jobstore> -C <path to config file>`
     - Launch Metrics:
         `PYTHONPATH=$PYTHONPATH:~/toil-scripts/src python -m toil_scripts.adam_uberscript.adam_uberscript launch-metrics -c "<cluster name>" -j <jobstore> --namespace $CGCLOUD_NAMESPACE -t r3.8xlarge`
