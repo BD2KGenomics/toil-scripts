@@ -1,9 +1,14 @@
 ## University of California, Santa Cruz Genomics Institute
 ### Guide: Running UNC Best Practices RNA-seq Pipeline using Toil
 
-This guide attempts to walk the user through running this pipeline from start to finish. If there are any questions
-please contact John Vivian (jtvivian@gmail.com). If you find any errors or corrections please feel free to make a 
-pull request.  Feedback of any kind is appreciated.
+**This pipeline has been deprecated in favor of the CGL RNA-seq pipeline, which is an order of magnitude faster
+and produces results that are concordant to this pipeline. If you'd still like to use this pipeline, you will need
+to use an earlier version of Toil**
+
+`pip install toil==3.1.6`
+
+This guide attempts to walk the user through running this pipeline from start to finish. 
+If you find any errors or corrections please feel free to make a pull request. Feedback of any kind is appreciated.
 
 ## Overview
 This pipeline accepts a sample.tar file (either by URL or locally) that contains RNA-seq fq.gz data files.  It assumes
