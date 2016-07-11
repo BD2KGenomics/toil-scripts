@@ -68,8 +68,6 @@ kwargs = dict(
         'console_scripts': [
             'toil-bwa = toil_scripts.batch_alignment.bwa_alignment:main',
             'toil-rnaseq = toil_scripts.rnaseq_cgl.rnaseq_cgl_pipeline:main',
-            'toil-rnaseq-unc = toil_scripts.rnaseq_unc.rnaseq_unc_pipeline:main',
-            'toil-spladder = toil_scripts.spladder_pipeline.spladder_pipeline:main',
             'toil-exome = toil_scripts.exome_variant_pipeline.exome_variant_pipeline:main']})
 
 
