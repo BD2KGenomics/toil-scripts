@@ -82,6 +82,7 @@ be downloaded after creating an account which takes about 1 minute and is free.
 ## Example Commands
 
 Run sample(s) locally using the manifest
+
 1. `toil-rnaseq generate`
 2. Fill in config and manifest
 3. `toil-rnaseq run ./example-jobstore`
@@ -92,6 +93,7 @@ Toil options can be appended to `toil-rnaseq run`, for example:
 For a complete list of Toil options, just type `toil-rnaseq run -h`
 
 Run a variety of samples locally
+
 1. `toil-rnaseq generate-config`
 2. Fill in config
 3. `toil-rnaseq run ./example-jobstore --retryCount=1 --workDir=/data --samples \
@@ -103,6 +105,23 @@ Run a variety of samples locally
 star-index: s3://cgl-pipeline-inputs/rnaseq_cgl/ci/starIndex_chr6.tar.gz
 kallisto-index: s3://cgl-pipeline-inputs/rnaseq_cgl/kallisto_hg38.idx
 rsem-ref: s3://cgl-pipeline-inputs/rnaseq_cgl/ci/rsem_ref_chr6.tar.gz
+output-dir: /data/my-toil-run
+s3-dir: s3://my-bucket/test/rnaseq
+ssec: 
+gt-key: 
+wiggle: true
+save-bam: true
+ci-test:
+fwd-3pr-adapter: AGATCGGAAGAG
+rev-3pr-adapter: AGATCGGAAGAG
+```
+
+Example with local input files
+
+```
+star-index: file://data/starIndex_chr6.tar.gz
+kallisto-index: file://data/kallisto_hg38.idx
+rsem-ref: file://data/rsem_ref_chr6.tar.gz
 output-dir: /data/my-toil-run
 s3-dir: s3://my-bucket/test/rnaseq
 ssec: 
