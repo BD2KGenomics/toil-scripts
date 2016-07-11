@@ -22,5 +22,5 @@ The general dependencies for these pipelines are:
 Our group utilizes genomics tools encapsulated within Docker containers for portability.  Each of these
 pipelines can be run locally on your laptop, on a baremetal cluster, or on a cloud provider. 
 
-If there are any questions please contact John Vivian (jtvivian@gmail.com).
+If there are any questions please contact the Toil team at: Toil@googlegroups.com 
 If you find any errors or corrections please feel free to make a pull request.  Feedback of any kind is appreciated.

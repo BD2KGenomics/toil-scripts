@@ -43,3 +43,6 @@ def cutadapt(job, r1_id, r2_id, fwd_3pr_adapter, rev_3pr_adapter):
         r1_cut_id = job.fileStore.writeGlobalFile(os.path.join(work_dir, 'R1_cutadapt.fastq'))
         r2_cut_id = None
     return r1_cut_id, r2_cut_id
+
+
+

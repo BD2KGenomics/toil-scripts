@@ -35,6 +35,20 @@ def move_files(file_paths, output_dir):
         shutil.move(file_path, dest)
 
 
+def move_file_job(job, name, file_id, output_dir):
+    """
+    Job version of move_files for one file
+
+    :param JobFunctionWrappingJob job: passed automatically by Toil
+    :param str name: Name of output file (including extension)
+    :param str file_id: FileStoreID of file
+    :param str output_dir: Location to place output file
+    """
+    work_dir = job.fileStore.getLocalTempDir()
+    fpath = job.fileStore.readGlobalFile(file_id, os.path.join(work_dir, name))
+    move_files([fpath], output_dir)
+
+
 def consolidate_tarballs_job(job, fname_to_id):
     """
     Combine the contents of separate tarballs into one.
