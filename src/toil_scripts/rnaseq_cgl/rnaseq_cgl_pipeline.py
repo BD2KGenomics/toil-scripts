@@ -26,6 +26,8 @@ from toil_scripts.tools.aligners import run_star
 from toil_scripts.tools.preprocessing import cutadapt
 from toil_scripts.tools.quantifiers import run_kallisto, run_rsem, run_rsem_postprocess
 
+schemes = ('http', 'file', 's3', 'ftp', 'gnos')
+
 
 # Start of pipeline
 def download_sample(job, sample, config):
@@ -307,13 +309,13 @@ def generate_config():
         # Local inputs follow the URL convention: file:///full/path/to/input
         # Comments (beginning with #) do not need to be removed. Optional parameters may be left blank.
         ##############################################################################################################
-        # Required: URL (http://, file://, s3://) to index tarball used by STAR
+        # Required: URL {scheme} to index tarball used by STAR
         star-index: s3://cgl-pipeline-inputs/rnaseq_cgl/starIndex_hg38_no_alt.tar.gz
 
-        # Required: URL (http://, file://, s3://) to kallisto index file.
+        # Required: URL {scheme} to kallisto index file.
         kallisto-index: s3://cgl-pipeline-inputs/rnaseq_cgl/kallisto_hg38.idx
 
-        # Required: URL (http://, file://, s3://) to reference tarball used by RSEM
+        # Required: URL {scheme} to reference tarball used by RSEM
         rsem-ref: s3://cgl-pipeline-inputs/rnaseq_cgl/rsem_ref_hg38_no_alt.tar.gz
 
         # NOTE: Pipeline requires at least one output option
@@ -347,7 +349,7 @@ def generate_config():
 
         # Optional: If true, uses resource requirements appropriate for continuous integration
         ci-test:
-    """[1:])
+    """.format(scheme=[x + '://' for x in schemes])[1:])
 
 
 def generate_manifest():
@@ -358,7 +360,7 @@ def generate_manifest():
         #   filetype    Filetype of the sample. Options: "tar" or "fq", for tarball/tarfile or fastq/fastq.gz
         #   paired      Indicates whether the data is paired or single-ended. Options:  "paired" or "single"
         #   UUID        This should be a unique identifier for the sample to be processed
-        #   URL         A URL (http://, ftp://, file://, s3://, gnos://) pointing to the sample
+        #   URL         A URL {scheme} pointing to the sample
         #
         #   If sample is being submitted as a fastq pair, provide two URLs separated by a comma.
         #
@@ -371,7 +373,7 @@ def generate_manifest():
         #   fq  single  UUID_5  s3://my-bucket-name/directory/single-end-file.fq
         #
         #   Place your samples below, one per line.
-        """[1:])
+        """.format(scheme=[x + '://' for x in schemes])[1:])
 
 
 def generate_file(file_path, generate_func):
@@ -481,8 +483,8 @@ def main():
         require(config.output_dir or config.s3_output_dir, 'output-dir AND/OR s3-output-dir need to be defined, '
                                                            'otherwise sample output is not stored anywhere!')
         for input in [x for x in [config.kallisto_index, config.star_index, config.rsem_ref] if x]:
-            require(urlparse(input).scheme, 'Input in config must have the appropriate URL prefix: '
-                                            'http://, file://, ftp://, gnos://')
+            require(urlparse(input).scheme in schemes,
+                    'Input in config must have the appropriate URL prefix: {}'.format(schemes))
         # Program checks
         for program in ['curl', 'docker']:
             require(next(which(program), None), program + ' must be installed on every node.'.format(program))
