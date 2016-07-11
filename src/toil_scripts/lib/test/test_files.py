@@ -13,14 +13,14 @@ def test_tarball_files(tmpdir):
     assert os.path.exists(os.path.join(work_dir, 'test.tar'))
 
 
-def test_move_files(tmpdir):
-    from toil_scripts.lib.files import move_files
+def test_copy_files(tmpdir):
+    from toil_scripts.lib.files import copy_files
     work_dir = str(tmpdir)
     os.mkdir(os.path.join(work_dir, 'test'))
     fpath = os.path.join(work_dir, 'output_file')
     with open(fpath, 'wb') as fout:
         fout.write(os.urandom(1024))
-    move_files([fpath], os.path.join(work_dir, 'test'))
+    copy_files([fpath], os.path.join(work_dir, 'test'))
     assert os.path.exists(os.path.join(work_dir, 'test', 'output_file'))
 
 

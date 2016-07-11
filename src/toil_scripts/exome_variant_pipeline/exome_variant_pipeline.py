@@ -14,7 +14,7 @@ from bd2k.util.processes import which
 from toil.job import Job
 
 from toil_scripts.lib import require
-from toil_scripts.lib.files import move_files
+from toil_scripts.lib.files import copy_files
 from toil_scripts.lib.jobs import map_job
 from toil_scripts.lib.urls import download_url_job, s3am_upload
 from toil_scripts.tools.mutation_callers import run_muse
@@ -193,7 +193,7 @@ def consolidate_output(job, config, mutect, pindel, muse):
     if config.output_dir:
         job.fileStore.logToMaster('Moving {} to output dir: {}'.format(config.uuid, config.output_dir))
         mkdir_p(config.output_dir)
-        move_files(file_paths=[out_tar], output_dir=config.output_dir)
+        copy_files(file_paths=[out_tar], output_dir=config.output_dir)
     if config.s3_output_dir:
         job.fileStore.logToMaster('Uploading {} to S3: {}'.format(config.uuid, config.s3_output_dir))
         s3am_upload(fpath=out_tar, s3_dir=config.s3_output_dir, num_cores=config.cores)
