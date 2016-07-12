@@ -129,7 +129,8 @@ def call_conductor(master_ip, src, dst, memory=None, override_parameters=None):
                 mock=False)
 
 
-def call_adam(master_ip, arguments, memory=None, override_parameters=None):
+def call_adam(master_ip, arguments, memory=None, override_parameters=None,
+              run_local=False, local_dir=None):
     """
     Invokes the ADAM container. Find ADAM at https://github.com/bigdatagenomics/adam.
 
@@ -143,7 +144,19 @@ def call_adam(master_ip, arguments, memory=None, override_parameters=None):
     :type memory: int or None
     :type override_parameters: list of string or None
     """
-    default_params = ["--conf", "spark.driver.maxResultSize=0"] # set max result size to unlimited, see #177
+    if local:
+        master = ["--master", "local[*]"]
+        require(local_dir is not None,
+                "If running in local mode, the work dir must be set.")
+        work_dir = local_dir
+    else:
+        master = ["--master",
+                  ("spark://%s:%s" % (master_ip, SPARK_MASTER_PORT)),
+                  "--conf", ("spark.hadoop.fs.default.name=hdfs://%s:%s" % (master_ip, HDFS_MASTER_PORT)),]
+        work_dir = '.'
+
+    default_params = (master +
+                      ["--conf", "spark.driver.maxResultSize=0"]) # set max result size to unlimited, see #177
 
     docker_call(rm=False,
                 tool="quay.io/ucsc_cgl/adam:962-ehf--6e7085f8cac4b9a927dc9fb06b48007957256b80",
