@@ -19,23 +19,6 @@ This pipeline produces a tarball (tar.gz) file for a given sample that contains:
 
 The output tarball is *stamped* with the UUID for the sample (e.g. UUID.tar.gz). 
 
-## Installation
-
-Toil-scripts is now pip installable! `pip install toil-scripts` for a toil-stable version 
-or `pip install --pre toil-scripts` for cutting edge development version.
-
-Type: `toil-exome` to get basic help menu and instructions
-
-To decrease the chance of versioning conflicts, install toil-scripts into a virtualenv: 
-
-- `virtualenv ~/toil-scripts` 
-- `source ~/toil-scripts/bin/activate`
-- `pip install toil`
-- `pip install toil-scripts`
-
-If Toil is already installed globally (true for CGCloud users), or there are global dependencies (like Mesos),
-use virtualenv's `--system-site-packages` flag.
-
 ## Dependencies
 
 This pipeline has been tested on Ubuntu 14.04, but should also run on other unix based systems.  `apt-get` and `pip`
@@ -52,6 +35,27 @@ privileges you will need to build these tools from source, or bug a sysadmin abo
 
     1. Toil         pip install toil
     2. S3AM         pip install --pre s3am (optional, needed for uploading output to S3)
+
+## Installation
+
+Toil-scripts is now pip installable! `pip install toil-scripts` for a toil-stable version 
+or `pip install --pre toil-scripts` for cutting edge development version. CGCloud users should
+see the exception section below.
+
+To decrease the chance of versioning conflicts, install toil-scripts into a virtualenv: 
+
+- `virtualenv ~/toil-scripts` 
+- `source ~/toil-scripts/bin/activate`
+- `pip install toil`, but see next paragraph
+- `pip install toil-scripts`
+
+If there is an existing, system-wide installation of Toil, as is the case when using CGCloud, 
+the `pip install toil` step should be skipped and virtualenv should be invoked with `--system-site-packages`. 
+That way the existing Toil installation will be available inside the virtualenv.
+
+The reason that Toil isn't installed automatically as a dependency of toil-scripts is to
+ give users the opportunity to customize the Toil installation by adding optional extras, 
+ e.g. via `pip install toil[aws,mesos]`.
 
 ## Inputs
 
@@ -78,6 +82,8 @@ be downloaded after creating an account which takes about 1 minute and is free.
 
 
 ## General Usage
+ 
+Type `toil-exome` to get basic help menu and instructions
  
 1. Type `toil-exome generate` to create an editable manifest and config in the current working directory.
 2. Parameterize the pipeline by editing the config.
@@ -134,7 +140,7 @@ run-pindel: true
 run-muse: true          
 preprocessing: true     
 output-dir:          
-s3-dir:                 
+s3-output-dir:                 
 ssec:                   
 gtkey:                  
 ci-test:
