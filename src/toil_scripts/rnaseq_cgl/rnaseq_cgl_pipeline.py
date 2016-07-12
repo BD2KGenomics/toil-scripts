@@ -18,7 +18,7 @@ from bd2k.util.processes import which
 from toil.job import Job
 
 from toil_scripts.lib import require, UserError
-from toil_scripts.lib.files import move_files
+from toil_scripts.lib.files import copy_files
 from toil_scripts.lib.jobs import map_job
 from toil_scripts.lib.urls import download_url_job, s3am_upload
 from toil_scripts.tools.QC import run_fastqc
@@ -127,7 +127,7 @@ def star_alignment(job, config, r1_id, r2_id):
     job.fileStore.logToMaster('Queueing RSEM job for: ' + config.uuid)
     mem = '2G' if config.ci_test else '40G'
     star = job.addChildJobFn(run_star, config.cores, r1_id, r2_id, star_index_url=config.star_index,
-                             cores=config.cores, memory=mem).rv()
+                             wiggle=config.wiggle, cores=config.cores, memory=mem).rv()
     return job.addFollowOnJobFn(rsem_quantification, config, star).rv()
 
 
@@ -141,18 +141,27 @@ def rsem_quantification(job, config, star_output):
     :return: FileStoreID results from RSEM postprocess
     :rtype: str
     """
+    work_dir = job.fileStore.getLocalTempDir()
     cores = min(16, config.cores)
     disk = '2G' if config.ci_test else '40G'
-    transcriptome_id, sorted_id = star_output
+    if config.wiggle:
+        transcriptome_id, sorted_id, wiggle_id = star_output
+        wiggle_path = os.path.join(work_dir, config.uuid + '.wiggle.bg')
+        job.fileStore.readGlobalFile(wiggle_id, wiggle_path)
+        if config.s3_output_dir:
+            s3am_upload(fpath=wiggle_path, s3_dir=config.s3_output_dir, s3_key_path=config.ssec)
+        if config.output_idr:
+            copy_files(file_paths=[wiggle_path], output_dir=config.output_dir)
+    else:
+        transcriptome_id, sorted_id = star_output
     # Save sorted bam if flag is selected
     if config.save_bam:
-        work_dir = job.fileStore.getLocalTempDir()
-        bam_path = os.path.join(work_dir, '{}.sorted.bam'.format(config.uuid))
-        sorted_bam = job.fileStore.readGlobalFile(sorted_id, bam_path)
+        bam_path = os.path.join(work_dir, config.uuid + '.sorted.bam')
+        job.fileStore.readGlobalFile(sorted_id, bam_path)
         if config.s3_output_dir and config.ssec:
-            s3am_upload(fpath=sorted_bam, s3_dir=config.s3_output_dir, s3_key_path=config.ssec)
+            s3am_upload(fpath=bam_path, s3_dir=config.s3_output_dir, s3_key_path=config.ssec)
         if config.output_dir:
-            move_files(file_paths=[sorted_bam], output_dir=config.output_dir)
+            copy_files(file_paths=[bam_path], output_dir=config.output_dir)
     # Declare RSEM and RSEM post-process jobs
     rsem_output = job.wrapJobFn(run_rsem, config.cores, transcriptome_id, config.rsem_ref, paired=config.paired,
                                 cores=cores, disk=disk)
@@ -342,6 +351,9 @@ def generate_config():
 
         # Optional: Provide a full path to a CGHub Key used to access GNOS hosted data
         gtkey:
+
+        # Optional: If true, saves the wiggle file (.bg extension) output by STAR
+        wiggle:
 
         # Optional: If true, saves the aligned bam (by coordinate) produced by STAR
         # You must also specify an ssec key if you want to upload to the s3-output-dir
