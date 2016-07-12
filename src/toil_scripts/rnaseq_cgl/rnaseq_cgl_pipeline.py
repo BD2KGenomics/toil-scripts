@@ -23,7 +23,7 @@ from toil_scripts.lib.jobs import map_job
 from toil_scripts.lib.urls import download_url_job, s3am_upload
 from toil_scripts.tools.QC import run_fastqc
 from toil_scripts.tools.aligners import run_star
-from toil_scripts.tools.preprocessing import cutadapt
+from toil_scripts.tools.preprocessing import run_cutadapt
 from toil_scripts.tools.quantifiers import run_kallisto, run_rsem, run_rsem_postprocess
 
 schemes = ('http', 'file', 's3', 'ftp', 'gnos')
@@ -82,7 +82,7 @@ def preprocessing_declaration(job, config, tar_id, r1_id, r2_id):
     else:
         if config.cutadapt:
             job.fileStore.logToMaster('Queueing CutAdapt for: ' + config.uuid)
-            preprocessing_output = job.addChildJobFn(cutadapt, config, r1_id, r2_id, disk=disk).rv()
+            preprocessing_output = job.addChildJobFn(run_cutadapt, config, r1_id, r2_id, disk=disk).rv()
         else:
             preprocessing_output = (r1_id, r2_id)
     job.addFollowOnJobFn(pipeline_declaration, config, preprocessing_output)
@@ -209,7 +209,7 @@ def process_sample_tar(job, config, tar_id):
     # Start cutadapt step
     disk = '2G' if config.ci_test else '125G'
     if config.cutadapt:
-        return job.addChildJobFn(cutadapt, r1_id, r2_id, config.fwd_3pr_adapter, config.rev_3pr_adapter, disk=disk).rv()
+        return job.addChildJobFn(run_cutadapt, r1_id, r2_id, config.fwd_3pr_adapter, config.rev_3pr_adapter, disk=disk).rv()
     else:
         return r1_id, r2_id
 

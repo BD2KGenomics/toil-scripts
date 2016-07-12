@@ -2,24 +2,28 @@
 import argparse
 import multiprocessing
 import os
-import subprocess
 import sys
 import tarfile
 import textwrap
 from contextlib import closing
-from glob import glob
 from urlparse import urlparse
 
 import yaml
+from bd2k.util.files import mkdir_p
+from bd2k.util.processes import which
 from toil.job import Job
 
 from toil_scripts.lib import require
-from toil_scripts.lib.files import tarball_files, move_files
+from toil_scripts.lib.files import move_files
 from toil_scripts.lib.jobs import map_job
-from toil_scripts.lib.programs import docker_call
 from toil_scripts.lib.urls import download_url_job, s3am_upload
-from bd2k.util.processes import which
-from bd2k.util.files import mkdir_p
+from toil_scripts.tools.mutation_callers import run_muse
+from toil_scripts.tools.mutation_callers import run_mutect
+from toil_scripts.tools.mutation_callers import run_pindel
+from toil_scripts.tools.preprocessing import run_gatk_preprocessing
+from toil_scripts.tools.preprocessing import run_picard_create_sequence_dictionary
+from toil_scripts.tools.preprocessing import run_samtools_faidx
+from toil_scripts.tools.preprocessing import run_samtools_index
 
 
 # Start of Job Functions
@@ -49,45 +53,9 @@ def reference_preprocessing(job, samples, config):
     :param list[list] samples: A nested list of samples containing sample information
     """
     job.fileStore.logToMaster('Processed reference files')
-    config.fai = job.addChildJobFn(samtools_reference_index, config.reference).rv()
-    config.dict = job.addChildJobFn(picard_reference_dict, config.reference).rv()
+    config.fai = job.addChildJobFn(run_samtools_faidx, config.reference).rv()
+    config.dict = job.addChildJobFn(run_picard_create_sequence_dictionary, config.reference).rv()
     job.addFollowOnJobFn(map_job, download_sample, samples, config)
-
-
-def samtools_reference_index(job, ref_id):
-    """
-    Use Samtools to create reference index file
-
-    :param JobFunctionWrappingJob job: passed automatically by Toil
-    :param str ref_id: FileStoreID for the reference genome
-    :return: FileStoreID for reference index
-    :rtype: str
-    """
-    job.fileStore.logToMaster('Created reference index')
-    work_dir = job.fileStore.getLocalTempDir()
-    job.fileStore.readGlobalFile(ref_id, os.path.join(work_dir, 'ref.fasta'))
-    command = ['faidx', 'ref.fasta']
-    docker_call(work_dir=work_dir, parameters=command,
-                tool='quay.io/ucsc_cgl/samtools:0.1.19--dd5ac549b95eb3e5d166a5e310417ef13651994e')
-    return job.fileStore.writeGlobalFile(os.path.join(work_dir, 'ref.fasta.fai'))
-
-
-def picard_reference_dict(job, ref_id):
-    """
-    Use Picard-tools to create reference dictionary
-
-    :param JobFunctionWrappingJob job: passed automatically by Toil
-    :param str ref_id: FileStoreID for the reference genome
-    :return: FileStoreID for reference dictionary
-    :rtype: str
-    """
-    job.fileStore.logToMaster('Created reference dictionary')
-    work_dir = job.fileStore.getLocalTempDir()
-    job.fileStore.readGlobalFile(ref_id, os.path.join(work_dir, 'ref.fasta'))
-    command = ['CreateSequenceDictionary', 'R=ref.fasta', 'O=ref.dict']
-    docker_call(work_dir=work_dir, parameters=command,
-                tool='quay.io/ucsc_cgl/picardtools:1.95--dd5ac549b95eb3e5d166a5e310417ef13651994e')
-    return job.fileStore.writeGlobalFile(os.path.join(work_dir, 'ref.dict'))
 
 
 def download_sample(job, sample, config):
@@ -97,12 +65,11 @@ def download_sample(job, sample, config):
     :param JobFunctionWrappingJob job: passed automatically by Toil
     :param list sample: Contains uuid, normal URL, and tumor URL
     :param Namespace config: Argparse Namespace object containing argument inputs
-    :param Namespace shared_ids: Argparse Namespace object containing fileStoreIDs of globally shared inputs
     """
     # Create copy of config that is sample specific
     config = argparse.Namespace(**vars(config))
     uuid, normal_url, tumor_url = sample
-    job.fileStore.logToMaster('Downloaded sample: {}'.format(uuid))
+    job.fileStore.logToMaster('Downloaded sample: ' + uuid)
     config.uuid = uuid
     config.normal = normal_url
     config.tumor = tumor_url
@@ -118,63 +85,43 @@ def download_sample(job, sample, config):
 
 def index_bams(job, config):
     """
-    Convenience job for handling bam indexing to make the static workflow declaration cleaner
+    Convenience job for handling bam indexing to make the workflow declaration cleaner
 
     :param JobFunctionWrappingJob job: passed automatically by Toil
     :param Namespace config: Argparse Namespace object containing argument inputs
     """
-    job.fileStore.logToMaster('Indexed sample BAMS')
+    job.fileStore.logToMaster('Indexed sample BAMS: ' + config.uuid)
     disk = '1G' if config.ci_test else '20G'
-    config.normal_bai = job.addChildJobFn(index_bam, config.normal_bam, cores=1, disk=disk).rv()
-    config.tumor_bai = job.addChildJobFn(index_bam, config.tumor_bam, cores=1, disk=disk).rv()
+    config.normal_bai = job.addChildJobFn(run_samtools_index, config.normal_bam, cores=1, disk=disk).rv()
+    config.tumor_bai = job.addChildJobFn(run_samtools_index, config.tumor_bam, cores=1, disk=disk).rv()
     job.addFollowOnJobFn(preprocessing_declaration, config)
-
-
-def index_bam(job, bam_id):
-    """
-    Runs samtools index to create (.bai) files
-
-    :param JobFunctionWrappingJob job: passed automatically by Toil
-    :param str bam_id: FileStoreID of the bam file
-    :return: BAM index FileStoreID
-    :rtype: str
-    """
-    work_dir = job.fileStore.getLocalTempDir()
-    job.fileStore.readGlobalFile(bam_id, os.path.join(work_dir, 'sample.bam'))
-    # Call: index the bam
-    parameters = ['index', '/data/sample.bam']
-    docker_call(work_dir=work_dir, parameters=parameters,
-                tool='quay.io/ucsc_cgl/samtools:0.1.19--dd5ac549b95eb3e5d166a5e310417ef13651994e')
-    # Write to fileStore
-    return job.fileStore.writeGlobalFile(os.path.join(work_dir, 'sample.bam.bai'))
 
 
 def preprocessing_declaration(job, config):
     """
-    Statically declare jobs related to preprocessing
+    Declare jobs related to preprocessing
 
     :param JobFunctionWrappingJob job: passed automatically by Toil
     :param Namespace config: Argparse Namespace object containing argument inputs
     """
     if config.preprocessing:
+        job.fileStore.logToMaster('Ran preprocessing: ' + config.uuid)
         disk = '1G' if config.ci_test else '20G'
         mem = '2G' if config.ci_test else '10G'
-        processed_normal = job.wrapJobFn(start_bam_preprocessing, config.cores, config.normal_bam, config.normal_bai,
+        processed_normal = job.wrapJobFn(run_gatk_preprocessing, config.cores, config.normal_bam, config.normal_bai,
                                          config.reference, config.dict, config.fai, config.phase, config.mills,
-                                         config.dbsnp, mem, cores=1, memory=mem, disk=disk).encapsulate()
-        processed_tumor = job.wrapJobFn(start_bam_preprocessing, config.cores, config.tumor_bam, config.tumor_bai,
+                                         config.dbsnp, mem, cores=1, memory=mem, disk=disk)
+        processed_tumor = job.wrapJobFn(run_gatk_preprocessing, config.cores, config.tumor_bam, config.tumor_bai,
                                         config.reference, config.dict, config.fai, config.phase, config.mills,
-                                        config.dbsnp, mem, cores=1, memory=mem, disk=disk).encapsulate()
+                                        config.dbsnp, mem, cores=1, memory=mem, disk=disk)
+        static_workflow = job.wrapJobFn(static_workflow_declaration, config, processed_normal.rv(0),
+                                        processed_normal.rv(1), processed_tumor.rv(0), processed_tumor.rv(1))
         job.addChild(processed_normal)
         job.addChild(processed_tumor)
-        normal_bam = processed_normal.rv()
-        tumor_bam = processed_tumor.rv()
-        normal_bai = processed_normal.addChildJobFn(index_bam, normal_bam, cores=1, disk=disk).rv()
-        tumor_bai = processed_tumor.addChildJobFn(index_bam, tumor_bam, cores=1, disk=disk).rv()
+        job.addFollowOn(static_workflow)
     else:
-        normal_bam, normal_bai = config.normal_bam, config.normal_bai
-        tumor_bam, tumor_bai = config.tumor_bam, config.tumor_bai
-    job.addFollowOnJobFn(static_workflow_declaration, config, normal_bam, normal_bai, tumor_bam, tumor_bai)
+        job.addFollowOnJobFn(static_workflow_declaration, config, config.normal_bam, config.normal_bai,
+                             config.tumor_bam, config.tumor_bai)
 
 
 def static_workflow_declaration(job, config, normal_bam, normal_bai, tumor_bam, tumor_bai):
@@ -192,307 +139,21 @@ def static_workflow_declaration(job, config, normal_bam, normal_bai, tumor_bam, 
     memory = '1G' if config.ci_test else '10G'
     disk = '1G' if config.ci_test else '75G'
     mutect_results, pindel_results, muse_results = None, None, None
-    mutect = job.wrapJobFn(run_mutect, normal_bam, normal_bai, tumor_bam, tumor_bai, config.reference, config.dict,
-                           config.fai, config.cosmic, config.dbsnp, memory=memory, disk=disk)
-    pindel = job.wrapJobFn(run_pindel, config.cores, normal_bam, normal_bai, tumor_bam, tumor_bai, config.reference,
-                           config.fai, cores=config.cores,  memory=memory, disk=disk)
-    muse = job.wrapJobFn(run_muse, config.cores, normal_bam, normal_bai, tumor_bam, tumor_bai, config.reference,
-                         config.dict, config.fai, config.dbsnp, cores=config.cores, memory=memory, disk=disk)
     if config.run_mutect:
-        job.addChild(mutect)
-        mutect_results = mutect.rv()
+        mutect_results = job.addChildJobFn(run_mutect, normal_bam, normal_bai, tumor_bam, tumor_bai, config.reference,
+                                           config.dict, config.fai, config.cosmic, config.dbsnp,
+                                           cores=1, memory=memory, disk=disk).rv()
     if config.run_pindel:
-        job.addChild(pindel)
-        pindel_results = pindel.rv()
+        pindel_results = job.addChildJobFn(run_pindel, config.cores, normal_bam, normal_bai, tumor_bam, tumor_bai,
+                                           config.reference, config.fai,
+                                           cores=config.cores,  memory=memory, disk=disk).rv()
     if config.run_muse:
-        job.addChild(muse)
-        muse_results = muse.rv()
+        muse_results = job.addChildJobFn(run_muse, config.cores, normal_bam, normal_bai, tumor_bam, tumor_bai,
+                                         config.reference, config.dict, config.fai, config.dbsnp,
+                                         cores=config.cores, memory=memory, disk=disk).rv()
     # Pass tool results (whether None or a promised return value) to consolidation step
     consolidation = job.wrapJobFn(consolidate_output, config, mutect_results, pindel_results, muse_results)
     job.addFollowOn(consolidation)
-
-
-def start_bam_preprocessing(job, cores, bam, bai, ref, ref_dict, fai, phase, mills, dbsnp, mem='10G'):
-    """
-    Creates intervals file needed for indel realignment
-
-    :param JobFunctionWrappingJob job: passed automatically by Toil
-    :param int cores: Maximum number of cores on a worker node
-    :param str bam: Sample BAM FileStoreID
-    :param str bai: Bam Index FileStoreID
-    :param str ref: Reference genome FileStoreID
-    :param str ref_dict: Reference dictionary FileStoreID
-    :param str fai: Reference index FileStoreID
-    :param str phase: Phase VCF FileStoreID
-    :param str mills: Mills VCF FileStoreID
-    :param str dbsnp: DBSNP VCF FileStoreID
-    :param str mem: Memory value to be passed to children. Needed for CI tests
-    :return: FileStoreID for the processed bam
-    :rtype: str
-    """
-    work_dir = job.fileStore.getLocalTempDir()
-    file_ids = [ref, fai, ref_dict, bam, bai, phase, mills]
-    file_names = ['ref.fasta', 'ref.fasta.fai', 'ref.dict', 'sample.bam', 'sample.bam.bai', 'phase.vcf', 'mills.vcf']
-    for file_store_id, name in zip(file_ids, file_names):
-        job.fileStore.readGlobalFile(file_store_id, os.path.join(work_dir, name))
-    # Call: GATK -- RealignerTargetCreator
-    parameters = ['-T', 'RealignerTargetCreator',
-                  '-nt', str(cores),
-                  '-R', '/data/ref.fasta',
-                  '-I', '/data/sample.bam',
-                  '-known', '/data/phase.vcf',
-                  '-known', '/data/mills.vcf',
-                  '--downsampling_type', 'NONE',
-                  '-o', '/data/sample.intervals']
-    docker_call(tool='quay.io/ucsc_cgl/gatk:3.4--dd5ac549b95eb3e5d166a5e310417ef13651994e',
-                work_dir=work_dir, parameters=parameters, env=dict(JAVA_OPTS='-Xmx{}'.format(mem)))
-    # Write to fileStore
-    intervals = job.fileStore.writeGlobalFile(os.path.join(work_dir, 'sample.intervals'))
-    return job.addChildJobFn(indel_realignment, cores, intervals, bam, bai, ref, ref_dict, fai, phase,
-                             mills, dbsnp, mem, cores=1, memory=mem, disk='25G').rv()
-
-
-def indel_realignment(job, cores, intervals, bam, bai, ref, ref_dict, fai, phase, mills, dbsnp, mem):
-    """
-    Creates realigned bams using the intervals file from previous step
-
-    :param JobFunctionWrappingJob job: passed automatically by Toil
-    :param int cores: Maximum number of cores on a worker node
-    :param str intervals: Indel interval FileStoreID
-    :param str bam: Sample BAM FileStoreID
-    :param str bai: Bam Index FileStoreID
-    :param str ref: Reference genome FileStoreID
-    :param str ref_dict: Reference dictionary FileStoreID
-    :param str fai: Reference index FileStoreID
-    :param str phase: Phase VCF FileStoreID
-    :param str mills: Mills VCF FileStoreID
-    :param str dbsnp: DBSNP VCF FileStoreID
-    :param str mem: Memory value to be passed to children. Needed for CI tests
-    :return: FileStoreID for the processed bam
-    :rtype: str
-    """
-    work_dir = job.fileStore.getLocalTempDir()
-    file_ids = [ref, fai, ref_dict, intervals, bam, bai, phase, mills]
-    file_names = ['ref.fasta', 'ref.fasta.fai', 'ref.dict', 'sample.intervals',
-                  'sample.bam', 'sample.bam.bai', 'phase.vcf', 'mills.vcf']
-    for file_store_id, name in zip(file_ids, file_names):
-        job.fileStore.readGlobalFile(file_store_id, os.path.join(work_dir, name))
-    # Call: GATK -- IndelRealigner
-    parameters = ['-T', 'IndelRealigner',
-                  '-R', '/data/ref.fasta',
-                  '-I', '/data/sample.bam',
-                  '-known', '/data/phase.vcf',
-                  '-known', '/data/mills.vcf',
-                  '-targetIntervals', '/data/sample.intervals',
-                  '--downsampling_type', 'NONE',
-                  '-maxReads', str(720000),
-                  '-maxInMemory', str(5400000),
-                  '-o', '/data/sample.indel.bam']
-    docker_call(tool='quay.io/ucsc_cgl/gatk:3.4--dd5ac549b95eb3e5d166a5e310417ef13651994e',
-                work_dir=work_dir, parameters=parameters, env=dict(JAVA_OPTS='-Xmx{}'.format(mem)))
-    # Write to fileStore
-    indel_bam = job.fileStore.writeGlobalFile(os.path.join(work_dir, 'sample.indel.bam'))
-    indel_bai = job.fileStore.writeGlobalFile(os.path.join(work_dir, 'sample.indel.bai'))
-    return job.addChildJobFn(base_recalibration, cores, indel_bam, indel_bai, ref, ref_dict, fai, dbsnp, mem,
-                             cores=cores, memory=mem, disk='25G').rv()
-
-
-def base_recalibration(job, cores, indel_bam, indel_bai, ref, ref_dict, fai, dbsnp, mem):
-    """
-    Creates recal table used in Base Quality Score Recalibration
-
-    :param JobFunctionWrappingJob job: passed automatically by Toil
-    :param int cores: Maximum number of cores on a worker node
-    :param str indel_bam: Indel interval FileStoreID
-    :param str indel_bai: Bam Index FileStoreID
-    :param str ref: Reference genome FileStoreID
-    :param str ref_dict: Reference dictionary FileStoreID
-    :param str fai: Reference index FileStoreID
-    :param str dbsnp: DBSNP VCF FileStoreID
-    :param str mem: Memory value to be passed to children. Needed for CI tests
-    :return: FileStoreID for the processed bam
-    :rtype: str
-    """
-    work_dir = job.fileStore.getLocalTempDir()
-    file_ids = [ref, fai, ref_dict, indel_bam, indel_bai, dbsnp]
-    file_names = ['ref.fasta', 'ref.fasta.fai', 'ref.dict', 'sample.indel.bam', 'sample.indel.bai', 'dbsnp.vcf']
-    for file_store_id, name in zip(file_ids, file_names):
-        job.fileStore.readGlobalFile(file_store_id, os.path.join(work_dir, name))
-    # Call: GATK -- IndelRealigner
-    parameters = ['-T', 'BaseRecalibrator',
-                  '-nct', str(cores),
-                  '-R', '/data/ref.fasta',
-                  '-I', '/data/sample.indel.bam',
-                  '-knownSites', '/data/dbsnp.vcf',
-                  '-o', '/data/sample.recal.table']
-    docker_call(tool='quay.io/ucsc_cgl/gatk:3.4--dd5ac549b95eb3e5d166a5e310417ef13651994e',
-                work_dir=work_dir, parameters=parameters, env=dict(JAVA_OPTS='-Xmx{}'.format(mem)))
-    # Write output to file store
-    table = job.fileStore.writeGlobalFile(os.path.join(work_dir, 'sample.recal.table'))
-    return job.addChildJobFn(print_reads, cores, table, indel_bam, indel_bai, ref, ref_dict, fai, mem,
-                             cores=cores, memory=mem, disk='25G').rv()
-
-
-def print_reads(job, cores, table, indel_bam, indel_bai, ref, ref_dict, fai, mem):
-    """
-    Creates BAM that has had the base quality scores recalibrated
-
-    :param JobFunctionWrappingJob job: passed automatically by Toil
-    :param int cores: Maximum number of cores on host node
-    :param str table: Recalibration table FileStoreID
-    :param str indel_bam: Indel interval FileStoreID
-    :param str indel_bai: Bam Index FileStoreID
-    :param str ref: Reference genome FileStoreID
-    :param str ref_dict: Reference dictionary FileStoreID
-    :param str fai: Reference index FileStoreID
-    :param str mem: Memory value to be passed to children. Needed for CI tests
-    :return: FileStoreID for the processed bam
-    :rtype: str
-    """
-    work_dir = job.fileStore.getLocalTempDir()
-    file_ids = [ref, fai, ref_dict, table, indel_bam, indel_bai]
-    file_names = ['ref.fasta', 'ref.fasta.fai', 'ref.dict', 'sample.recal.table',
-                  'sample.indel.bam', 'sample.indel.bai']
-    for file_store_id, name in zip(file_ids, file_names):
-        job.fileStore.readGlobalFile(file_store_id, os.path.join(work_dir, name))
-    # Call: GATK -- PrintReads
-    parameters = ['-T', 'PrintReads',
-                  '-nct', str(cores),
-                  '-R', '/data/ref.fasta',
-                  '--emit_original_quals',
-                  '-I', '/data/sample.indel.bam',
-                  '-BQSR', '/data/sample.recal.table',
-                  '-o', '/data/sample.bqsr.bam']
-    docker_call(tool='quay.io/ucsc_cgl/gatk:3.4--dd5ac549b95eb3e5d166a5e310417ef13651994e',
-                work_dir=work_dir, parameters=parameters, env=dict(JAVA_OPTS='-Xmx{}'.format(mem)))
-    # Write ouptut to file store
-    bam_id = job.fileStore.writeGlobalFile(os.path.join(work_dir, 'sample.bqsr.bam'))
-    return bam_id
-
-
-def run_mutect(job, normal_bam, normal_bai, tumor_bam, tumor_bai, ref, ref_dict, fai, cosmic, dbsnp):
-    """
-    Calls MuTect to perform variant analysis
-
-    :param JobFunctionWrappingJob job: passed automatically by Toil
-    :param str normal_bam: Normal BAM FileStoreID
-    :param str normal_bai: Normal BAM index FileStoreID
-    :param str tumor_bam: Tumor BAM FileStoreID
-    :param str tumor_bai: Tumor BAM Index FileStoreID
-    :param str ref: Reference genome FileStoreID
-    :param str ref_dict: Reference dictionary FileStoreID
-    :param str fai: Reference index FileStoreID
-    :param str cosmic: Cosmic VCF FileStoreID
-    :param str dbsnp: DBSNP VCF FileStoreID
-    :return: MuTect output (tarball) FileStoreID
-    :rtype: str
-    """
-    work_dir = job.fileStore.getLocalTempDir()
-    file_ids = [normal_bam, normal_bai, tumor_bam, tumor_bai, ref, fai, ref_dict, cosmic, dbsnp]
-    file_names = ['normal.bam', 'normal.bai', 'tumor.bam', 'tumor.bai', 'ref.fasta',
-                  'ref.fasta.fai', 'ref.dict', 'cosmic.vcf', 'dbsnp.vcf']
-    for file_store_id, name in zip(file_ids, file_names):
-        job.fileStore.readGlobalFile(file_store_id, os.path.join(work_dir, name))
-    # Call: MuTect
-    parameters = ['--analysis_type', 'MuTect',
-                  '--reference_sequence', 'ref.fasta',
-                  '--cosmic', '/data/cosmic.vcf',
-                  '--dbsnp', '/data/dbsnp.vcf',
-                  '--input_file:normal', '/data/normal.bam',
-                  '--input_file:tumor', '/data/tumor.bam',
-                  '--tumor_lod', str(10),
-                  '--initial_tumor_lod', str(4.0),
-                  '--out', 'mutect.out',
-                  '--coverage_file', 'mutect.cov',
-                  '--vcf', 'mutect.vcf']
-    docker_call(work_dir=work_dir, parameters=parameters,
-                tool='quay.io/ucsc_cgl/mutect:1.1.7--e8bf09459cf0aecb9f55ee689c2b2d194754cbd3')
-    # Write output to file store
-    output_file_names = ['mutect.vcf', 'mutect.cov', 'mutect.out']
-    output_file_paths = [os.path.join(work_dir, x) for x in output_file_names]
-    tarball_files('mutect.tar.gz', file_paths=output_file_paths, output_dir=work_dir)
-    return job.fileStore.writeGlobalFile(os.path.join(work_dir, 'mutect.tar.gz'))
-
-
-def run_pindel(job, cores, normal_bam, normal_bai, tumor_bam, tumor_bai, ref, fai):
-    """
-    Calls Pindel to compute indels / deletions
-
-    :param JobFunctionWrappingJob job: Passed automatically by Toil
-    :param int cores: Maximum number of cores on host node
-    :param str normal_bam: Normal BAM FileStoreID
-    :param str normal_bai: Normal BAM index FileStoreID
-    :param str tumor_bam: Tumor BAM FileStoreID
-    :param str tumor_bai: Tumor BAM Index FileStoreID
-    :param str ref: Reference genome FileStoreID
-    :param str fai: Reference index FileStoreID
-    :return: Pindel output (tarball) FileStoreID
-    :rtype: str
-    """
-    work_dir = job.fileStore.getLocalTempDir()
-    file_ids = [normal_bam, normal_bai, tumor_bam, tumor_bai, ref, fai]
-    file_names = ['normal.bam', 'normal.bai', 'tumor.bam', 'tumor.bai', 'ref.fasta', 'ref.fasta.fai']
-    for file_store_id, name in zip(file_ids, file_names):
-        job.fileStore.readGlobalFile(file_store_id, os.path.join(work_dir, name))
-    # Create Pindel config
-    with open(os.path.join(work_dir, 'pindel-config.txt'), 'w') as f:
-        for bam in ['normal.bam', 'tumor.bam']:
-            f.write('/data/{} {} {}\n'.format(bam, get_mean_insert_size(work_dir, bam), os.path.splitext(bam)[0]))
-    # Call: Pindel
-    parameters = ['-f', '/data/ref.fasta',
-                  '-i', '/data/pindel-config.txt',
-                  '--number_of_threads', str(cores),
-                  '--minimum_support_for_event', '3',
-                  '--report_long_insertions', 'true',
-                  '--report_breakpoints', 'true',
-                  '-o', 'pindel']
-    docker_call(tool='quay.io/ucsc_cgl/pindel:0.2.5b6--4e8d1b31d4028f464b3409c6558fb9dfcad73f88',
-                work_dir=work_dir, parameters=parameters)
-    # Collect output files and write to file store
-    output_files = glob(os.path.join(work_dir, 'pindel*'))
-    tarball_files('pindel.tar.gz', file_paths=output_files, output_dir=work_dir)
-    return job.fileStore.writeGlobalFile(os.path.join(work_dir, 'pindel.tar.gz'))
-
-
-def run_muse(job, cores, normal_bam, normal_bai, tumor_bam, tumor_bai, ref, ref_dict, fai, dbsnp):
-    """
-    Calls MuSe to find variants
-
-    :param JobFunctionWrappingJob job: passed automatically by Toil
-    :param int cores: Maximum number of cores on host node
-    :param str normal_bam: Normal BAM FileStoreID
-    :param str normal_bai: Normal BAM index FileStoreID
-    :param str tumor_bam: Tumor BAM FileStoreID
-    :param str tumor_bai: Tumor BAM Index FileStoreID
-    :param str tumor_bai: Tumor BAM Index FileStoreID
-    :param str ref: Reference genome FileStoreID
-    :param str ref_dict: Reference genome dictionary FileStoreID
-    :param str fai: Reference index FileStoreID
-    :param str dbsnp: DBSNP VCF FileStoreID
-    :return: MuSe output (tarball) FileStoreID
-    :rtype: str
-    """
-    work_dir = job.fileStore.getLocalTempDir()
-    file_ids = [normal_bam, normal_bai, tumor_bam, tumor_bai, ref, ref_dict, fai, dbsnp]
-    file_names = ['normal.bam', 'normal.bai', 'tumor.bam', 'tumor.bai',
-                  'ref.fasta', 'ref.dict', 'ref.fasta.fai', 'dbsnp.vcf']
-    for file_store_id, name in zip(file_ids, file_names):
-        job.fileStore.readGlobalFile(file_store_id, os.path.join(work_dir, name))
-    # Call: MuSE
-    parameters = ['--mode', 'wxs',
-                  '--dbsnp', '/data/dbsnp.vcf',
-                  '--fafile', '/data/ref.fasta',
-                  '--tumor-bam', '/data/tumor.bam',
-                  '--tumor-bam-index', '/data/tumor.bai',
-                  '--normal-bam', '/data/normal.bam',
-                  '--normal-bam-index', '/data/normal.bai',
-                  '--outfile', '/data/muse.vcf',
-                  '--cpus', str(cores)]
-    docker_call(tool='quay.io/ucsc_cgl/muse:1.0--6add9b0a1662d44fd13bbc1f32eac49326e48562',
-                work_dir=work_dir, parameters=parameters)
-    # Return fileStore ID
-    tarball_files('muse.tar.gz', file_paths=[os.path.join(work_dir, 'muse.vcf')], output_dir=work_dir)
-    return job.fileStore.writeGlobalFile(os.path.join(work_dir, 'muse.tar.gz'))
 
 
 def consolidate_output(job, config, mutect, pindel, muse):
@@ -533,56 +194,9 @@ def consolidate_output(job, config, mutect, pindel, muse):
         job.fileStore.logToMaster('Moving {} to output dir: {}'.format(config.uuid, config.output_dir))
         mkdir_p(config.output_dir)
         move_files(file_paths=[out_tar], output_dir=config.output_dir)
-    if config.s3_dir:
-        job.fileStore.logToMaster('Uploading {} to S3: {}'.format(config.uuid, config.s3_dir))
-        s3am_upload(fpath=out_tar, s3_dir=config.s3_dir, num_cores=config.cores)
-
-
-def upload_output_to_s3(job, input_args, output_tar):
-    """
-    Uploads Mutect files to S3 using S3AM
-
-    mutect_id: str      FileStore ID for the mutect.vcf
-    input_args: dict    Dictionary of input arguments
-    """
-    work_dir = job.fileStore.getLocalTempDir()
-    uuid = input_args['uuid']
-    # Parse s3_dir to get bucket and s3 path
-    s3_dir = input_args['s3_dir']
-    bucket_name = s3_dir.lstrip('/').split('/')[0]
-    bucket_dir = '/'.join(s3_dir.lstrip('/').split('/')[1:])
-    # Retrieve VCF file
-    job.fileStore.readGlobalFile(output_tar, os.path.join(work_dir, uuid + '.tar.gz'))
-    # Upload to S3 via S3AM
-    s3am_command = ['s3am',
-                    'upload',
-                    'file://{}'.format(os.path.join(work_dir, uuid + '.tar.gz')),
-                    os.path.join('s3://', bucket_name, bucket_dir, uuid + '.tar.gz')]
-    subprocess.check_call(s3am_command)
-
-
-# Pipeline specific functions
-def get_mean_insert_size(work_dir, bam_name):
-    cmd = "docker run --log-driver=none --rm -v {}:/data quay.io/ucsc_cgl/samtools " \
-          "view -f66 {}".format(work_dir, os.path.join(work_dir, bam_name))
-    process = subprocess.Popen(args=cmd, shell=True, stdout=subprocess.PIPE)
-    b_sum = 0L
-    b_count = 0L
-    while True:
-        line = process.stdout.readline()
-        if not line:
-            break
-        tmp = line.split("\t")
-        if abs(long(tmp[8])) < 10000:
-            b_sum += abs(long(tmp[8]))
-            b_count += 1
-    process.wait()
-    try:
-        mean = b_sum / b_count
-    except ZeroDivisionError:
-        mean = 150
-    print "Using insert size: %d" % mean
-    return int(mean)
+    if config.s3_output_dir:
+        job.fileStore.logToMaster('Uploading {} to S3: {}'.format(config.uuid, config.s3_output_dir))
+        s3am_upload(fpath=out_tar, s3_dir=config.s3_output_dir, num_cores=config.cores)
 
 
 def parse_manifest(path_to_manifest):
@@ -646,7 +260,7 @@ def generate_config():
     output-dir:
 
     # Optional: Provide an s3 path (s3://bucket/dir) where results will appear
-    s3-dir:
+    s3-output-dir:
 
     # Optional: Provide a full path to a 32-byte key used for SSE-C Encryption in Amazon
     ssec:
@@ -753,10 +367,10 @@ def main():
                                  '\nDefault value: "%(default)s"')
     parser_run.add_argument('--manifest', default='manifest-toil-exome.tsv', type=str,
                             help='Path to the (filled in) manifest file, generated with "generate-manifest". '
-                            '\nDefault value: "%(default)s"')
+                                 '\nDefault value: "%(default)s"')
     parser_run.add_argument('--normal', default=None, type=str,
                             help='URL for the normal BAM. URLs can take the form: http://, file://, s3://, '
-                            'and gnos://. The UUID for the sample must be given with the "--uuid" flag.')
+                                 'and gnos://. The UUID for the sample must be given with the "--uuid" flag.')
     parser_run.add_argument('--tumor', default=None, type=str,
                             help='URL for the tumor BAM. URLs can take the form: http://, file://, s3://, '
                                  'and gnos://. The UUID for the sample must be given with the "--uuid" flag.')
@@ -800,12 +414,15 @@ def main():
         if config.run_muse:
             require(config.reference and config.dbsnp,
                     'Missing inputs for MuSe, check config file.')
+        require(config.output_dir or config.s3_output_dir, 'output-dir AND/OR s3-output-dir need to be defined, '
+                                                           'otherwise sample output is not stored anywhere!')
         # Program checks
         for program in ['curl', 'docker']:
             require(next(which(program), None), program + ' must be installed on every node.'.format(program))
 
         # Launch Pipeline
         Job.Runner.startToil(Job.wrapJobFn(download_shared_files, samples, config), args)
+
 
 if __name__ == '__main__':
     main()
