@@ -123,7 +123,7 @@ from toil.job import Job
 
 # import job steps from other toil pipelines
 from toil_scripts.adam_pipeline.adam_preprocessing import * #static_adam_preprocessing_dag
-from toil_scripts.batch_alignment.bwa_alignment import * #download_shared_files
+from toil_scripts.bwa_alignment.bwa_alignment import * #download_shared_files
 from toil_scripts.gatk_germline.germline import * #batch_start
 from toil_scripts.gatk_processing.gatk_preprocessing import * #download_gatk_files
 from toil_scripts.rnaseq_cgl.rnaseq_cgl_pipeline import generate_file
