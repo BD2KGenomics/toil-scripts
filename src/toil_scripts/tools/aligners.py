@@ -6,7 +6,7 @@ from toil_scripts.lib.programs import docker_call
 from toil_scripts.lib.urls import download_url
 
 
-def run_star(job, cores, r1_id, r2_id, star_index_url):
+def run_star(job, cores, r1_id, r2_id, star_index_url, wiggle=False):
     """
     Performs alignment of fastqs to bam via STAR
 
@@ -15,6 +15,7 @@ def run_star(job, cores, r1_id, r2_id, star_index_url):
     :param str r1_id: FileStoreID of fastq (pair 1)
     :param str r2_id: FileStoreID of fastq (pair 2 if applicable, else pass None)
     :param str star_index_url: STAR index tarball
+    :param bool wiggle: If True, will output a wiggle file and return it
     :return: FileStoreID from RSEM
     :rtype: str
     """
@@ -42,6 +43,10 @@ def run_star(job, cores, r1_id, r2_id, star_index_url):
                   '--alignSJoverhangMin', '8',
                   '--alignSJDBoverhangMin', '1',
                   '--sjdbScore', '1']
+    if wiggle:
+        parameters.extend(['--outWigType', 'bedGraph',
+                           '--outWigStrand', 'Unstranded',
+                           '--outWigReferencesPrefix', 'chr'])
     if r1_id and r2_id:
         job.fileStore.readGlobalFile(r1_id, os.path.join(work_dir, 'R1.fastq'))
         job.fileStore.readGlobalFile(r2_id, os.path.join(work_dir, 'R2.fastq'))
@@ -55,7 +60,11 @@ def run_star(job, cores, r1_id, r2_id, star_index_url):
     # Write to fileStore
     transcriptome_id = job.fileStore.writeGlobalFile(os.path.join(work_dir, 'rnaAligned.toTranscriptome.out.bam'))
     sorted_id = job.fileStore.writeGlobalFile(os.path.join(work_dir, 'rnaAligned.sortedByCoord.out.bam'))
-    return transcriptome_id, sorted_id
+    if wiggle:
+        wiggle_id = job.fileStore.writeGlobalFile(os.path.join(work_dir, 'rnaSignal.UniqueMultiple.str1.out.bg'))
+        return transcriptome_id, sorted_id, wiggle_id
+    else:
+        return transcriptome_id, sorted_id
 
 
 def run_bwakit(job, config, threads, sort=True, trim=False):

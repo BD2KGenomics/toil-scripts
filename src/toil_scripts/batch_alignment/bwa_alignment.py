@@ -10,7 +10,7 @@ import yaml
 from toil.job import Job
 
 from toil_scripts.lib import require, required_length
-from toil_scripts.lib.files import move_file_job
+from toil_scripts.lib.files import copy_file_job
 from toil_scripts.lib.jobs import map_job
 from toil_scripts.lib.urls import download_url_job, s3am_upload_job
 from toil_scripts.rnaseq_cgl.rnaseq_cgl_pipeline import generate_file
@@ -92,7 +92,7 @@ def download_sample_and_align(job, sample, inputs, ids):
                                num_cores=inputs.cores, s3_key_path=inputs.ssec, cores=inputs.cores)
         bam_id.addChild(upload)
     else:
-        bam_id.addChild(move_file_job, name=output_name, file_id=bam_id.rv(), output_dir=inputs.output_dir)
+        bam_id.addChild(copy_file_job, name=output_name, file_id=bam_id.rv(), output_dir=inputs.output_dir)
 
 
 def generate_config():

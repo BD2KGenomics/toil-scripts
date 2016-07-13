@@ -21,7 +21,7 @@ def tarball_files(tar_name, file_paths, output_dir='.', prefix=''):
             f_out.add(file_path, arcname=arcname)
 
 
-def move_files(file_paths, output_dir):
+def copy_files(file_paths, output_dir):
     """
     Moves files from the working directory to the output directory.
 
@@ -32,10 +32,10 @@ def move_files(file_paths, output_dir):
         if not file_path.startswith('/'):
             raise ValueError('Path provided is relative not absolute.')
         dest = os.path.join(output_dir, os.path.basename(file_path))
-        shutil.move(file_path, dest)
+        shutil.copy(file_path, dest)
 
 
-def move_file_job(job, name, file_id, output_dir):
+def copy_file_job(job, name, file_id, output_dir):
     """
     Job version of move_files for one file
 
@@ -46,7 +46,7 @@ def move_file_job(job, name, file_id, output_dir):
     """
     work_dir = job.fileStore.getLocalTempDir()
     fpath = job.fileStore.readGlobalFile(file_id, os.path.join(work_dir, name))
-    move_files([fpath], output_dir)
+    copy_files([fpath], output_dir)
 
 
 def consolidate_tarballs_job(job, fname_to_id):
