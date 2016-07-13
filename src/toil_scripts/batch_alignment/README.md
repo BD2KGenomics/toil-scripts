@@ -15,7 +15,7 @@ Fastqs are aligned to create a BAM that is compatible with GATK.
 Toil-scripts is now pip installable! `pip install toil-scripts` for a toil-stable version 
 or `pip install --pre toil-scripts` for cutting edge development version.
 
-Type: `toil-bwa` to get basic help menu and instructions
+Type `toil-bwa` to get basic help menu and instructions
 
 To decrease the chance of versioning conflicts, install toil-scripts into a virtualenv: 
 

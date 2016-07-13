@@ -24,7 +24,7 @@ The output tarball is *stamped* with the UUID for the sample (e.g. UUID.tar.gz).
 Toil-scripts is now pip installable! `pip install toil-scripts` for a toil-stable version 
 or `pip install --pre toil-scripts` for cutting edge development version.
 
-Type: `toil-exome` to get basic help menu and instructions
+Type `toil-exome` to get basic help menu and instructions
 
 To decrease the chance of versioning conflicts, install toil-scripts into a virtualenv: 
 
