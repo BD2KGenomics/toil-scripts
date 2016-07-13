@@ -372,8 +372,8 @@ def main():
         for arg in [inputs.dbsnp, inputs.memory]:
             require(arg, 'Required argument {} missing from config'.format(arg))
 
-            Job.Runner.startToil(Job.wrapJobFn(static_adam_preprocessing_dag, inputs,
-                                               args.sample, args.output_dir), args)
+        Job.Runner.startToil(Job.wrapJobFn(static_adam_preprocessing_dag, inputs,
+                                           args.sample, args.output_dir), args)
 
 if __name__ == "__main__":
     main()
