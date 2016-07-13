@@ -220,7 +220,7 @@ def main():
     4. Type "toil-bwa run [jobStore]" to execute the pipeline.
 
     Please read the README.md located in the source directory or at:
-    https://github.com/BD2KGenomics/toil-scripts/tree/master/src/toil_scripts/batch_alignment
+    https://github.com/BD2KGenomics/toil-scripts/tree/master/src/toil_scripts/bwa_alignment
 
     Structure of the BWA pipeline (per sample)
 
