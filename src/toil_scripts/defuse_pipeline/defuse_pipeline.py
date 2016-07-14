@@ -161,14 +161,7 @@ def run_simple_filter(job, uuid, tsvID, mock=False):
             f.write('content')
         return job.fileStore.writeGlobalFile(outpath)
 
-    features = {'splitr_count': lambda x: x > 1,
-                'span_count': lambda x: x > 10,
-                'orf': lambda x: x == 'Y',
-                'adjacent': lambda x: x == 'N',
-                'altsplice': lambda x: x == 'N',
-                'min_map_count': lambda x: x >= 1,
-                'gene_chromosome1': lambda x: x != 'MT',
-                'gene_chromosome2': lambda x: x != 'MT'}
+
 
     featureIndex = {}
     with open(tsvFile, 'rb') as f, open(outpath, 'wb') as g:
