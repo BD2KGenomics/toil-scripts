@@ -13,9 +13,19 @@ virtualenv venv
 . venv/bin/activate
 # Adding AWS extra to get boto as required by tests
 pip install toil[aws]==3.3.0
+
+# Prepare directory for temp files
+TMPDIR=/mnt/ephemeral/tmp
+rm -rf $TMPDIR
+mkdir $TMPDIR
+export TMPDIR
+
 make develop
 make test
 make clean
+
 rm -rf bin s3am
 make pypi
 rm -rf venv
+
+rm -rf $TMPDIR

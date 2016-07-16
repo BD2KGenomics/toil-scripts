@@ -1,3 +1,5 @@
+import tempfile
+
 import os
 import shutil
 import subprocess
@@ -5,18 +7,15 @@ import textwrap
 
 from boto.s3.connection import S3Connection, Bucket, Key
 
-from toil_scripts.lib import get_work_directory
 
-
-def test_exome(tmpdir):
-    workdir = get_work_directory()
+def test_exome():
+    workdir = tempfile.mkdtemp()
     create_config_and_manifest(workdir)
     # Call Pipeline
     try:
         base_command = ['toil-exome', 'run',
                         '--config', os.path.join(workdir, 'config-toil-exome.yaml'),
-                        os.path.join(workdir, 'jstore'),
-                        '--workDir', workdir]
+                        os.path.join(workdir, 'jstore')]
         # Run with manifest
         subprocess.check_call(base_command + ['--manifest', os.path.join(workdir, 'manifest-toil-exome.tsv')])
     finally:

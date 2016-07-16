@@ -35,23 +35,6 @@ def partitions(l, partition_size):
         yield l[i:i + partition_size]
 
 
-def get_work_directory():
-    """
-    Creates a a working directory at a location that is suitable for storing files
-    temporarily. The caller is responsible for removing the directory.
-
-    :return: The path to directory
-    :rtype: str
-    """
-    try:
-        basedir = os.environ['TOIL_WORKDIR']
-    except KeyError:
-        basedir = '/mnt/ephemeral'
-        if not os.path.exists(basedir):
-            basedir = None
-    return tempfile.mkdtemp(dir=basedir)
-
-
 class UserError(Exception):
     pass
 
