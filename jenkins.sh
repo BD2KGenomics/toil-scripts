@@ -11,8 +11,8 @@ export PATH=$PATH:${PWD}/bin
 # Create Toil venv
 virtualenv venv
 . venv/bin/activate
-pip install toil==3.3.0
-pip install bd2k-python-lib==1.14a1.dev29
+# Adding AWS extra to get boto as required by tests
+pip install toil[aws]==3.3.0
 make develop
 make test
 make clean
