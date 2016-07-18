@@ -88,11 +88,12 @@ def download_sample_and_align(job, sample, inputs, ids):
     job.addFollowOn(bam_id)
     output_name = uuid + '.bam' + str(inputs.suffix) if inputs.suffix else uuid + '.bam'
     if urlparse(inputs.output_dir).scheme == 's3':
-        upload = job.wrapJobFn(s3am_upload_job, file_id=bam_id.rv(), file_name=output_name, s3_dir=inputs.output_dir,
-                               num_cores=inputs.cores, s3_key_path=inputs.ssec, cores=inputs.cores)
-        bam_id.addChild(upload)
+        bam_id.addChildJobFn(s3am_upload_job, file_id=bam_id.rv(), file_name=output_name,
+                               s3_dir=inputs.output_dir, num_cores=inputs.cores, s3_key_path=inputs.ssec,
+                               cores=inputs.cores, disk=inputs.file_size)
     else:
-        bam_id.addChild(copy_file_job, name=output_name, file_id=bam_id.rv(), output_dir=inputs.output_dir)
+        bam_id.addChildJobFn(copy_file_job, name=output_name, file_id=bam_id.rv(), output_dir=inputs.output_dir,
+                                    disk=inputs.file_size)
 
 
 def generate_config():
