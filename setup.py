@@ -21,33 +21,50 @@ from setuptools.command.test import test as TestCommand
 from version import version
 from pkg_resources import parse_version, require, DistributionNotFound
 
-toil_min_version = '3.3.0'
-toil_max_version = '3.5.0'
-bpl_min_version = '1.14a1.dev29'
 
-# Toil version check -- Raise warning instead of using intall_requires to avoid virtualenv conflicts
-try:
-    from toil.version import version as toil_version
-except ImportError:
-    raise RuntimeError('Cannot find Toil version {}.x for Toil. Read about installing Toil at: '
-                       'http://toil.readthedocs.io/en/latest/installation.html'.format(toil_min_version))
+def check_provided(distribution, min_version, max_version=None, optional=False):
+    min_version = parse_version(min_version)
+    if max_version is not None:
+        max_version = parse_version(max_version)
 
-if not parse_version(str(toil_min_version)) <= parse_version(toil_version) < parse_version(toil_max_version):
-    raise RuntimeError('Need Toil version within range [{},{}). Read about installing Toil at: '
-                       'http://toil.readthedocs.io/en/latest/installation.html'
-                       ''.format(toil_min_version, toil_max_version))
+    messages = []
 
-# bd2k-python-lib check -- Raise warning instead of install_requires to avoid version conflicts with Toil
-try:
-    bpl = require('bd2k-python-lib')[0].version
-except DistributionNotFound:
-    raise RuntimeError('Cannot find bd2k-python-lib, which is included in Toil. Read about installing Toil at: '
-                       'http://toil.readthedocs.io/en/latest/installation.html')
+    toil_missing = 'Cannot find a valid installation of Toil.'
+    dist_missing = 'Cannot find an installed copy of the %s distribution, typically provided by Toil.' % distribution
+    version_too_low = 'The installed copy of %s is out of date. It is typically provided by Toil.' % distribution
+    version_too_high = 'The installed copy of %s is too new. It is typically provided by Toil.' % distribution
+    required_version = 'Setup requires version %s or higher' % min_version
+    required_version += '.' if max_version is None else ', up to but not including %s.' % max_version
+    install_toil = 'Installing Toil should fix this problem.'
+    upgrade_toil = 'Upgrading Toil should fix this problem.'
+    reinstall_dist = 'Uninstalling %s and reinstalling Toil should fix this problem.' % distribution
+    reinstall_toil = 'Uninstalling Toil and reinstalling it should fix this problem.'
+    footer = ("Setup doesn't install Toil automatically to give you a chance to choose any of the optional extras "
+              "that Toil provides. More on installing Toil at http://toil.readthedocs.io/en/latest/installation.html.")
+    try:
+        # This check will fail if the distribution or any of its dependencies are missing.
+        version = require(distribution)[0].version
+    except DistributionNotFound:
+        version = None
+        if not optional:
+            messages.extend([toil_missing if distribution == 'toil' else dist_missing, install_toil])
+    else:
+        if parse_version(version) < min_version:
+            messages.extend([version_too_low, required_version,
+                             upgrade_toil if distribution == 'toil' else reinstall_dist])
+        elif max_version is not None and max_version < parse_version(version):
+            messages.extend([version_too_high, required_version,
+                             reinstall_toil if distribution == 'toil' else reinstall_dist])
+    if messages:
+        messages.append(footer)
+        raise RuntimeError(' '.join(messages))
+    else:
+        return version
 
-if parse_version(bpl) < parse_version(bpl_min_version):
-    raise RuntimeError('bd2k-python-lib is out of date. Requires at least version {}.  Installing Toil will'
-                       'include the correct version of bd2k-python-lib: '
-                       'http://toil.readthedocs.io/en/latest/installation.html'.format(bpl_min_version))
+
+toil_version = check_provided('toil', min_version='3.3.0', max_version='3.5.0')
+check_provided('bd2k-python-lib', min_version='1.14a1.dev29' )
+check_provided('boto', min_version='2.38.0', optional=True)
 
 kwargs = dict(
     name='toil-scripts',
@@ -57,8 +74,7 @@ kwargs = dict(
     author_email='cgl-toil@googlegroups.com',
     url="https://github.com/BD2KGenomics/toil-scripts",
     install_requires=[
-        'boto==2.38.0', # FIXME: Make an extra
-        'tqdm==3.8.0', # FIXME: Remove once ADAM stops using it (superfluous import)
+        'tqdm==3.8.0',  # FIXME: Remove once ADAM stops using it (superfluous import)
         'pyyaml==3.11'],
     tests_require=[
         'pytest==2.8.3'],
@@ -94,8 +110,12 @@ kwargs['cmdclass'] = {'test': PyTest}
 
 setup(**kwargs)
 
-print("\n\nThank you for installing toil-scripts! If you want to run Toil in a cloud environment or on a distributed "
-      "system, please install Toil with the desired extras, for example:\n\n"
-      "'pip install toil[aws,mesos,azure,encryption]==%s'\n\n"
-      "Please take a look at Toil's documentation for more information: http://toil.readthedocs.io/en/releases-3.1.x/"
+print("\n\n"
+      "Thank you for installing toil-scripts! If you want to run Toil on a cluster in a cloud, please reinstall it "
+      "with the appropriate extras. To install AWS/EC2 support for example, run "
+      "\n\n"
+      "pip install toil[aws,mesos]==%s"
+      "\n\n"
+      "on every EC2 instance. Refer to Toil's documentation at http://toil.readthedocs.io/en/latest/installation.html "
+      "for more information."
       % toil_version)

@@ -1,25 +1,24 @@
+import tempfile
+
 import os
 import subprocess
 import shutil
 from boto.s3.connection import S3Connection, Bucket, Key
 
 
-def test_bwa(tmpdir):
-    work_dir = str(tmpdir)
+def test_bwa():
+    work_dir = tempfile.mkdtemp()
     create_config(work_dir)
     create_manifest(work_dir)
-    subdir = '/mnt/ephemeral/toil-scripts/bwa'
-    os.makedirs(os.path.join(subdir, 'workDir'))
     # Call Pipeline
     try:
         subprocess.check_call(['toil-bwa', 'run',
-                               os.path.join(subdir, 'jstore'),
+                               os.path.join(work_dir, 'jstore'),
                                '--manifest', os.path.join(work_dir, 'manifest.txt'),
                                '--config', os.path.join(work_dir, 'config.txt'),
-                               '--retryCount', '1',
-                               '--workDir', os.path.join(subdir, 'workDir')])
+                               '--retryCount', '1'])
     finally:
-        shutil.rmtree(subdir)
+        shutil.rmtree(work_dir)
         conn = S3Connection()
         b = Bucket(conn, 'cgl-driver-projects')
         k = Key(b)
