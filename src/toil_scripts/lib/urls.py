@@ -23,7 +23,7 @@ def download_url(url, work_dir='.', name=None, num_cores=1, s3_key_path=None, cg
     """
     file_path = os.path.join(work_dir, name) if name else os.path.join(work_dir, os.path.basename(url))
     if cghub_key_path:
-        _download_from_genetorrent(url, file_path, cghub_key_path)
+        _download_with_genetorrent(url, file_path, cghub_key_path)
     elif urlparse(url).scheme == 's3':
         _s3am_download_with_retry(file_path, url, num_cores, s3_key_path)
     elif urlparse(url).scheme == 'file':
@@ -42,10 +42,10 @@ def download_url_job(job, url, name=None, s3_key_path=None, cghub_key_path=None)
     return job.fileStore.writeGlobalFile(fpath)
 
 
-def _download_from_genetorrent(url, file_path, cghub_key_path):
-    url = urlparse(url)
-    analysis_id = url.path[1:]
-    assert url.scheme == 'gnos', 'Improper format. gnos://cghub/ID. User supplied: {}'.format(url)
+def _download_with_genetorrent(url, file_path, cghub_key_path):
+    parsed_url = urlparse(url)
+    analysis_id = parsed_url.path[1:]
+    assert parsed_url.scheme == 'gnos', 'Improper format. gnos://cghub/ID. User supplied: {}'.format(parsed_url)
     work_dir = os.path.dirname(file_path)
     folder_path = os.path.join(work_dir, os.path.basename(analysis_id))
     parameters = ['-vv', '-c', cghub_key_path, '-d', analysis_id]
