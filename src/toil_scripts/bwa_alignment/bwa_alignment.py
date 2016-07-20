@@ -248,7 +248,7 @@ def main():
     subparsers.add_parser('generate', help='Generates a config and manifest in the current working directory.')
     # Run subparser
     parser_run = subparsers.add_parser('run', help='Runs the BWA alignment pipeline')
-    group = parser_run.add_mutually_exclusive_group(required=True)
+    group = parser_run.add_mutually_exclusive_group()
     parser_run.add_argument('--config', default='config-toil-bwa.yaml', type=str,
                             help='Path to the (filled in) config file, generated with "generate-config".')
     group.add_argument('--manifest', default='manifest-toil-bwa.tsv', type=str,
