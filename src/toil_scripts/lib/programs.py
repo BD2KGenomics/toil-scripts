@@ -46,7 +46,6 @@ def docker_call(tool,
                       the environment variable.
     """
     from toil_scripts.lib.urls import download_url
-    from toil_scripts.lib.files import copy_files_to
 
     if mock is None:
         mock = mock_mode()
