@@ -150,7 +150,7 @@ def rsem_quantification(job, config, star_output):
         job.fileStore.readGlobalFile(wiggle_id, wiggle_path)
         if config.s3_output_dir:
             s3am_upload(fpath=wiggle_path, s3_dir=config.s3_output_dir, s3_key_path=config.ssec)
-        if config.output_idr:
+        if config.output_dir:
             copy_files(file_paths=[wiggle_path], output_dir=config.output_dir)
     else:
         transcriptome_id, sorted_id = star_output
@@ -189,6 +189,7 @@ def process_sample_tar(job, config, tar_id):
     tar_path = os.path.join(work_dir, 'sample.tar')
     # Untar File and concat
     subprocess.check_call(['tar', '-xvf', tar_path, '-C', work_dir], stderr=PIPE, stdout=PIPE)
+    job.fileStore.deleteGlobalFile(tar_id)
     fastqs = []
     for root, subdir, files in os.walk(work_dir):
         fastqs.extend([os.path.join(root, x) for x in files])
@@ -446,7 +447,7 @@ def main():
     subparsers.add_parser('generate', help='Generates a config and manifest in the current working directory.')
     # Run subparser
     parser_run = subparsers.add_parser('run', help='Runs the RNA-seq pipeline')
-    group = parser_run.add_mutually_exclusive_group(required=True)
+    group = parser_run.add_mutually_exclusive_group()
     parser_run.add_argument('--config', default='config-toil-rnaseq.yaml', type=str,
                             help='Path to the (filled in) config file, generated with "generate-config". '
                                  '\nDefault value: "%(default)s"')
