@@ -1,6 +1,9 @@
 import os
 import subprocess
 import filecmp
+from contextlib import closing
+from uuid import uuid4
+
 from toil.job import Job
 
 
@@ -22,14 +25,6 @@ def test_upload_and_download_with_encryption(tmpdir):
     from toil_scripts.lib.urls import s3am_upload
     from toil_scripts.lib.urls import download_url
     from boto.s3.connection import S3Connection, Bucket, Key
-    # Check if exists and delete if it does
-    # Try/Except not needed as delete() never raises exception
-    conn = S3Connection()
-    b = Bucket(conn, 'cgl-driver-projects')
-    k = Key(b)
-    k.key = 'test/upload_file'
-    if k.exists():
-        k.delete()
     work_dir = str(tmpdir)
     # Create temporary encryption key
     key_path = os.path.join(work_dir, 'foo.key')
@@ -40,13 +35,20 @@ def test_upload_and_download_with_encryption(tmpdir):
     with open(upload_fpath, 'wb') as fout:
         fout.write(os.urandom(1024))
     # Upload file
-    s3_dir = 's3://cgl-driver-projects/test'
-    s3am_upload(fpath=upload_fpath, s3_dir=s3_dir, s3_key_path=key_path)
-    # Download the file
-    url = 's3://cgl-driver-projects/test/upload_file'
-    download_url(url=url, name='download_file', work_dir=work_dir, s3_key_path=key_path)
-    download_fpath = os.path.join(work_dir, 'download_file')
-    assert os.path.exists(download_fpath)
-    assert filecmp.cmp(upload_fpath, download_fpath)
-    # Delete the Key
-    k.delete()
+    random_key = os.path.join('test/', str(uuid4()), 'upload_file')
+    s3_url = os.path.join('s3://cgl-driver-projects/', random_key)
+    try:
+        s3_dir = os.path.split(s3_url)[0]
+        s3am_upload(fpath=upload_fpath, s3_dir=s3_dir, s3_key_path=key_path)
+        # Download the file
+        download_url(url=s3_url, name='download_file', work_dir=work_dir, s3_key_path=key_path)
+        download_fpath = os.path.join(work_dir, 'download_file')
+        assert os.path.exists(download_fpath)
+        assert filecmp.cmp(upload_fpath, download_fpath)
+    finally:
+        # Delete the Key. Key deletion never fails so we don't need to catch any exceptions
+        with closing(S3Connection()) as conn:
+            b = Bucket(conn, 'cgl-driver-projects')
+            k = Key(b)
+            k.key = random_key
+            k.delete()

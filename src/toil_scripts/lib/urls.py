@@ -8,14 +8,13 @@ from toil_scripts.lib import require
 from toil_scripts.lib.programs import docker_call
 
 
-def download_url(url, work_dir='.', name=None, num_cores=1, s3_key_path=None, cghub_key_path=None):
+def download_url(url, work_dir='.', name=None, s3_key_path=None, cghub_key_path=None):
     """
     Downloads URL, can pass in file://, http://, s3://, or ftp://, gnos://cghub/analysisID, or gnos:///analysisID
 
     :param str url: URL to download from
     :param str work_dir: Directory to download file to
     :param str name: Name of output file, if None, basename of URL is used
-    :param int num_cores: Number of cores to use if downloading with s3am
     :param str s3_key_path: Path to 32-byte encryption key if url points to S3 file that uses SSE-C
     :param str cghub_key_path: Path to cghub key used to download from CGHub.
     :return: Path to the downloaded file
@@ -25,7 +24,7 @@ def download_url(url, work_dir='.', name=None, num_cores=1, s3_key_path=None, cg
     if cghub_key_path:
         _download_with_genetorrent(url, file_path, cghub_key_path)
     elif urlparse(url).scheme == 's3':
-        _s3am_with_retry(num_cores, file_path, s3_url=url, mode='download', s3_key_path=s3_key_path)
+        _s3am_with_retry(num_cores=1, file_path=file_path, s3_url=url, mode='download', s3_key_path=s3_key_path)
     elif urlparse(url).scheme == 'file':
         shutil.copy(urlparse(url).path, file_path)
     else:
@@ -109,4 +108,4 @@ def _s3am_with_retry(num_cores, file_path, s3_url, mode='upload', s3_key_path=No
             return
         else:
             print 'S3AM failed with status code: {}'.format(ret_code)
-    raise RuntimeError('S3AM failed to upload after {} retries.'.format(retry_count))
+    raise RuntimeError('S3AM failed to {} after {} retries.'.format(mode, retry_count))
