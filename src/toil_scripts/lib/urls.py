@@ -25,7 +25,7 @@ def download_url(url, work_dir='.', name=None, num_cores=1, s3_key_path=None, cg
     if cghub_key_path:
         _download_with_genetorrent(url, file_path, cghub_key_path)
     elif urlparse(url).scheme == 's3':
-        _s3am_download_with_retry(file_path, url, num_cores, s3_key_path)
+        _s3am_with_retry(num_cores, file_path, s3_url=url, mode='download', s3_key_path=s3_key_path)
     elif urlparse(url).scheme == 'file':
         shutil.copy(urlparse(url).path, file_path)
     else:
@@ -67,48 +67,44 @@ def s3am_upload(fpath, s3_dir, num_cores=1, s3_key_path=None):
     """
     require(s3_dir.startswith('s3://'), 'Format of s3_dir (s3://) is incorrect: {}'.format(s3_dir))
     s3_dir = os.path.join(s3_dir, os.path.basename(fpath))
-    args = ['upload', '--force', '--upload-slots={}'.format(num_cores), '--exists=overwrite']
-    if s3_key_path:
-        args.extend(['--sse-key-is-master', '--sse-key-file', s3_key_path])
-    args.extend(['file://{}'.format(fpath), s3_dir])
-    _s3am_with_retry(num_cores, s3am_args=args)
+    _s3am_with_retry(num_cores, file_path=fpath, s3_url=s3_dir, mode='upload', s3_key_path=s3_key_path)
 
 
 def s3am_upload_job(job, file_id, file_name, s3_dir, num_cores, s3_key_path=None):
-    """Job version of `s3am_upload`"""
+    """Job version of s3am_upload"""
     work_dir = job.fileStore.getLocalTempDir()
     fpath = job.fileStore.readGlobalFile(file_id, os.path.join(work_dir, file_name))
     s3am_upload(fpath=fpath, s3_dir=s3_dir, num_cores=num_cores, s3_key_path=s3_key_path)
 
 
-def _s3am_download_with_retry(file_path, s3_url, num_cores=1, s3_key_path=None):
+def _s3am_with_retry(num_cores, file_path, s3_url, mode='upload', s3_key_path=None):
     """
-    Calls s3am for downloading
-
-    :param str file_path: Location to download file
-    :param str s3_url: S3 URL to download
-    :param int num_cores: Number of cores to pass
-    :param str s3_key_path: (OPTIONAL) Path to 32-byte key to be used for SSE-C encryption
-    """
-    require(s3_url.startswith('s3://'), 'Format of s3_dir (s3://) is incorrect: {}'.format(s3_url))
-    args = ['download', '--file-exists=overwrite', '--download-exists=discard']
-    if s3_key_path:
-        args.extend(['--sse-key-is-master', '--sse-key-file', s3_key_path])
-    args.extend([s3_url, 'file://' + file_path])
-    _s3am_with_retry(num_cores, s3am_args=args)
-
-
-def _s3am_with_retry(num_cores, s3am_args):
-    """
-    Calls S3AM upload with retries
+    Run s3am with 3 retries
 
     :param int num_cores: Number of cores to pass to upload/download slots
-    :param list[str] s3am_args: Additional arguments for s3am
+    :param str file_path: Full path to the file
+    :param str s3_url: S3 URL
+    :param str mode: Mode to run s3am in. Either "upload" or "download"
+    :param str s3_key_path: Path to the SSE-C key if using encryption
     """
+    command = ['s3am']
+    if mode == 'upload':
+        command.extend(['upload', '--force', '--upload-slots={}'.format(num_cores),
+                        '--exists=overwrite', 'file://' + file_path, s3_url])
+    elif mode == 'download':
+        command.extend(['download', '--file-exists=overwrite',
+                        '--download-exists=discard', s3_url, 'file://' + file_path])
+    else:
+        raise ValueError('Improper mode specified. mode must be equal to "upload" or "download".')
+    if s3_key_path:
+        for arg in [s3_key_path, '--sse-key-file', '--sse-key-is-master']:
+            command.insert(2, arg)
+    for arg in ['--part-size=50M', '--download-slots={}'.format(num_cores)]:
+        command.insert(2, arg)
+    # Run s3am with retries
     retry_count = 3
     for i in xrange(retry_count):
-        s3am_command = ['s3am'] + s3am_args + ['--part-size=50M','--download-slots={}'.format(num_cores)]
-        ret_code = subprocess.call(s3am_command)
+        ret_code = subprocess.call(command)
         if ret_code == 0:
             return
         else:
