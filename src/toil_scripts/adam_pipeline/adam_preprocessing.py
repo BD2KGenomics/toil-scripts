@@ -117,7 +117,8 @@ def adam_convert(master_ip, inputs, in_file, in_snps, adam_file, adam_snps, spar
               ["transform", in_file, adam_file],
               memory=inputs.memory,
               run_local=inputs.run_local,
-              local_dir=inputs.local_dir)
+              local_dir=inputs.local_dir,
+              native_adam_path=inputs.native_adam_path)
 
     in_file_name = in_file.split("/")[-1]
     remove_file(master_ip, in_file_name, spark_on_toil)
@@ -128,7 +129,8 @@ def adam_convert(master_ip, inputs, in_file, in_snps, adam_file, adam_snps, spar
               ["vcf2adam", "-only_variants", in_snps, adam_snps],
               memory=inputs.memory,
               run_local=inputs.run_local,
-              local_dir=inputs.local_dir)
+              local_dir=inputs.local_dir,
+              native_adam_path=inputs.native_adam_path)
 
     in_snps_name = in_snps.split("/")[-1]
     remove_file(master_ip, in_snps_name, spark_on_toil)
@@ -151,7 +153,8 @@ def adam_transform(master_ip, inputs, in_file, snp_file, hdfs_dir, out_file, spa
                "-mark_duplicate_reads"],
               memory=inputs.memory,
               run_local=inputs.run_local,
-              local_dir=inputs.local_dir)
+              local_dir=inputs.local_dir,
+              native_adam_path=inputs.native_adam_path)
 
     #FIXME
     in_file_name = in_file.split("/")[-1]
@@ -165,7 +168,8 @@ def adam_transform(master_ip, inputs, in_file, snp_file, hdfs_dir, out_file, spa
                "-realign_indels"],
               memory=inputs.memory,
               run_local=inputs.run_local,
-              local_dir=inputs.local_dir)
+              local_dir=inputs.local_dir,
+              native_adam_path=inputs.native_adam_path)
 
     remove_file(master_ip, hdfs_dir + "/mkdups.adam*", spark_on_toil)
 
@@ -178,7 +182,8 @@ def adam_transform(master_ip, inputs, in_file, snp_file, hdfs_dir, out_file, spa
                "-known_snps", snp_file],
               memory=inputs.memory,
               run_local=inputs.run_local,
-              local_dir=inputs.local_dir)
+              local_dir=inputs.local_dir,
+              native_adam_path=inputs.native_adam_path)
 
     remove_file(master_ip, "ri.adam*", spark_on_toil)
 
@@ -190,7 +195,8 @@ def adam_transform(master_ip, inputs, in_file, snp_file, hdfs_dir, out_file, spa
                "-sort_reads", "-single"],
               memory=inputs.memory,
               run_local=inputs.run_local,
-              local_dir=inputs.local_dir)
+              local_dir=inputs.local_dir,
+              native_adam_path=inputs.native_adam_path)
 
     remove_file(master_ip, "bqsr.adam*", spark_on_toil)
 
@@ -224,7 +230,10 @@ def download_run_and_upload(job, master_ip, inputs, spark_on_toil):
 
     if inputs.run_local:
         inputs.local_dir = job.fileStore.getLocalTempDir()
-        hdfs_dir = "/data/"
+        if inputs.native_adam_path is None:
+            hdfs_dir = "/data/"
+        else:
+            hdfs_dir = inputs.local_dir
     else:
         inputs.local_dir = None
         hdfs_dir = "hdfs://{0}:{1}/{2}".format(master_ip, HDFS_MASTER_PORT, hdfs_subdir)
@@ -328,6 +337,7 @@ def generate_config():
                                   # This should be equal to the available memory on each worker node.
         run-local:                # Optional: If true, runs ADAM locally and doesn't connect to a cluster.
         local-dir:                # Required if run-local is true. Sets the local directory to use for input.
+        native-adam-path:         # Optional: If set, runs ADAM using the local build of ADAM at this path.
     """[1:])
 
 

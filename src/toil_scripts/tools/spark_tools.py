@@ -6,6 +6,8 @@ ADAM/Spark pipeline
 @author Frank Austin Nothaft, fnothaft@berkeley.
 """
 
+import os.path
+
 from toil_scripts.adam_uberscript.automated_scaling import SparkMasterAddress
 from toil_scripts.lib import require
 from toil_scripts.lib.programs import docker_call
@@ -129,8 +131,12 @@ def call_conductor(master_ip, src, dst, memory=None, override_parameters=None):
                 mock=False)
 
 
-def call_adam(master_ip, arguments, memory=None, override_parameters=None,
-              run_local=False, local_dir=None):
+def call_adam(master_ip, arguments,
+              memory=None,
+              override_parameters=None,
+              run_local=False,
+              local_dir=None,
+              native_adam_path=None):
     """
     Invokes the ADAM container. Find ADAM at https://github.com/bigdatagenomics/adam.
 
@@ -138,11 +144,13 @@ def call_adam(master_ip, arguments, memory=None, override_parameters=None,
     :param arguments: Arguments to pass to ADAM.
     :param memory: Gigabytes of memory to provision for Spark driver/worker.
     :param override_parameters: Parameters passed by the user, that override our defaults.
+    :param native_adam_path: Path to ADAM executable. If not provided, Docker is used.
 
     :type masterIP: MasterAddress
     :type arguments: list of string
     :type memory: int or None
     :type override_parameters: list of string or None
+    :type native_adam_path: string or None
     """
     if local:
         master = ["--master", "local[*]"]
@@ -158,12 +166,19 @@ def call_adam(master_ip, arguments, memory=None, override_parameters=None,
     default_params = (master +
                       ["--conf", "spark.driver.maxResultSize=0"]) # set max result size to unlimited, see #177
 
-    docker_call(rm=False,
-                tool="quay.io/ucsc_cgl/adam:962-ehf--6e7085f8cac4b9a927dc9fb06b48007957256b80",
-                docker_parameters=master_ip.docker_parameters(["--net=host"]),
-                parameters=_make_parameters(master_ip,
-                                            default_params,
-                                            memory,
-                                            arguments,
-                                            override_parameters),
-                mock=False)
+    # are we running adam via docker, or do we have a native path?
+    if native_adam_path is None:
+        docker_call(rm=False,
+                    tool="quay.io/ucsc_cgl/adam:962-ehf--6e7085f8cac4b9a927dc9fb06b48007957256b80",
+                    docker_parameters=master_ip.docker_parameters(["--net=host"]),
+                    parameters=_make_parameters(master_ip,
+                                                default_params,
+                                                memory,
+                                                arguments,
+                                                override_parameters),
+                    mock=False)
+    else:
+        check_call([os.path.join(native_adam_path, "bin/adam-submit")] +
+                   default_params +
+                   arguments)
+
