@@ -150,7 +150,7 @@ def rsem_quantification(job, config, star_output):
         job.fileStore.readGlobalFile(wiggle_id, wiggle_path)
         if config.s3_output_dir:
             s3am_upload(fpath=wiggle_path, s3_dir=config.s3_output_dir, s3_key_path=config.ssec)
-        if config.output_idr:
+        if config.output_dir:
             copy_files(file_paths=[wiggle_path], output_dir=config.output_dir)
     else:
         transcriptome_id, sorted_id = star_output
