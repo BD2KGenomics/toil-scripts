@@ -3,9 +3,8 @@
 # Create s3am venv
 rm -rf s3am
 virtualenv s3am
-s3am/bin/pip install s3am==2.0a1.dev93
-# Expose s3am binary on the PATH
-rm -rf bin
+s3am/bin/pip install s3am==2.0a1.dev105
+# Expose binaries to the PATH
 mkdir bin
 ln -snf ${PWD}/s3am/bin/s3am bin/
 export PATH=$PATH:${PWD}/bin
