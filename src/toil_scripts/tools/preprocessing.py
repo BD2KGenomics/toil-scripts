@@ -31,7 +31,7 @@ def run_cutadapt(job, r1_id, r2_id, fwd_3pr_adapter, rev_3pr_adapter):
                            '/data/R1.fastq', '/data/R2.fastq'])
     else:
         job.fileStore.readGlobalFile(r1_id, os.path.join(work_dir, 'R1.fastq'))
-        parameters.extend(['-o', '/data/R1.fastq', '/data/R1.fastq'])
+        parameters.extend(['-o', '/data/R1_cutadapt.fastq', '/data/R1.fastq'])
     # Call: CutAdapt
     docker_call(tool='quay.io/ucsc_cgl/cutadapt:1.9--6bd44edd2b8f8f17e25c5a268fedaab65fa851d2',
                 work_dir=work_dir, parameters=parameters)
