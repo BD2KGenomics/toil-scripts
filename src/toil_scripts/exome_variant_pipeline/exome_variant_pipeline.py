@@ -40,7 +40,7 @@ def download_shared_files(job, samples, config):
     urls = [config.reference, config.phase, config.mills, config.dbsnp, config.cosmic]
     for name, url in zip(file_names, urls):
         if url:
-            vars(config)[name] = job.addChildJobFn(download_url_job, url=url, s3_key_path=config.ssec).rv()
+            vars(config)[name] = job.addChildJobFn(download_url_job, url=url).rv()
     job.addFollowOnJobFn(reference_preprocessing, samples, config)
 
 
