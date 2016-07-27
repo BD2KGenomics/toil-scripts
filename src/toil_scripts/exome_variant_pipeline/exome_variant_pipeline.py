@@ -40,7 +40,7 @@ def download_shared_files(job, samples, config):
     urls = [config.reference, config.phase, config.mills, config.dbsnp, config.cosmic]
     for name, url in zip(file_names, urls):
         if url:
-            vars(config)[name] = job.addChildJobFn(download_url_job, url=url, s3_key_path=config.ssec).rv()
+            vars(config)[name] = job.addChildJobFn(download_url_job, url=url).rv()
     job.addFollowOnJobFn(reference_preprocessing, samples, config)
 
 
@@ -189,15 +189,14 @@ def consolidate_output(job, config, mutect, pindel, muse):
                         else:
                             tarinfo.name = os.path.join(config.uuid, 'muse', os.path.basename(tarinfo.name))
                         f_out.addfile(tarinfo, fileobj=f_in_file)
-    # Move to output directory of selected
-    if config.output_dir:
+    # Move to output location
+    if urlparse(config.output_dir).scheme == 's3':
+        job.fileStore.logToMaster('Uploading {} to S3: {}'.format(config.uuid, config.output_dir))
+        s3am_upload(fpath=out_tar, s3_dir=config.output_dir, num_cores=config.cores)
+    else:
         job.fileStore.logToMaster('Moving {} to output dir: {}'.format(config.uuid, config.output_dir))
         mkdir_p(config.output_dir)
         copy_files(file_paths=[out_tar], output_dir=config.output_dir)
-    if config.s3_output_dir:
-        job.fileStore.logToMaster('Uploading {} to S3: {}'.format(config.uuid, config.s3_output_dir))
-        s3am_upload(fpath=out_tar, s3_dir=config.s3_output_dir, num_cores=config.cores)
-
 
 def parse_manifest(path_to_manifest):
     """
@@ -226,8 +225,12 @@ def generate_config():
     # CGL Exome Pipeline configuration file
     # This configuration file is formatted in YAML. Simply write the value (at least one space) after the colon.
     # Edit the values in this configuration file and then rerun the pipeline: "toil-variant run"
-    # URLs can take the form: http://, file://, s3://, gnos://.
-    # Comments (beginning with #) do not need to be removed. Optional parameters may be left blank
+    #
+    # URLs can take the form: http://, file://, s3://, gnos://
+    # Local inputs follow the URL convention: file:///full/path/to/input
+    # S3 URLs follow the convention: s3://bucket/directory/file.txt
+    #
+    # Comments (beginning with #) do not need to be removed. Optional parameters left blank are treated as false.
     ####################################################################################################################
     # Required: URL to reference genome
     reference: s3://cgl-pipeline-inputs/variant_hg19/hg19.fa
@@ -244,6 +247,10 @@ def generate_config():
     # Required: URL to cosmic VCF
     cosmic: s3://cgl-pipeline-inputs/variant_hg19/cosmic.hg19.vcf
 
+    # Required: Output location of sample. Can be full path to a directory or an s3:// URL
+    # Warning: S3 buckets must exist prior to upload or it will fail.
+    output-dir:
+
     # Optional: If true, will run MuTect to do mutation calls
     run-mutect: true
 
@@ -255,12 +262,6 @@ def generate_config():
 
     # Optional: If true, will perform indel realignment and base quality score recalibration
     preprocessing: true
-
-    # Optional: Provide a full path to where results will appear
-    output-dir:
-
-    # Optional: Provide an s3 path (s3://bucket/dir) where results will appear
-    s3-output-dir:
 
     # Optional: Provide a full path to a 32-byte key used for SSE-C Encryption in Amazon
     ssec:
@@ -414,8 +415,7 @@ def main():
         if config.run_muse:
             require(config.reference and config.dbsnp,
                     'Missing inputs for MuSe, check config file.')
-        require(config.output_dir or config.s3_output_dir, 'output-dir AND/OR s3-output-dir need to be defined, '
-                                                           'otherwise sample output is not stored anywhere!')
+        require(config.output_dir, 'No output location specified: {}'.format(config.output_dir))
         # Program checks
         for program in ['curl', 'docker']:
             require(next(which(program), None), program + ' must be installed on every node.'.format(program))

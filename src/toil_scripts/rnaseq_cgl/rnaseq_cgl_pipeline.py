@@ -148,9 +148,9 @@ def rsem_quantification(job, config, star_output):
         transcriptome_id, sorted_id, wiggle_id = star_output
         wiggle_path = os.path.join(work_dir, config.uuid + '.wiggle.bg')
         job.fileStore.readGlobalFile(wiggle_id, wiggle_path)
-        if config.s3_output_dir:
-            s3am_upload(fpath=wiggle_path, s3_dir=config.s3_output_dir, s3_key_path=config.ssec)
-        if config.output_dir:
+        if urlparse(config.output_dir).scheme == 's3':
+            s3am_upload(fpath=wiggle_path, s3_dir=config.output_dir, s3_key_path=config.ssec)
+        else:
             copy_files(file_paths=[wiggle_path], output_dir=config.output_dir)
     else:
         transcriptome_id, sorted_id = star_output
@@ -158,8 +158,8 @@ def rsem_quantification(job, config, star_output):
     if config.save_bam:
         bam_path = os.path.join(work_dir, config.uuid + '.sorted.bam')
         job.fileStore.readGlobalFile(sorted_id, bam_path)
-        if config.s3_output_dir and config.ssec:
-            s3am_upload(fpath=bam_path, s3_dir=config.s3_output_dir, s3_key_path=config.ssec)
+        if urlparse(config.output_dir).scheme == 's3' and config.ssec:
+            s3am_upload(fpath=bam_path, s3_dir=config.output_dir, s3_key_path=config.ssec)
         if config.output_dir:
             copy_files(file_paths=[bam_path], output_dir=config.output_dir)
     # Declare RSEM and RSEM post-process jobs
@@ -234,7 +234,7 @@ def consolidate_output(job, config, kallisto_output, rsem_output, fastqc_output)
     :param tuple(str, str) rsem_output: FileStoreIDs for RSEM output
     :param str fastqc_output: FileStoreID for FastQC output
     """
-    job.fileStore.logToMaster('Consolidating input: {}'.format(config.uuid))
+    job.fileStore.logToMaster('Consolidating output: {}'.format(config.uuid))
     work_dir = job.fileStore.getLocalTempDir()
     # Retrieve output file paths to consolidate
     rsem_tar, hugo_tar, kallisto_tar, fastqc_tar = None, None, None, None
@@ -266,15 +266,14 @@ def consolidate_output(job, config, kallisto_output, rsem_output, fastqc_output)
                         else:
                             tarinfo.name = os.path.join(config.uuid, 'QC', os.path.basename(tarinfo.name))
                         f_out.addfile(tarinfo, fileobj=f_in_file)
-    # Move to output directory
-    if config.output_dir:
+    # Move to output location
+    if urlparse(config.output_dir).scheme == 's3':
+        job.fileStore.logToMaster('Uploading {} to S3: {}'.format(config.uuid, config.output_dir))
+        s3am_upload(fpath=out_tar, s3_dir=config.output_dir, num_cores=config.cores)
+    else:
         job.fileStore.logToMaster('Moving {} to output dir: {}'.format(config.uuid, config.output_dir))
         mkdir_p(config.output_dir)
         copy_files(file_paths=[os.path.join(work_dir, config.uuid + '.tar.gz')], output_dir=config.output_dir)
-    # Upload to S3
-    if config.s3_output_dir:
-        job.fileStore.logToMaster('Uploading {} to S3: {}'.format(config.uuid, config.s3_output_dir))
-        s3am_upload(fpath=out_tar, s3_dir=config.s3_output_dir, num_cores=config.cores)
 
 
 # Pipeline specific functions
@@ -316,8 +315,12 @@ def generate_config():
         # This configuration file is formatted in YAML. Simply write the value (at least one space) after the colon.
         # Edit the values in this configuration file and then rerun the pipeline: "toil-rnaseq run"
         # Just Kallisto or STAR/RSEM can be run by supplying only the inputs to those tools
+        #
+        # URLs can take the form: http://, file://, s3://, gnos://
         # Local inputs follow the URL convention: file:///full/path/to/input
-        # Comments (beginning with #) do not need to be removed. Optional parameters may be left blank.
+        # S3 URLs follow the convention: s3://bucket/directory/file.txt
+        #
+        # Comments (beginning with #) do not need to be removed. Optional parameters left blank are treated as false.
         ##############################################################################################################
         # Required: URL {scheme} to index tarball used by STAR
         star-index: s3://cgl-pipeline-inputs/rnaseq_cgl/starIndex_hg38_no_alt.tar.gz
@@ -328,12 +331,9 @@ def generate_config():
         # Required: URL {scheme} to reference tarball used by RSEM
         rsem-ref: s3://cgl-pipeline-inputs/rnaseq_cgl/rsem_ref_hg38_no_alt.tar.gz
 
-        # NOTE: Pipeline requires at least one output option
-        # Optional: Provide a full file path (/path/to/output-dir) where results will appear
+        # Required: Output location of sample. Can be full path to a directory or an s3:// URL
+        # Warning: S3 buckets must exist prior to upload or it will fail.
         output-dir:
-
-        # Optional: Provide an s3 path (s3://bucket/dir) where results will appear
-        s3-output-dir:
 
         # Optional: If true, will preprocess samples with cutadapt using adapter sequences.
         cutadapt: true
@@ -493,8 +493,7 @@ def main():
         if config.star_index or config.rsem_ref:
             require(config.star_index and config.rsem_ref, 'Input provided for STAR or RSEM but not both. STAR: '
                                                            '{}, RSEM: {}'.format(config.star_index, config.rsem_ref))
-        require(config.output_dir or config.s3_output_dir, 'output-dir AND/OR s3-output-dir need to be defined, '
-                                                           'otherwise sample output is not stored anywhere!')
+        require(config.output_dir, 'No output location specified: {}'.format(config.output_dir))
         for input in [x for x in [config.kallisto_index, config.star_index, config.rsem_ref] if x]:
             require(urlparse(input).scheme in schemes,
                     'Input in config must have the appropriate URL prefix: {}'.format(schemes))
