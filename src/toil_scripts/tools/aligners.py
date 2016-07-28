@@ -52,7 +52,7 @@ def run_star(job, cores, r1_id, r2_id, star_index_url, wiggle=False):
         job.fileStore.readGlobalFile(r2_id, os.path.join(work_dir, 'R2.fastq'))
         parameters.extend(['--readFilesIn', '/data/R1.fastq', '/data/R2.fastq'])
     else:
-        job.fileStore.readGlobalFile(r1_id, os.path.join(work_dir, 'R1_cutadapt.fastq'))
+        job.fileStore.readGlobalFile(r1_id, os.path.join(work_dir, 'R1.fastq'))
         parameters.extend(['--readFilesIn', '/data/R1.fastq'])
     # Call: STAR Mapping
     docker_call(tool='quay.io/ucsc_cgl/star:2.4.2a--bcbd5122b69ff6ac4ef61958e47bde94001cfe80',
