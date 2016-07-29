@@ -160,7 +160,7 @@ def rsem_quantification(job, config, star_output):
         job.fileStore.readGlobalFile(sorted_id, bam_path)
         if urlparse(config.output_dir).scheme == 's3' and config.ssec:
             s3am_upload(fpath=bam_path, s3_dir=config.output_dir, s3_key_path=config.ssec)
-        if config.output_dir:
+        else:
             copy_files(file_paths=[bam_path], output_dir=config.output_dir)
     # Declare RSEM and RSEM post-process jobs
     rsem_output = job.wrapJobFn(run_rsem, config.cores, transcriptome_id, config.rsem_ref, paired=config.paired,
