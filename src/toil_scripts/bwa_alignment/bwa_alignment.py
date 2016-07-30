@@ -44,7 +44,7 @@ def download_reference_files(job, inputs, samples):
         faidx = job.wrapJobFn(run_samtools_faidx, download_ref.rv())
         shared_ids['fai'] = download_ref.addChild(faidx).rv()
     # If all BWA index files are provided, download them. Otherwise, generate them
-    if all(urls):
+    if all(x[1] for x in urls):
         for name, url in urls:
             shared_ids[name] = job.addChildJobFn(download_url_job, url).rv()
     else:
