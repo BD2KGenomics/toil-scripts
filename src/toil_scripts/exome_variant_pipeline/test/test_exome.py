@@ -48,8 +48,7 @@ def generate_config():
     run-pindel: true
     run-muse: true
     preprocessing: true
-    output-dir:
-    s3-output-dir: s3://cgl-driver-projects/test/ci
+    output-dir: s3://cgl-driver-projects/test/ci
     ssec:
     gtkey:
     ci-test: true

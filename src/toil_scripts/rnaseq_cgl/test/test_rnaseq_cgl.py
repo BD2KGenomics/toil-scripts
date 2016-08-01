@@ -89,8 +89,7 @@ class RNASeqCGLTest(TestCase):
                     star-index: {input_dir}/starIndex_chr6.tar.gz
                     kallisto-index: s3://cgl-pipeline-inputs/rnaseq_cgl/kallisto_hg38.idx
                     rsem-ref: {input_dir}/rsem_ref_chr6.tar.gz
-                    output-dir:
-                    s3-output-dir: {output_dir}
+                    output-dir: {output_dir}
                     fastqc: true
                     cutadapt:
                     ssec:

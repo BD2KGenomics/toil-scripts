@@ -44,7 +44,7 @@ def download_reference_files(job, inputs, samples):
         faidx = job.wrapJobFn(run_samtools_faidx, download_ref.rv())
         shared_ids['fai'] = download_ref.addChild(faidx).rv()
     # If all BWA index files are provided, download them. Otherwise, generate them
-    if all(urls):
+    if all(x[1] for x in urls):
         for name, url in urls:
             shared_ids[name] = job.addChildJobFn(download_url_job, url).rv()
     else:
@@ -101,13 +101,18 @@ def generate_config():
         # BWA Alignment Pipeline configuration file
         # This configuration file is formatted in YAML. Simply write the value (at least one space) after the colon.
         # Edit the values in this configuration file and then rerun the pipeline: "toil-bwa run"
-        # URLs can take the form: http://, file://, s3://, gnos://.
-        # Comments (beginning with #) do not need to be removed. Optional parameters may be left blank
+        #
+        # URLs can take the form: http://, file://, s3://, gnos://
+        # Local inputs follow the URL convention: file:///full/path/to/input
+        # S3 URLs follow the convention: s3://bucket/directory/file.txt
+        #
+        # Comments (beginning with #) do not need to be removed. Optional parameters left blank are treated as false.
         ##############################################################################################################
         # Required: Reference fasta file
         ref: s3://cgl-pipeline-inputs/alignment/hg19.fa
 
         # Required: Output location of sample. Can be full path to a directory or an s3:// URL
+        # Warning: S3 buckets must exist prior to upload or it will fail.
         output-dir:
 
         # Required: The library entry to go in the BAM read group.
