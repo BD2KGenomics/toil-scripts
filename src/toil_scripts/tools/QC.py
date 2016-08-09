@@ -17,11 +17,11 @@ def run_fastqc(job, r1_id, r2_id):
     work_dir = job.fileStore.getLocalTempDir()
     job.fileStore.readGlobalFile(r1_id, os.path.join(work_dir, 'R1.fastq'))
     parameters = ['/data/R1.fastq']
-    output_names = ['R1_fastqc.html']
+    output_names = ['R1_fastqc.html', 'R1_fastqc.zip']
     if r2_id:
         job.fileStore.readGlobalFile(r2_id, os.path.join(work_dir, 'R2.fastq'))
         parameters.extend(['-t', '2', '/data/R2.fastq'])
-        output_names.append('R2_fastqc.html')
+        output_names.extend(['R2_fastqc.html', 'R2_fastqc.zip'])
     docker_call(tool='quay.io/ucsc_cgl/fastqc:0.11.5--be13567d00cd4c586edf8ae47d991815c8c72a49',
                 work_dir=work_dir, parameters=parameters)
     output_files = [os.path.join(work_dir, x) for x in output_names]
