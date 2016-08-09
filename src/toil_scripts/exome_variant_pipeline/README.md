@@ -38,9 +38,11 @@ privileges you will need to build these tools from source, or bug a sysadmin abo
 
 ## Installation
 
-Toil-scripts is now pip installable! `pip install toil-scripts` for a toil-stable version 
-or `pip install --pre toil-scripts` for cutting edge development version. CGCloud users should
-see the exception section below.
+Toil-scripts is now pip installable! `pip install toil-scripts` for a toil-stable version. 
+
+If there is an existing, system-wide installation of Toil, as is the case when using CGCloud, 
+the `pip install toil` step should be skipped and virtualenv should be invoked with `--system-site-packages`. 
+This way the existing Toil installation will be available inside the virtualenv.
 
 To decrease the chance of versioning conflicts, install toil-scripts into a virtualenv: 
 
@@ -48,10 +50,6 @@ To decrease the chance of versioning conflicts, install toil-scripts into a virt
 - `source ~/toil-scripts/bin/activate`
 - `pip install toil`, but see next paragraph
 - `pip install toil-scripts`
-
-If there is an existing, system-wide installation of Toil, as is the case when using CGCloud, 
-the `pip install toil` step should be skipped and virtualenv should be invoked with `--system-site-packages`. 
-That way the existing Toil installation will be available inside the virtualenv.
 
 The reason that Toil isn't installed automatically as a dependency of toil-scripts is to
  give users the opportunity to customize the Toil installation by adding optional extras, 
