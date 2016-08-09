@@ -82,7 +82,8 @@ def preprocessing_declaration(job, config, tar_id, r1_id, r2_id):
     else:
         if config.cutadapt:
             job.fileStore.logToMaster('Queueing CutAdapt for: ' + config.uuid)
-            preprocessing_output = job.addChildJobFn(run_cutadapt, config, r1_id, r2_id, disk=disk).rv()
+            preprocessing_output = job.addChildJobFn(run_cutadapt, r1_id, r2_id, config.fwd_3pr_adapter,
+                                                     config.rev_3pr_adapter, disk=disk).rv()
         else:
             preprocessing_output = (r1_id, r2_id)
     job.addFollowOnJobFn(pipeline_declaration, config, preprocessing_output)
