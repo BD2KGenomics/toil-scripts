@@ -196,7 +196,8 @@ def process_sample(job, config, input_tar=None, input_r1=None, input_r2=None, gz
     else:
         ext = '.fq.gz' if gz else '.fq'
         job.fileStore.readGlobalFile(input_r1, os.path.join(work_dir, 'R1' + ext))
-        job.fileStore.readGlobalFile(input_r2, os.path.join(work_dir, 'R2' + ext))
+        if config.paired:
+            job.fileStore.readGlobalFile(input_r2, os.path.join(work_dir, 'R2' + ext))
     fastqs = []
     for root, subdir, files in os.walk(work_dir):
         fastqs.extend([os.path.join(root, x) for x in files])
