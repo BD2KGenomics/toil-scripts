@@ -113,8 +113,8 @@ For a complete list of Toil options, just type `toil-exome run -h`
 Run a variety of samples locally
 1. `toil-exome generate-config`
 2. Fill in config
-3. `toil-exome run ./example-jobstore --retryCount=1 --workDir=/data --samples \
-    s3://example-bucket/sample_1.tar file:///full/path/to/sample_2.tar https://sample-depot.com/sample_3.tar`
+3. `toil-exome run ./example-jobstore --retryCount=1 --workDir=/data --normal \
+    s3://example-bucket/normal.bam --tumor file:///full/path/to/tumor.bam --uuid test-sample`
 
 ## Example Config
 
