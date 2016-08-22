@@ -7,12 +7,11 @@ from toil_scripts.lib.programs import docker_call
 from toil_scripts.lib.urls import download_url
 
 
-def run_kallisto(job, cores, r1_id, r2_id, kallisto_index_url):
+def run_kallisto(job, r1_id, r2_id, kallisto_index_url):
     """
     RNA quantification via Kallisto
 
     :param JobFunctionWrappingJob job: passed automatically by Toil
-    :param int cores: Number of cores to run Kallisto with
     :param str r1_id: FileStoreID of fastq (pair 1)
     :param str r2_id: FileStoreID of fastq (pair 2 if applicable, otherwise pass None for single-end)
     :param str kallisto_index_url: FileStoreID for Kallisto index file
@@ -24,7 +23,7 @@ def run_kallisto(job, cores, r1_id, r2_id, kallisto_index_url):
     # Retrieve files
     parameters = ['quant',
                   '-i', '/data/kallisto_hg38.idx',
-                  '-t', str(cores),
+                  '-t', str(job.cores),
                   '-o', '/data/',
                   '-b', '100']
     if r1_id and r2_id:
@@ -44,12 +43,11 @@ def run_kallisto(job, cores, r1_id, r2_id, kallisto_index_url):
     return job.fileStore.writeGlobalFile(os.path.join(work_dir, 'kallisto.tar.gz'))
 
 
-def run_rsem(job, cores, bam_id, rsem_ref_url, paired=True):
+def run_rsem(job, bam_id, rsem_ref_url, paired=True):
     """
     RNA quantification with RSEM
 
     :param JobFunctionWrappingJob job: Passed automatically by Toil
-    :param int cores: Number of cores to run RSEM with
     :param str bam_id: FileStoreID of transcriptome bam for quantification
     :param str rsem_ref_url: URL of RSEM reference (tarball)
     :param bool paired: If True, uses parameters for paired end data
@@ -73,7 +71,7 @@ def run_rsem(job, cores, bam_id, rsem_ref_url, paired=True):
     # Call: RSEM
     parameters = ['--quiet',
                   '--no-qualities',
-                  '-p', str(cores),
+                  '-p', str(job.cores),
                   '--forward-prob', '0.5',
                   '--seed-length', '25',
                   '--fragment-length-mean', '-1.0',

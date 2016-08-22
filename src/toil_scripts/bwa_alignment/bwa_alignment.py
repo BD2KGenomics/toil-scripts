@@ -83,14 +83,13 @@ def download_sample_and_align(job, sample, inputs, ids):
     config.update(ids)  # Overwrite attributes with the FileStoreIDs from ids
     config = argparse.Namespace(**config)
     # Define and wire job functions
-    bam_id = job.wrapJobFn(run_bwakit, config, threads=inputs.cores, sort=inputs.sort,
-                           trim=inputs.trim, disk=inputs.file_size, cores=inputs.cores)
+    bam_id = job.wrapJobFn(run_bwakit, config, sort=inputs.sort, trim=inputs.trim,
+                           disk=inputs.file_size, cores=inputs.cores)
     job.addFollowOn(bam_id)
     output_name = uuid + '.bam' + str(inputs.suffix) if inputs.suffix else uuid + '.bam'
     if urlparse(inputs.output_dir).scheme == 's3':
-        bam_id.addChildJobFn(s3am_upload_job, file_id=bam_id.rv(), file_name=output_name,
-                               s3_dir=inputs.output_dir, num_cores=inputs.cores, s3_key_path=inputs.ssec,
-                               cores=inputs.cores, disk=inputs.file_size)
+        bam_id.addChildJobFn(s3am_upload_job, file_id=bam_id.rv(), file_name=output_name, s3_dir=inputs.output_dir,
+                             s3_key_path=inputs.ssec, cores=inputs.cores, disk=inputs.file_size)
     else:
         bam_id.addChildJobFn(copy_file_job, name=output_name, file_id=bam_id.rv(), output_dir=inputs.output_dir,
                                     disk=inputs.file_size)

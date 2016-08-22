@@ -69,11 +69,11 @@ def s3am_upload(fpath, s3_dir, num_cores=1, s3_key_path=None):
     _s3am_with_retry(num_cores, file_path=fpath, s3_url=s3_dir, mode='upload', s3_key_path=s3_key_path)
 
 
-def s3am_upload_job(job, file_id, file_name, s3_dir, num_cores, s3_key_path=None):
+def s3am_upload_job(job, file_id, file_name, s3_dir, s3_key_path=None):
     """Job version of s3am_upload"""
     work_dir = job.fileStore.getLocalTempDir()
     fpath = job.fileStore.readGlobalFile(file_id, os.path.join(work_dir, file_name))
-    s3am_upload(fpath=fpath, s3_dir=s3_dir, num_cores=num_cores, s3_key_path=s3_key_path)
+    s3am_upload(fpath=fpath, s3_dir=s3_dir, num_cores=job.cores, s3_key_path=s3_key_path)
 
 
 def _s3am_with_retry(num_cores, file_path, s3_url, mode='upload', s3_key_path=None):

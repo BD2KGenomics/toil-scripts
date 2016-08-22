@@ -104,7 +104,7 @@ def pipeline_declaration(job, config, preprocessing_output):
         fastqc_output = job.addChildJobFn(run_fastqc, r1_id, r2_id, cores=2, disk=disk).rv()
     if config.kallisto_index:
         job.fileStore.logToMaster('Queueing Kallisto job for: ' + config.uuid)
-        kallisto_output = job.addChildJobFn(run_kallisto, config.cores, r1_id, r2_id, config.kallisto_index,
+        kallisto_output = job.addChildJobFn(run_kallisto, r1_id, r2_id, config.kallisto_index,
                                             cores=config.cores, disk=disk).rv()
     if config.star_index and config.rsem_ref:
         job.fileStore.logToMaster('Queueing STAR alignment for: ' + config.uuid)
@@ -125,7 +125,7 @@ def star_alignment(job, config, r1_id, r2_id):
     """
     job.fileStore.logToMaster('Queueing RSEM job for: ' + config.uuid)
     mem = '2G' if config.ci_test else '40G'
-    star = job.addChildJobFn(run_star, config.cores, r1_id, r2_id, star_index_url=config.star_index,
+    star = job.addChildJobFn(run_star, r1_id, r2_id, star_index_url=config.star_index,
                              wiggle=config.wiggle, cores=config.cores, memory=mem).rv()
     return job.addFollowOnJobFn(rsem_quantification, config, star).rv()
 
@@ -162,7 +162,7 @@ def rsem_quantification(job, config, star_output):
         else:
             copy_files(file_paths=[bam_path], output_dir=config.output_dir)
     # Declare RSEM and RSEM post-process jobs
-    rsem_output = job.wrapJobFn(run_rsem, config.cores, transcriptome_id, config.rsem_ref, paired=config.paired,
+    rsem_output = job.wrapJobFn(run_rsem, transcriptome_id, config.rsem_ref, paired=config.paired,
                                 cores=cores, disk=disk)
     rsem_postprocess = job.wrapJobFn(run_rsem_postprocess, config.uuid, rsem_output.rv(0), rsem_output.rv(1))
     job.addChild(rsem_output)
