@@ -5,6 +5,12 @@ This guide attempts to walk the user through running this pipeline from start to
 please contact John Vivian (jtvivian@gmail.com). If you find any errors or corrections please feel free to make a 
 pull request.  Feedback of any kind is appreciated.
 
+- [Dependencies](#Dependencies)
+- [Installation](#Installation)
+- [Inputs](#Inputs)
+- [Usage](#General-Usage)
+- [Methods](#Methods)
+
 
 ## Overview
 
@@ -14,6 +20,7 @@ This pipeline produces a tarball (tar.gz) file for a given sample that contains:
 
     RSEM: TPM, FPKM, counts and raw counts (parsed from RSEM output)
     Kallisto: abundance.tsv, abundance.h5, and a JSON of run information
+    QC: FastQC output HTMLs and zip file
 
 The output tarball is *stamped* with the UUID for the sample (e.g. UUID.tar.gz). 
 
@@ -33,7 +40,11 @@ privileges you will need to build these tools from source, or bug a sysadmin abo
 
     1. Toil         pip install toil
     2. S3AM         pip install --pre s3am (optional, needed for uploading output to S3)
+    
+    
+#### System Dependencies
 
+This pipeline needs approximately 50G of RAM in order to run STAR alignment. 
 
 ## Installation
 
@@ -82,7 +93,7 @@ Type `toil-rnaseq` to get basic help menu and instructions
 3. Fill in the manifest with information pertaining to your samples.
 4. Type `toil-rnaseq run [jobStore]` to execute the pipeline.
 
-## Example Commands
+### Example Commands
 
 Run sample(s) locally using the manifest
 
@@ -102,7 +113,7 @@ Run a variety of samples locally
 3. `toil-rnaseq run ./example-jobstore --retryCount=1 --workDir=/data --samples \
     s3://example-bucket/sample_1.tar file:///full/path/to/sample_2.tar https://sample-depot.com/sample_3.tar`
 
-## Example Config
+### Example Config
 
 ```
 star-index: s3://cgl-pipeline-inputs/rnaseq_cgl/ci/starIndex_chr6.tar.gz
@@ -141,3 +152,73 @@ rev-3pr-adapter: AGATCGGAAGAG
 To run on a distributed AWS cluster, see [CGCloud](https://github.com/BD2KGenomics/cgcloud) for instance provisioning, 
 then run `toil-rnaseq run aws:us-west-2:example-jobstore-bucket --batchSystem=mesos --mesosMaster mesos-master:5050`
 to use the AWS job store and mesos batch system. 
+
+# Methods
+
+## Tools
+
+| Tool     | Version | Description                                                                                                                                 |
+|----------|---------|---------------------------------------------------------------------------------------------------------------------------------------------|
+| FastQC   | 0.11.5  | Obtains quality metrics on each FASTQ input file.                                                                                           |
+| CutAdapt | 1.9     | Adapter trimming and quality checking by enforcing fastq samples are properly paired.                                                       |
+| STAR     | 2.4.2a  | Aligns fastq samples to the genome. Produces transcriptome bam for RSEM, and can optionally generate a genome-aligned bam and BigWig files. |
+| RSEM     | 1.2.25  | Performs quantification of RNA-seq data to produces count values for genes and isoforms.                                                    |
+| Kallisto | 0.42.4  | Performs quantification of RNA-seq data to produces counts for isoforms directly from fastq data.                                           |
+
+
+## Reference Data
+
+HG38 (no alternative sequences) was downloaded from [NCBI](ftp://ftp.ncbi.nlm.nih.gov/genomes/archive/old_genbank/Eukaryotes/vertebrates_mammals/Homo_sapiens/GRCh38/seqs_for_alignment_pipelines/).
+The PAR locus on the Y chromosome, which has duplicate sequences relative to the X chromosome, were removed. chrY:10,000-2,781,479
+chrY:56,887,902-57,217,415. This was a requirement in order to run Kallisto. The reference genome can be downloaded using
+`s3cmd` with the `requester-pays` option from: `s3://cgl-pipeline-inputs/rnaseq_cgl/hg38_no_alt.fa`.
+
+Gencode v23 annotations were downloaded from [Gencode](http://www.gencodegenes.org/releases/23.html). Comprehensive 
+gene annotation (Regions=CHR) GTF was used to generate all additional reference input data.
+
+STAR index was created using the reference genome and annotation file with the following Docker command:
+`sudo docker run -v $(pwd):/data quay.io/ucsc_cgl/star --runThreadN 32 --runMode genomeGenerate --genomeDir /data/genomeDir --genomeFastaFiles hg38.fa --sjdbGTFfile gencode.v23.annotation.gtf`
+
+RSEM reference was created using the reference genome and annotation file with the following Docker command:
+`sudo docker run -v $(pwd):/data --entrypoinst=rsem-prepare-reference jvivian/rsem -p 4 --gtf gencode.v23.annotation.gtf hg38.fa hg38`
+
+Kallisto index was created using the transcriptome and annotation file with the following Docker command:
+`sudo docker run -v $(pwd):/data quay.io/ucsc_cgl/kallisto index -i hg38.gencodeV23.transcripts.idx transcriptome_hg38_gencodev23.fasta`
+
+## Tool Options
+
+- FastQC is run with default options
+- CutAdapt is run with default options
+- Kallisto is run with `bootstraps` set to 100
+
+#### STAR
+
+```
+'--outFileNamePrefix', 'rna',
+'--outSAMtype', 'BAM', 'SortedByCoordinate',
+'--outSAMunmapped', 'Within',
+'--quantMode', 'TranscriptomeSAM',
+'--outSAMattributes', 'NH', 'HI', 'AS', 'NM', 'MD',
+'--outFilterType', 'BySJout',
+'--outFilterMultimapNmax', '20',
+'--outFilterMismatchNmax', '999',
+'--outFilterMismatchNoverReadLmax', '0.04',
+'--alignIntronMin', '20',
+'--alignIntronMax', '1000000',
+'--alignMatesGapMax', '1000000',
+'--alignSJoverhangMin', '8',
+'--alignSJDBoverhangMin', '1',
+'--sjdbScore', '1'
+```
+
+#### RSEM
+
+```
+'--quiet',
+'--no-qualities',
+'-p', str(cores),
+'--forward-prob', '0.5',
+'--seed-length', '25',
+'--fragment-length-mean', '-1.0',
+'--bam', '/data/transcriptome.bam',
+```

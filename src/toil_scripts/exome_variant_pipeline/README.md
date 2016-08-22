@@ -5,6 +5,12 @@ This guide attempts to walk the user through running this pipeline from start to
 please contact John Vivian (jtvivian@gmail.com). If you find any errors or corrections please feel free to make a 
 pull request.  Feedback of any kind is appreciated.
 
+- [Dependencies](#dependencies)
+- [Installation](#installation)
+- [Inputs](#inputs)
+- [Usage](#general-usage)
+- [Methods](#methods)
+
 ## Overview
 
 A pair of Tumor/Normal exome BAMs are preprocessed (GATK), indels are found (Pindel), and variants are
@@ -14,7 +20,7 @@ pipeline can be run on it's own. If preprocessing is selected, it will always oc
 This pipeline produces a tarball (tar.gz) file for a given sample that contains:
 
     MuTect: Mutect.vcf, Mutect.cov, Mutect.out
-    Pindel: 
+    Pindel: Pindel output files
     MuSe: Muse.vcf
 
 The output tarball is *stamped* with the UUID for the sample (e.g. UUID.tar.gz). 
@@ -35,6 +41,10 @@ privileges you will need to build these tools from source, or bug a sysadmin abo
 
     1. Toil         pip install toil
     2. S3AM         pip install --pre s3am (optional, needed for uploading output to S3)
+    
+#### System Dependencies
+
+This pipeline needs approximately 15G of RAM in order to run various GATK steps.  
 
 ## Installation
 
@@ -149,3 +159,99 @@ ci-test:
 To run on a distributed AWS cluster, see [CGCloud](https://github.com/BD2KGenomics/cgcloud) for instance provisioning, 
 then run `toil-exome run aws:us-west-2:example-jobstore-bucket --batchSystem=mesos --mesosMaster mesos-master:5050`
 to use the AWS job store and mesos batch system. 
+
+# Methods
+
+## Tools
+
+| Tool     | Version | Description                                                                                       |
+|----------|---------|---------------------------------------------------------------------------------------------------|
+| Samtools | 0.1.19  | Indexes bam files and creates reference index.                                                    |
+| Picard   | 1.95    | Creates sequence dictionary for reference.                                                        |
+| GATK     | 3.5     | Used for GATK preprocessing. Indel realignment (IR) and base quality score recalibration (BQSR).  |
+| Pindel   | 0.2.5b6 | Computes insertions and deletions for each BAM file.                                              |
+| MuSe     | 1.0     | Finds somatic variants from a pair of normal and tumor BAM files.                                 |
+| MuTect   | 1.1.7   | Finds somatic variants from a pair of normal and tumor BAM files.                                 |
+
+## Reference Data
+
+This pipeline is designed to work with HG19 and GRCh37. HG38 / GRCh38 support is in the works. All other input files
+to this pipeline are part of the [GATK bundle](http://gatkforums.broadinstitute.org/gatk/discussion/1213/whats-in-the-resource-bundle-and-how-can-i-get-it).
+
+## Tool options
+
+- Samtools index/faidx are run with default options
+- Picard dictionary is run with default options
+- GATK BQSR is run with default options
+- GATK PR is run with `--emit_original_quals`
+
+#### GATK - RTC
+
+```
+'-T', 'RealignerTargetCreator',
+'-nt', str(cores),
+'-R', '/data/ref.fasta',
+'-I', '/data/sample.bam',
+'-known', '/data/phase.vcf',
+'-known', '/data/mills.vcf',
+'--downsampling_type', 'NONE',
+'-o', '/data/sample.intervals'
+```
+
+#### GATK - IR
+
+```
+'-T', 'IndelRealigner',
+'-R', '/data/ref.fasta',
+'-I', '/data/sample.bam',
+'-known', '/data/phase.vcf',
+'-known', '/data/mills.vcf',
+'-targetIntervals', '/data/sample.intervals',
+'--downsampling_type', 'NONE',
+'-maxReads', str(720000), # Taken from MC3 pipeline
+'-maxInMemory', str(5400000), # Taken from MC3 pipeline
+'-o', '/data/sample.indel.bam'
+```
+
+#### MuTect
+
+```
+'--analysis_type', 'MuTect',
+'--reference_sequence', 'ref.fasta',
+'--cosmic', '/data/cosmic.vcf',
+'--dbsnp', '/data/dbsnp.vcf',
+'--input_file:normal', '/data/normal.bam',
+'--input_file:tumor', '/data/tumor.bam',
+'--tumor_lod', str(10), # Taken from MC3 pipeline
+'--initial_tumor_lod', str(4.0), # Taken from MC3 pipeline
+'--out', 'mutect.out',
+'--coverage_file', 'mutect.cov',
+'--vcf', 'mutect.vcf'
+```
+
+#### MuSe
+
+```
+'--mode', 'wxs',
+'--dbsnp', '/data/dbsnp.vcf',
+'--fafile', '/data/ref.fasta',
+'--tumor-bam', '/data/tumor.bam',
+'--tumor-bam-index', '/data/tumor.bai',
+'--normal-bam', '/data/normal.bam',
+'--normal-bam-index', '/data/normal.bai',
+'--outfile', '/data/muse.vcf',
+'--cpus', str(cores)
+```
+
+#### Pindel
+
+pindel-config.txt contains mean insert size for tumor and normal bam
+```
+'-f', '/data/ref.fasta',
+'-i', '/data/pindel-config.txt',
+'--number_of_threads', str(cores),
+'--minimum_support_for_event', '3',
+'--report_long_insertions', 'true',
+'--report_breakpoints', 'true',
+'-o', 'pindel'
+```
