@@ -25,7 +25,6 @@ def gatk_genotype_gvcfs(job, gvcf_ids, config, emit_threshold=10.0, call_thresho
               'genome.fa.fai': config.genome_fai,
               'genome.dict': config.genome_dict}
     inputs.update(gvcf_ids)
-    job.fileStore.logToMaster(repr(inputs))
     get_files_from_filestore(job, work_dir, inputs)
 
     command = ['-T', 'GenotypeGVCFs',

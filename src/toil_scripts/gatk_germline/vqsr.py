@@ -42,14 +42,14 @@ def vqsr_pipeline(job, gvcfs, config):
                               'SNP',
                               genotype_gvcf.rv(),
                               config,
-                              disk=snp_recal_disk, cores=config.cores/2)
+                              disk=snp_recal_disk, cores=config.cores)
 
     indel_recal_disk = PromisedRequirement(lambda x: 2*x.size+human2bytes('10G'), genotype_gvcf.rv())
     indel_recal = job.wrapJobFn(gatk_variant_recalibrator,
                                 'INDEL',
                                 genotype_gvcf.rv(),
                                 config,
-                                disk=indel_recal_disk, cores=config.cores/2)
+                                disk=indel_recal_disk, cores=config.cores)
 
     apply_snp_recal_disk = PromisedRequirement(
         lambda x,y,z: 2*(x.size + y.size + z.size) + human2bytes('5G'),

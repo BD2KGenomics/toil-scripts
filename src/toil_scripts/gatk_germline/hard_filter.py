@@ -88,10 +88,16 @@ def hard_filter_pipeline(job, uuid, gvcf_id, config):
     indel_filter.addChild(merge_variants)
 
     output_dir = os.path.join(config.output_dir, uuid)
-    filename = '%s.hard_filter%s.vcf' % (uuid, config.suffix)
+    input_filename = '%s.input%s.vcf' % (uuid, config.suffix)
+    output_filename = '%s.hard_filter%s.vcf' % (uuid, config.suffix)
+    input_vcf = job.wrapJobFn(upload_or_move_job,
+                               input_filename,
+                               genotype_gvcf.rv(),
+                               output_dir, ssec=config.ssec)
     output_vcf = job.wrapJobFn(upload_or_move_job,
-                               filename,
+                               output_filename,
                                merge_variants.rv(),
                                output_dir, ssec=config.ssec)
+    merge_variants.addChild(input_vcf)
     merge_variants.addChild(output_vcf)
     return merge_variants.rv()
