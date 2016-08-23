@@ -19,9 +19,9 @@ pipeline can be run on it's own. If preprocessing is selected, it will always oc
 
 This pipeline produces a tarball (tar.gz) file for a given sample that contains:
 
-    MuTect: Mutect.vcf, Mutect.cov, Mutect.out
-    Pindel: Pindel output files
-    MuSe: Muse.vcf
+- MuTect: Mutect.vcf, Mutect.cov, Mutect.out
+- Pindel: pindel-config.txt pindel_BP pindel_CloseEndMapped pindel_D pindel_INT pindel_INT_final pindel_INV pindel_LI pindel_RP pindel_SI pindel_TD
+- MuSe: Muse.vcf
 
 The output tarball is *stamped* with the UUID for the sample (e.g. UUID.tar.gz). 
 
@@ -87,6 +87,12 @@ be downloaded after creating an account which takes about 1 minute and is free.
         * `syn.get('syn6128237', downloadLocation='.')`
     * Get the Cosmic VCF (0.01 G)
         * `syn.get('syn6128235', downloadLocation='.')`
+        
+A sample, which consists of a tumor and normal BAM file, can be passed via the command line options
+`--normal`, `--tumor`, and `--uuid`. If wanting to run more than one sample, then the use the `toil-exome --generate-manifest`
+command and fill in the manifest as instructed. 
+All samples and inputs must be submitted as URLs with support for the following schemas: 
+`http://`, `file://`, `s3://`, `ftp://`.
 
 
 ## General Usage
@@ -113,8 +119,13 @@ For a complete list of Toil options, just type `toil-exome run -h`
 Run a variety of samples locally
 1. `toil-exome generate-config`
 2. Fill in config
-3. `toil-exome run ./example-jobstore --retryCount=1 --workDir=/data --normal \
-    s3://example-bucket/normal.bam --tumor file:///full/path/to/tumor.bam --uuid test-sample`
+3. `toil-exome run \
+        ./example-jobstore \
+        --retryCount 1 \
+        --workDir /data \
+        --normal s3://example-bucket/normal.bam \
+        --tumor s3://example-bucket/tumor.bam \ 
+        --uuid test-sample`
 
 ## Example Config
 
@@ -173,6 +184,8 @@ to use the AWS job store and mesos batch system.
 | MuSe     | 1.0     | Finds somatic variants from a pair of normal and tumor BAM files.                                 |
 | MuTect   | 1.1.7   | Finds somatic variants from a pair of normal and tumor BAM files.                                 |
 
+All tool containers can be found on our [quay.io account](quay.io/organization/ucsc_cgl).
+
 ## Reference Data
 
 This pipeline is designed to work with HG19 and GRCh37. HG38 / GRCh38 support is in the works. All other input files
@@ -189,41 +202,41 @@ to this pipeline are part of the [GATK bundle](http://gatkforums.broadinstitute.
 
 ```
 '-T', 'RealignerTargetCreator',
-'-nt', str(cores),
-'-R', '/data/ref.fasta',
-'-I', '/data/sample.bam',
-'-known', '/data/phase.vcf',
-'-known', '/data/mills.vcf',
+'-nt', cores,
+'-R', ref_fasta,
+'-I', sample_bam,
+'-known', phase_vcf,
+'-known', mills_vcf,
 '--downsampling_type', 'NONE',
-'-o', '/data/sample.intervals'
+'-o', sample_intervals
 ```
 
 #### GATK - IR
 
 ```
 '-T', 'IndelRealigner',
-'-R', '/data/ref.fasta',
-'-I', '/data/sample.bam',
-'-known', '/data/phase.vcf',
-'-known', '/data/mills.vcf',
-'-targetIntervals', '/data/sample.intervals',
+'-R', ref_fasta,
+'-I', sample_bam
+'-known', phase_vcf,
+'-known', mills_vcf,
+'-targetIntervals', sample_intervals,
 '--downsampling_type', 'NONE',
-'-maxReads', str(720000), # Taken from MC3 pipeline
-'-maxInMemory', str(5400000), # Taken from MC3 pipeline
-'-o', '/data/sample.indel.bam'
+'-maxReads', '720000',
+'-maxInMemory', '5400000', 
+'-o', sample_indel_bam
 ```
 
 #### MuTect
 
 ```
 '--analysis_type', 'MuTect',
-'--reference_sequence', 'ref.fasta',
-'--cosmic', '/data/cosmic.vcf',
-'--dbsnp', '/data/dbsnp.vcf',
-'--input_file:normal', '/data/normal.bam',
-'--input_file:tumor', '/data/tumor.bam',
-'--tumor_lod', str(10), # Taken from MC3 pipeline
-'--initial_tumor_lod', str(4.0), # Taken from MC3 pipeline
+'--reference_sequence', ref_fasta,
+'--cosmic', cosmic_vcf,
+'--dbsnp', dbsnp_vcf,
+'--input_file:normal', normal_bam,
+'--input_file:tumor', tumor_bam,
+'--tumor_lod', '10', 
+'--initial_tumor_lod', '4.0',
 '--out', 'mutect.out',
 '--coverage_file', 'mutect.cov',
 '--vcf', 'mutect.vcf'
@@ -233,23 +246,23 @@ to this pipeline are part of the [GATK bundle](http://gatkforums.broadinstitute.
 
 ```
 '--mode', 'wxs',
-'--dbsnp', '/data/dbsnp.vcf',
-'--fafile', '/data/ref.fasta',
-'--tumor-bam', '/data/tumor.bam',
-'--tumor-bam-index', '/data/tumor.bai',
-'--normal-bam', '/data/normal.bam',
-'--normal-bam-index', '/data/normal.bai',
-'--outfile', '/data/muse.vcf',
-'--cpus', str(cores)
+'--dbsnp', dbsnp_vcf,
+'--fafile', ref_fasta,
+'--tumor-bam', tumor_bam,
+'--tumor-bam-index', tumor_bai,
+'--normal-bam', normal_bam,
+'--normal-bam-index', normal_bai,
+'--outfile', muse_vcf,
+'--cpus', cores
 ```
 
 #### Pindel
 
 pindel-config.txt contains mean insert size for tumor and normal bam
 ```
-'-f', '/data/ref.fasta',
-'-i', '/data/pindel-config.txt',
-'--number_of_threads', str(cores),
+'-f', ref_fasta,
+'-i', pindel_config
+'--number_of_threads', cores,
 '--minimum_support_for_event', '3',
 '--report_long_insertions', 'true',
 '--report_breakpoints', 'true',
