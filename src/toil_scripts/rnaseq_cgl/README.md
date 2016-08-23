@@ -18,9 +18,9 @@ RNA-seq fastqs are combined, aligned, and quantified with 2 different methods (R
 
 This pipeline produces a tarball (tar.gz) file for a given sample that contains:
 
-    RSEM: TPM, FPKM, counts and raw counts (parsed from RSEM output)
-    Kallisto: abundance.tsv, abundance.h5, and a JSON of run information
-    QC: FastQC output HTMLs and zip file
+- RSEM: TPM, FPKM, counts and raw counts (parsed from RSEM output)
+- Kallisto: abundance.tsv, abundance.h5, and a JSON of run information
+- QC: FastQC output HTMLs and zip file
 
 The output tarball is *stamped* with the UUID for the sample (e.g. UUID.tar.gz). 
 
@@ -83,6 +83,12 @@ be downloaded after creating an account which takes about 1 minute and is free.
         * `syn.get('syn5886142', downloadLocation='.')`
     * Get the STAR index (25 G)
         * `syn.get('syn5886182', downloadLocation='.')`
+        
+Sample tarballs containing fastq pairs can be passed via the command line option `--samples`. 
+Alternatively, many samples can be placed in a manifest file created by using the 
+`toil-rnaseq --generate-manifest` option. 
+All samples and inputs must be submitted as URLs with support for the following schemas: 
+`http://`, `file://`, `s3://`, `ftp://`.
 
 ## General Usage
 
@@ -165,13 +171,16 @@ to use the AWS job store and mesos batch system.
 | RSEM     | 1.2.25  | Performs quantification of RNA-seq data to produces count values for genes and isoforms.                                                    |
 | Kallisto | 0.42.4  | Performs quantification of RNA-seq data to produces counts for isoforms directly from fastq data.                                           |
 
+All tool containers can be found on our [quay.io account](quay.io/organization/ucsc_cgl).
 
 ## Reference Data
 
 HG38 (no alternative sequences) was downloaded from [NCBI](ftp://ftp.ncbi.nlm.nih.gov/genomes/archive/old_genbank/Eukaryotes/vertebrates_mammals/Homo_sapiens/GRCh38/seqs_for_alignment_pipelines/).
 The PAR locus on the Y chromosome, which has duplicate sequences relative to the X chromosome, were removed. chrY:10,000-2,781,479
-chrY:56,887,902-57,217,415. This was a requirement in order to run Kallisto. The reference genome can be downloaded using
-`s3cmd` with the `requester-pays` option from: `s3://cgl-pipeline-inputs/rnaseq_cgl/hg38_no_alt.fa`.
+chrY:56,887,902-57,217,415. This was a requirement in order to run Kallisto. 
+This locus is not removed by the pipeline, and was manually removed. To get this manually modified reference 
+genome, use the `s3cmd` tool with the `requester-pays` option and download: 
+`s3://cgl-pipeline-inputs/rnaseq_cgl/hg38_no_alt.fa`.
 
 Gencode v23 annotations were downloaded from [Gencode](http://www.gencodegenes.org/releases/23.html). Comprehensive 
 gene annotation (Regions=CHR) GTF was used to generate all additional reference input data.
@@ -180,7 +189,7 @@ STAR index was created using the reference genome and annotation file with the f
 `sudo docker run -v $(pwd):/data quay.io/ucsc_cgl/star --runThreadN 32 --runMode genomeGenerate --genomeDir /data/genomeDir --genomeFastaFiles hg38.fa --sjdbGTFfile gencode.v23.annotation.gtf`
 
 RSEM reference was created using the reference genome and annotation file with the following Docker command:
-`sudo docker run -v $(pwd):/data --entrypoinst=rsem-prepare-reference jvivian/rsem -p 4 --gtf gencode.v23.annotation.gtf hg38.fa hg38`
+`sudo docker run -v $(pwd):/data --entrypoinst=rsem-prepare-reference quay.io/ucsc_cgl/rsem -p 4 --gtf gencode.v23.annotation.gtf hg38.fa hg38`
 
 Kallisto index was created using the transcriptome and annotation file with the following Docker command:
 `sudo docker run -v $(pwd):/data quay.io/ucsc_cgl/kallisto index -i hg38.gencodeV23.transcripts.idx transcriptome_hg38_gencodev23.fasta`
