@@ -2,19 +2,28 @@
 ### Guide: Running GATK Best Practices Variant Pipeline using Toil
 
 ## Overview
-The GATK germline pipeline includes GATK preprocessing, variant calling, and filtering. HaplotypeCaller is run per sample and then individual VCFs are joined to increase statistical power for variant quality score recalibration. If there are fewer than thirty exome samples, it is recommended that hard filters are used instead. The pipeline also supports clinical variant annotation using Oncotator.
+
+The GATK germline pipeline includes GATK preprocessing, variant calling, 
+and filtering. HaplotypeCaller is run per sample and then individual 
+VCFs are joined to increase statistical power for variant quality score 
+recalibration. If there are fewer than thirty exome samples, it is 
+recommended that hard filters are used instead. The pipeline also 
+supports clinical variant annotation using Oncotator.
 
 #### General Dependencies
+
     1. Python 2.7
     2. Curl         apt-get install curl
     3. Docker       http://docs.docker.com/engine/installation/
 
 #### Python Dependencies
+
     1. pip          apt-get install python-pip
     2. virtualenv   pip install virtualenv
     3. Toil         pip install toil
 
 #### Installation
+
 Toil-scripts is now pip installable! `pip install toil-scripts` for a toil-stable version 
 or `pip install --pre toil-scripts` for cutting edge development version.
 
@@ -31,11 +40,12 @@ If Toil is already installed globally (true for CGCloud users), or there are glo
 use virtualenv's `--system-site-packages` flag.
 
 ## General Usage
+
     1. Type `toil-germline generate` to create an editable manifest and config in the current working directory.
     2. Parameterize the pipeline by editing the config.
     3. Fill in the manifest with information pertaining to your samples.
     4. Type `toil-germline run [jobStore]` to execute the pipeline.
-
+    
 ## Example Commands
 Run sample(s) locally using the manifest
     1. `toil-germline generate`
@@ -54,18 +64,27 @@ Run a single sample locally
     3. `toil-germline run ./example-jobstore --workDir /data --samples \
         UUID https://sample-depot.com/sample.bam`
         
-## GATK Variant Annotations:
-Currently, this pipeline uses the following variant annotations:
+## Acceptable Inputs
+The Toil Germline pipeline accepts FASTQ and BAM files. Sample 
+information should be written to the manifest-toil-germline.tsv file. 
+Each line contains a different sample and the format is different for 
+FASTQ and BAM files. FASTQ samples include a unique identifier, a 
+URL/PATH, an optional paired FASTQ URL/PATH, and the read group line. 
+GATK requires valid read group information for downstream analysis, so 
+all samples must have this information. BAM files must already contain
+read group information. 
 
-* QualByDepth
-* FisherStrand
-* StrandOddsRatio
-* ReadPosRankSumTest
-* MappingQualityRankSumTest
-* RMSMappingQuality
-* InbreedingCoeff
-    
+## GATK Recalibration Model Resources and Variant Annotations:
+This pipeline is configured to run the [GATK Germline Best Practices 
+Pipeline](https://software.broadinstitute.org/gatk/best-practices/).
+Please see source code for specific tool parameters. We have followed 
+most of the  
+[GATK recommendations](https://software.broadinstitute.org/gatk/guide/article?id=2805).
+for training sets and variant annotations. We do not use Coverage 
+because this annotation is not recommended for exome data.
+
 ## Example Config
+
 ```
 genome-fasta: s3://cgl-pipeline-inputs/hg19/ucsc.hg19.fasta
 genome-fai: s3://cgl-pipeline-inputs/hg19/ucsc.hg19.fasta.fai

@@ -1,7 +1,7 @@
 import os
 import subprocess
 
-from toil_scripts.lib.files import get_files_from_filestore, upload_or_move_job
+from toil_scripts.lib.files import get_files_from_filestore
 from toil_scripts.lib.programs import docker_call
 
 
@@ -28,7 +28,7 @@ def gatk_genotype_gvcfs(job, gvcf_ids, config, emit_threshold=10.0, call_thresho
     get_files_from_filestore(job, work_dir, inputs)
 
     command = ['-T', 'GenotypeGVCFs',
-               '-nt', str(config.cores),
+               '-nt', str(job.cores),
                '-R', '/data/genome.fa',
                '--out', 'joint.vcf',
                # Fix file locking bug on Azure
@@ -49,7 +49,7 @@ def gatk_genotype_gvcfs(job, gvcf_ids, config, emit_threshold=10.0, call_thresho
 
     outputs = {'joint.vcf': None}
     docker_call(work_dir = work_dir,
-                env={'JAVA_OPTS': '-Djava.io.tmpdir=/data/ -Xmx{}'.format(config.xmx)},
+                env={'JAVA_OPTS': '-Djava.io.tmpdir=/data/ -Xmx{}'.format(job.memory)},
                 parameters=command,
                 tool='quay.io/ucsc_cgl/gatk:3.5--dba6dae49156168a909c43330350c6161dc7ecc2',
                 inputs=inputs.keys(),
@@ -86,7 +86,7 @@ def gatk_select_variants(job, mode, vcf_id, config):
 
     outputs = {output: None}
     docker_call(work_dir = work_dir,
-                env={'JAVA_OPTS': '-Djava.io.tmpdir=/data/ -Xmx{}'.format(config.xmx)},
+                env={'JAVA_OPTS': '-Djava.io.tmpdir=/data/ -Xmx{}'.format(job.memory)},
                 parameters=command,
                 tool='quay.io/ucsc_cgl/gatk:3.5--dba6dae49156168a909c43330350c6161dc7ecc2',
                 inputs=inputs.keys(),
@@ -123,7 +123,7 @@ def split_vcf_by_name(job, sample_names, vcf_id, config):
                    '--sample_name', sample]
         outputs = {output: None}
         docker_call(work_dir = work_dir,
-                    env={'JAVA_OPTS': '-Djava.io.tmpdir=/data/ -Xmx{}'.format(config.xmx)},
+                    env={'JAVA_OPTS': '-Djava.io.tmpdir=/data/ -Xmx{}'.format(job.memory)},
                     parameters=command,
                     tool='quay.io/ucsc_cgl/gatk:3.5--dba6dae49156168a909c43330350c6161dc7ecc2',
                     inputs=inputs.keys(),
@@ -180,7 +180,7 @@ def gatk_variant_filtration(job, mode, vcf_id, config):
 
     outputs = {'filtered_variants.vcf': None}
     docker_call(work_dir = work_dir,
-                env={'JAVA_OPTS':'-Djava.io.tmpdir=/data/ -Xmx{}'.format(config.xmx)},
+                env={'JAVA_OPTS':'-Djava.io.tmpdir=/data/ -Xmx{}'.format(job.memory)},
                 parameters = command,
                 tool = 'quay.io/ucsc_cgl/gatk:3.5--dba6dae49156168a909c43330350c6161dc7ecc2',
                 inputs=inputs.keys(),
@@ -223,7 +223,7 @@ def gatk_variant_recalibrator(job, mode, vcf_id, config):
     command = ['-T', 'VariantRecalibrator',
                '-R', 'genome.fa',
                '-input', 'input.vcf',
-               '-nt', str(config.cores),
+               '-nt', str(job.cores),
                '--maxGaussians', '4',
                '-an', 'QualByDepth',
                '-an', 'FisherStrand',
@@ -264,7 +264,7 @@ def gatk_variant_recalibrator(job, mode, vcf_id, config):
     get_files_from_filestore(job, work_dir, inputs)
     outputs = {'recal': None, 'tranches': None, 'plots': None}
     docker_call(work_dir = work_dir,
-                env={'JAVA_OPTS':'-Djava.io.tmpdir=/data/ -Xmx{}'.format(config.xmx)},
+                env={'JAVA_OPTS':'-Djava.io.tmpdir=/data/ -Xmx{}'.format(job.memory)},
                 parameters = command,
                 tool ='quay.io/ucsc_cgl/gatk:3.5--dba6dae49156168a909c43330350c6161dc7ecc2',
                 inputs=inputs.keys(),
@@ -290,15 +290,18 @@ def gatk_apply_variant_recalibration(job, mode, vcf_id, recal_id, tranches_id, c
     mode = mode.upper()
     job.fileStore.logToMaster('Running GATK ApplyRecalibration ({} Mode): {}'.format(mode, config.uuid))
     work_dir = job.fileStore.getLocalTempDir()
-    inputs = {'genome.fa': config.genome_fasta, 'genome.fa.fai': config.genome_fai,
-              'genome.dict': config.genome_dict, 'input.vcf': vcf_id,
-              'recal': recal_id, 'tranches': tranches_id}
+    inputs = {'genome.fa': config.genome_fasta,
+              'genome.fa.fai': config.genome_fai,
+              'genome.dict': config.genome_dict,
+              'input.vcf': vcf_id,
+              'recal': recal_id,
+              'tranches': tranches_id}
     get_files_from_filestore(job, work_dir, inputs)
 
     # GATK recommended parameters:
     # https://software.broadinstitute.org/gatk/documentation/article?id=2805
     command = ['-T', 'ApplyRecalibration',
-               '-nt', str(config.cores),
+               '-nt', str(job.cores),
                '-R', 'genome.fa',
                '-input', 'input.vcf',
                '-o', 'vqsr.vcf',
@@ -312,7 +315,7 @@ def gatk_apply_variant_recalibration(job, mode, vcf_id, recal_id, tranches_id, c
 
     outputs={'vqsr.vcf': None}
     docker_call(work_dir = work_dir,
-                env={'JAVA_OPTS':'-Djava.io.tmpdir=/data/ -Xmx{}'.format(config.xmx)},
+                env={'JAVA_OPTS':'-Djava.io.tmpdir=/data/ -Xmx{}'.format(job.memory)},
                 parameters = command,
                 tool = 'quay.io/ucsc_cgl/gatk:3.5--dba6dae49156168a909c43330350c6161dc7ecc2',
                 inputs=inputs.keys(),
@@ -349,7 +352,7 @@ def gatk_combine_variants(job, vcfs, config):
     get_files_from_filestore(job, work_dir, inputs)
     outputs={'merged.vcf': None}
     docker_call(work_dir = work_dir,
-                env={'JAVA_OPTS':'-Djava.io.tmpdir=/data/ -Xmx{}'.format(config.xmx)},
+                env={'JAVA_OPTS':'-Djava.io.tmpdir=/data/ -Xmx{}'.format(job.memory)},
                 parameters = command,
                 tool = 'quay.io/ucsc_cgl/gatk:3.5--dba6dae49156168a909c43330350c6161dc7ecc2',
                 inputs=inputs.keys(),

@@ -132,7 +132,6 @@ def gatk_germline_pipeline(job, uuid, url, config, url2=None, rg_line=None):
 
     if config.preprocess:
         preprocess = job.wrapJobFn(run_gatk_preprocessing,
-                                   config.cores,
                                    get_bam.rv(0),
                                    get_bam.rv(1),
                                    config.genome_fasta,
@@ -141,7 +140,7 @@ def gatk_germline_pipeline(job, uuid, url, config, url2=None, rg_line=None):
                                    config.phase,
                                    config.mills,
                                    config.dbsnp,
-                                   xmx=config.xmx).encapsulate()
+                                   memory=config.xmx, cores=config.cores).encapsulate()
         get_bam.addChild(preprocess)
 
         # Save processed BAM
@@ -223,7 +222,7 @@ def parse_manifest(path_to_manifest):
                 url = bam_match.group('url')
                 url2 = None
                 rg_line = None
-                require('.bam' in url.lower() or '.fastq' in url.lower(),
+                require('.bam' in url.lower(),
                         'Expected .bam extension:\n{}:\t{}'.format(uuid, url))
             elif fastq_match:
                 uuid = fastq_match.group('uuid')
@@ -325,7 +324,8 @@ def reference_preprocessing(job, config):
     if getattr(config, 'genome_dict', None) is None:
         config.genome_dict = job.addChildJobFn(run_picard_create_sequence_dictionary,
                                                genome_id,
-                                               cores=config.cores).rv()
+                                               cores=config.cores,
+                                               memory=config.xmx).rv()
     return config
 
 
@@ -367,7 +367,6 @@ def prepare_bam(job, uuid, url, url2, config, rg_line=None):
     rm_secondary = job.wrapJobFn(run_samtools_view,
                                  get_bam.rv(),
                                  flag='0x800',
-                                 ncores=config.cores,
                                  disk=2*config.file_size, cores=config.cores)
 
     # 2: Sort BAM file if necessary
@@ -379,7 +378,6 @@ def prepare_bam(job, uuid, url, url2, config, rg_line=None):
                                               rm_secondary.rv())
         sorted_bam = job.wrapJobFn(run_samtools_sort,
                                    rm_secondary.rv(),
-                                   ncores=config.cores,
                                    cores=config.cores,
                                    disk=sorted_bam_disk)
 
@@ -400,7 +398,7 @@ def setup_and_run_bwa_kit(job, url, url2, rg_line, config):
     Downloads and aligns FASTQs or realigns BAM using BWA.
 
     :param JobFunctionWrappingJob job: passed automatically by Toil
-    :param str url: FASTQ or BAM sample URL. Must have .fq or .bam extension.
+    :param str url: FASTQ or BAM sample URL. BAM alignment URL must have .bam extension.
     :param Namespace config: Input parameters and shared FileStoreIDs
     :return: BAM FileStoreID
     :rtype: str
@@ -489,7 +487,7 @@ def gatk_haplotype_caller(job, bam_id, bai_id, config, emit_threshold=10.0, call
     # Call GATK -- HaplotypeCaller with best practices parameters:
     # https://software.broadinstitute.org/gatk/documentation/article?id=2803
     command = ['-T', 'HaplotypeCaller',
-               '-nct', str(config.cores),
+               '-nct', str(job.cores),
                '-R', 'genome.fa',
                '-I', 'input.bam',
                '-o', 'output.g.vcf',
@@ -507,8 +505,6 @@ def gatk_haplotype_caller(job, bam_id, bai_id, config, emit_threshold=10.0, call
         if annotation is not None:
             command.extend(['-A', annotation])
 
-    job.fileStore.logToMaster(repr(command))
-
     outputs = {'output.g.vcf': None}
     docker_call(work_dir=work_dir,
                 env={'JAVA_OPTS': '-Djava.io.tmpdir=/data/ -Xmx{}'.format(config.xmx)},
@@ -517,6 +513,15 @@ def gatk_haplotype_caller(job, bam_id, bai_id, config, emit_threshold=10.0, call
                 inputs=inputs.keys(),
                 outputs=outputs)
     return job.fileStore.writeGlobalFile(os.path.join(work_dir, 'output.g.vcf'))
+
+
+def timeit(method):
+    def timed(*args, **kwargs):
+        ts = time.time()
+        method(*args, **kwargs)
+        te = time.time()
+        return te-ts
+    return timed
 
 
 def main():

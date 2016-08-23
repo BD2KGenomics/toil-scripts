@@ -31,7 +31,7 @@ def run_oncotator(job, vcf_id, config):
 
     outputs={'annotated.vcf': None}
     docker_call(work_dir = work_dir,
-                env={'_JAVA_OPTIONS':'-Djava.io.tmpdir=/data/ -Xmx{}'.format(config.xmx)},
+                env={'_JAVA_OPTIONS':'-Djava.io.tmpdir=/data/ -Xmx{}'.format(job.memory)},
                 parameters = command,
                 tool = 'jpfeil/oncotator:1.9--8fffc356981862d50cfacd711b753700b886b605',
                 inputs=inputs.keys(),
@@ -75,9 +75,9 @@ def gatk_variant_annotator(job, bam_id, bai_id, vcf_id, annotations, config):
 
     outputs={'output.vcf': None}
     docker_call(work_dir = work_dir,
-                env={'_JAVA_OPTIONS':'-Djava.io.tmpdir=/data/ -Xmx{}'.format(config['xmx'])},
+                env={'JAVA_OPTS':'-Djava.io.tmpdir=/data/ -Xmx{}'.format(job.memory)},
                 parameters = command,
                 tool = 'quay.io/ucsc_cgl/gatk:3.5--dba6dae49156168a909c43330350c6161dc7ecc2',
                 inputs=inputs.keys(),
-                outputs=outputs, mock=config['mock_mode'])
+                outputs=outputs)
     return job.fileStore.writeGlobalFile(os.path.join(work_dir, 'output.vcf'))
