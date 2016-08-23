@@ -100,12 +100,11 @@ def run_picard_create_sequence_dictionary(job, ref_id):
     return job.fileStore.writeGlobalFile(os.path.join(work_dir, 'ref.dict'))
 
 
-def run_gatk_preprocessing(job, cores, bam, bai, ref, ref_dict, fai, phase, mills, dbsnp, mem='10G', unsafe=False):
+def run_gatk_preprocessing(job, bam, bai, ref, ref_dict, fai, phase, mills, dbsnp, mem='10G', unsafe=False):
     """
     Convenience method for grouping together GATK preprocessing
 
     :param JobFunctionWrappingJob job: passed automatically by Toil
-    :param int cores: Maximum number of cores on a worker node
     :param str bam: Sample BAM FileStoreID
     :param str bai: Bam Index FileStoreID
     :param str ref: Reference genome FileStoreID
@@ -119,10 +118,14 @@ def run_gatk_preprocessing(job, cores, bam, bai, ref, ref_dict, fai, phase, mill
     :return: BAM and BAI FileStoreIDs from Print Reads
     :rtype: tuple(str, str)
     """
-    rtc = job.wrapJobFn(run_realigner_target_creator, cores, bam, bai, ref, ref_dict, fai, phase, mills, mem, unsafe)
-    ir = job.wrapJobFn(run_indel_realignment, rtc.rv(), bam, bai, ref, ref_dict, fai, phase, mills, mem, unsafe)
-    br = job.wrapJobFn(run_base_recalibration, cores, ir.rv(0), ir.rv(1), ref, ref_dict, fai, dbsnp, mem, unsafe)
-    pr = job.wrapJobFn(run_print_reads, cores, br.rv(), ir.rv(0), ir.rv(1), ref, ref_dict, fai, mem, unsafe)
+    rtc = job.wrapJobFn(run_realigner_target_creator, bam, bai, ref, ref_dict,
+                        fai, phase, mills, mem, unsafe, cores=job.cores)
+    ir = job.wrapJobFn(run_indel_realignment, rtc.rv(), bam, bai, ref, ref_dict,
+                       fai, phase, mills, mem, unsafe, cores=job.cores)
+    br = job.wrapJobFn(run_base_recalibration, ir.rv(0), ir.rv(1), ref, ref_dict,
+                       fai, dbsnp, mem, unsafe, cores=job.cores)
+    pr = job.wrapJobFn(run_print_reads, br.rv(), ir.rv(0), ir.rv(1), ref, ref_dict,
+                       fai, mem, unsafe, cores=job.cores)
     # Wiring
     job.addChild(rtc)
     rtc.addChild(ir)
@@ -131,12 +134,11 @@ def run_gatk_preprocessing(job, cores, bam, bai, ref, ref_dict, fai, phase, mill
     return pr.rv(0), pr.rv(1)
 
 
-def run_realigner_target_creator(job, cores, bam, bai, ref, ref_dict, fai, phase, mills, mem, unsafe=False):
+def run_realigner_target_creator(job, bam, bai, ref, ref_dict, fai, phase, mills, mem, unsafe=False):
     """
     Creates intervals file needed for indel realignment
 
     :param JobFunctionWrappingJob job: passed automatically by Toil
-    :param int cores: Maximum number of cores on a worker node
     :param str bam: Sample BAM FileStoreID
     :param str bai: Bam Index FileStoreID
     :param str ref: Reference genome FileStoreID
@@ -156,7 +158,7 @@ def run_realigner_target_creator(job, cores, bam, bai, ref, ref_dict, fai, phase
         job.fileStore.readGlobalFile(file_store_id, os.path.join(work_dir, name))
     # Call: GATK -- RealignerTargetCreator
     parameters = ['-T', 'RealignerTargetCreator',
-                  '-nt', str(cores),
+                  '-nt', str(job.cores),
                   '-R', '/data/ref.fasta',
                   '-I', '/data/sample.bam',
                   '-known', '/data/phase.vcf',
@@ -205,8 +207,8 @@ def run_indel_realignment(job, intervals, bam, bai, ref, ref_dict, fai, phase, m
                   '-known', '/data/mills.vcf',
                   '-targetIntervals', '/data/sample.intervals',
                   '--downsampling_type', 'NONE',
-                  '-maxReads', str(720000), # Taken from MC3 pipeline
-                  '-maxInMemory', str(5400000), # Taken from MC3 pipeline
+                  '-maxReads', str(720000),  # Taken from MC3 pipeline
+                  '-maxInMemory', str(5400000),  # Taken from MC3 pipeline
                   '-o', '/data/sample.indel.bam']
     if unsafe:
         parameters.extend(['-U', 'ALLOW_SEQ_DICT_INCOMPATIBILITY'])
@@ -220,12 +222,11 @@ def run_indel_realignment(job, intervals, bam, bai, ref, ref_dict, fai, phase, m
     return indel_bam, indel_bai
 
 
-def run_base_recalibration(job, cores, indel_bam, indel_bai, ref, ref_dict, fai, dbsnp, mem, unsafe=False):
+def run_base_recalibration(job, indel_bam, indel_bai, ref, ref_dict, fai, dbsnp, mem, unsafe=False):
     """
     Creates recal table used in Base Quality Score Recalibration
 
     :param JobFunctionWrappingJob job: passed automatically by Toil
-    :param int cores: Maximum number of cores on a worker node
     :param str indel_bam: Indel interval FileStoreID
     :param str indel_bai: Bam Index FileStoreID
     :param str ref: Reference genome FileStoreID
@@ -244,7 +245,7 @@ def run_base_recalibration(job, cores, indel_bam, indel_bai, ref, ref_dict, fai,
         job.fileStore.readGlobalFile(file_store_id, os.path.join(work_dir, name))
     # Call: GATK -- IndelRealigner
     parameters = ['-T', 'BaseRecalibrator',
-                  '-nct', str(cores),
+                  '-nct', str(job.cores),
                   '-R', '/data/ref.fasta',
                   '-I', '/data/sample.indel.bam',
                   '-knownSites', '/data/dbsnp.vcf',
@@ -259,12 +260,11 @@ def run_base_recalibration(job, cores, indel_bam, indel_bai, ref, ref_dict, fai,
     return job.fileStore.writeGlobalFile(os.path.join(work_dir, 'sample.recal.table'))
 
 
-def run_print_reads(job, cores, table, indel_bam, indel_bai, ref, ref_dict, fai, mem, unsafe=False):
+def run_print_reads(job, table, indel_bam, indel_bai, ref, ref_dict, fai, mem, unsafe=False):
     """
     Creates BAM that has had the base quality scores recalibrated
 
     :param JobFunctionWrappingJob job: passed automatically by Toil
-    :param int cores: Maximum number of cores on host node
     :param str table: Recalibration table FileStoreID
     :param str indel_bam: Indel interval FileStoreID
     :param str indel_bai: Bam Index FileStoreID
@@ -284,7 +284,7 @@ def run_print_reads(job, cores, table, indel_bam, indel_bai, ref, ref_dict, fai,
         job.fileStore.readGlobalFile(file_store_id, os.path.join(work_dir, name))
     # Call: GATK -- PrintReads
     parameters = ['-T', 'PrintReads',
-                  '-nct', str(cores),
+                  '-nct', str(job.cores),
                   '-R', '/data/ref.fasta',
                   '--emit_original_quals',
                   '-I', '/data/sample.indel.bam',

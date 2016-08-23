@@ -374,7 +374,7 @@ def consolidate_output_tarballs(job, inputs, vcqc_id, spladder_id):
     if inputs.output_s3_dir:
         out_id = job.fileStore.writeGlobalFile(out_tar)
         job.addChildJobFn(s3am_upload_job, file_id=out_id, s3_dir=inputs.output_s3_dir,
-                          num_cores=inputs.cores, file_name=fname, key_path=inputs.ssec, cores=inputs.cores)
+                          file_name=fname, key_path=inputs.ssec, cores=inputs.cores)
 
 
 def main():

@@ -50,12 +50,11 @@ def run_mutect(job, normal_bam, normal_bai, tumor_bam, tumor_bai, ref, ref_dict,
     return job.fileStore.writeGlobalFile(os.path.join(work_dir, 'mutect.tar.gz'))
 
 
-def run_muse(job, cores, normal_bam, normal_bai, tumor_bam, tumor_bai, ref, ref_dict, fai, dbsnp):
+def run_muse(job, normal_bam, normal_bai, tumor_bam, tumor_bai, ref, ref_dict, fai, dbsnp):
     """
     Calls MuSe to find variants
 
     :param JobFunctionWrappingJob job: passed automatically by Toil
-    :param int cores: Maximum number of cores on host node
     :param str normal_bam: Normal BAM FileStoreID
     :param str normal_bai: Normal BAM index FileStoreID
     :param str tumor_bam: Tumor BAM FileStoreID
@@ -83,7 +82,7 @@ def run_muse(job, cores, normal_bam, normal_bai, tumor_bam, tumor_bai, ref, ref_
                   '--normal-bam', '/data/normal.bam',
                   '--normal-bam-index', '/data/normal.bai',
                   '--outfile', '/data/muse.vcf',
-                  '--cpus', str(cores)]
+                  '--cpus', str(job.cores)]
     docker_call(tool='quay.io/ucsc_cgl/muse:1.0--6add9b0a1662d44fd13bbc1f32eac49326e48562',
                 work_dir=work_dir, parameters=parameters)
     # Return fileStore ID
@@ -91,12 +90,11 @@ def run_muse(job, cores, normal_bam, normal_bai, tumor_bam, tumor_bai, ref, ref_
     return job.fileStore.writeGlobalFile(os.path.join(work_dir, 'muse.tar.gz'))
 
 
-def run_pindel(job, cores, normal_bam, normal_bai, tumor_bam, tumor_bai, ref, fai):
+def run_pindel(job, normal_bam, normal_bai, tumor_bam, tumor_bai, ref, fai):
     """
     Calls Pindel to compute indels / deletions
 
     :param JobFunctionWrappingJob job: Passed automatically by Toil
-    :param int cores: Maximum number of cores on host node
     :param str normal_bam: Normal BAM FileStoreID
     :param str normal_bai: Normal BAM index FileStoreID
     :param str tumor_bam: Tumor BAM FileStoreID
@@ -118,7 +116,7 @@ def run_pindel(job, cores, normal_bam, normal_bai, tumor_bam, tumor_bai, ref, fa
     # Call: Pindel
     parameters = ['-f', '/data/ref.fasta',
                   '-i', '/data/pindel-config.txt',
-                  '--number_of_threads', str(cores),
+                  '--number_of_threads', str(job.cores),
                   '--minimum_support_for_event', '3',
                   '--report_long_insertions', 'true',
                   '--report_breakpoints', 'true',

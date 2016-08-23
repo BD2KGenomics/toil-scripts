@@ -108,10 +108,10 @@ def preprocessing_declaration(job, config):
         job.fileStore.logToMaster('Ran preprocessing: ' + config.uuid)
         disk = '1G' if config.ci_test else '20G'
         mem = '2G' if config.ci_test else '10G'
-        processed_normal = job.wrapJobFn(run_gatk_preprocessing, config.cores, config.normal_bam, config.normal_bai,
+        processed_normal = job.wrapJobFn(run_gatk_preprocessing, config.normal_bam, config.normal_bai,
                                          config.reference, config.dict, config.fai, config.phase, config.mills,
                                          config.dbsnp, mem, cores=1, memory=mem, disk=disk)
-        processed_tumor = job.wrapJobFn(run_gatk_preprocessing, config.cores, config.tumor_bam, config.tumor_bai,
+        processed_tumor = job.wrapJobFn(run_gatk_preprocessing, config.tumor_bam, config.tumor_bai,
                                         config.reference, config.dict, config.fai, config.phase, config.mills,
                                         config.dbsnp, mem, cores=1, memory=mem, disk=disk)
         static_workflow = job.wrapJobFn(static_workflow_declaration, config, processed_normal.rv(0),
@@ -144,11 +144,11 @@ def static_workflow_declaration(job, config, normal_bam, normal_bai, tumor_bam, 
                                            config.dict, config.fai, config.cosmic, config.dbsnp,
                                            cores=1, memory=memory, disk=disk).rv()
     if config.run_pindel:
-        pindel_results = job.addChildJobFn(run_pindel, config.cores, normal_bam, normal_bai, tumor_bam, tumor_bai,
+        pindel_results = job.addChildJobFn(run_pindel, normal_bam, normal_bai, tumor_bam, tumor_bai,
                                            config.reference, config.fai,
                                            cores=config.cores,  memory=memory, disk=disk).rv()
     if config.run_muse:
-        muse_results = job.addChildJobFn(run_muse, config.cores, normal_bam, normal_bai, tumor_bam, tumor_bai,
+        muse_results = job.addChildJobFn(run_muse, normal_bam, normal_bai, tumor_bam, tumor_bai,
                                          config.reference, config.dict, config.fai, config.dbsnp,
                                          cores=config.cores, memory=memory, disk=disk).rv()
     # Pass tool results (whether None or a promised return value) to consolidation step
@@ -197,6 +197,7 @@ def consolidate_output(job, config, mutect, pindel, muse):
         job.fileStore.logToMaster('Moving {} to output dir: {}'.format(config.uuid, config.output_dir))
         mkdir_p(config.output_dir)
         copy_files(file_paths=[out_tar], output_dir=config.output_dir)
+
 
 def parse_manifest(path_to_manifest):
     """

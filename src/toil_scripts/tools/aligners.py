@@ -6,12 +6,11 @@ from toil_scripts.lib.programs import docker_call
 from toil_scripts.lib.urls import download_url
 
 
-def run_star(job, cores, r1_id, r2_id, star_index_url, wiggle=False):
+def run_star(job, r1_id, r2_id, star_index_url, wiggle=False):
     """
     Performs alignment of fastqs to bam via STAR
 
     :param JobFunctionWrappingJob job: passed automatically by Toil
-    :param int cores: Number of cores to run star with
     :param str r1_id: FileStoreID of fastq (pair 1)
     :param str r2_id: FileStoreID of fastq (pair 2 if applicable, else pass None)
     :param str star_index_url: STAR index tarball
@@ -26,7 +25,7 @@ def run_star(job, cores, r1_id, r2_id, star_index_url, wiggle=False):
     # Determine tarball structure - star index contains are either in a subdir or in the tarball itself
     star_index = os.path.join('/data', os.listdir(work_dir)[0]) if len(os.listdir(work_dir)) == 1 else '/data'
     # Parameter handling for paired / single-end data
-    parameters = ['--runThreadN', str(cores),
+    parameters = ['--runThreadN', str(job.cores),
                   '--genomeDir', star_index,
                   '--outFileNamePrefix', 'rna',
                   '--outSAMtype', 'BAM', 'SortedByCoordinate',
@@ -67,7 +66,7 @@ def run_star(job, cores, r1_id, r2_id, star_index_url, wiggle=False):
         return transcriptome_id, sorted_id
 
 
-def run_bwakit(job, config, threads, sort=True, trim=False):
+def run_bwakit(job, config, sort=True, trim=False):
     """
     Runs BWA-Kit to align a fastq file or fastq pair into a BAM file.
 
@@ -98,7 +97,6 @@ def run_bwakit(job, config, threads, sort=True, trim=False):
             Multiple @RG lines can be defined, but should be split by an escaped newline \\n,
             e.g., @RG\\tID:foo\\t:LB:bar\\n@RG\\tID:santa\\tLB:cruz.
 
-    :param int threads: Number of threads to use
     :param bool sort: If True, sorts the BAM
     :param bool trim: If True, performs adapter trimming
     :return: FileStoreID of BAM
@@ -134,7 +132,7 @@ def run_bwakit(job, config, threads, sort=True, trim=False):
     if trim:
         opt_args.append('-a')
     # Call: bwakit
-    parameters = (['-t', str(threads),
+    parameters = (['-t', str(job.cores),
                    '-R', rg] +
                   opt_args +
                   ['-o', '/data/aligned',
