@@ -590,7 +590,7 @@ def main():
 
     cwd = os.getcwd()
     if options.command == 'generate-inputs' or options.command == 'generate':
-        generate_file(os.path.join(cwd, 'inputs-toil-germline.yaml'), generate_config)
+        generate_file(os.path.join(cwd, 'config-toil-germline.yaml'), generate_config)
     if options.command == 'generate-manifest' or options.command == 'generate':
         generate_file(os.path.join(cwd, 'manifest-toil-germline.tsv'), generate_manifest)
     # Pipeline execution
@@ -602,9 +602,6 @@ def main():
 
         require(os.path.exists(options.config), '{} not found. Please run '
                                                 '"generate-inputs"'.format(options.config))
-
-        require(options.manifest or options.sample, 'Must provide path to manifest or '
-                                                    'sample information at the command line')
 
         # Read sample manifest
         samples = []
@@ -626,7 +623,6 @@ def main():
                   yaml.load(open(options.config).read()).iteritems()}
 
         required_fields = {'genome_fasta',
-                           'assembly',
                            'output_dir',
                            'run_bwa',
                            'sorted',
