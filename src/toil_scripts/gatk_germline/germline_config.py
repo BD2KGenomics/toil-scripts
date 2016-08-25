@@ -7,6 +7,7 @@ def generate_config():
         # GATK Germline Pipeline configuration file
         # Variant databases can be obtained through the GATK resource bundle:
         # https://software.broadinstitute.org/gatk/guide/article?id=1213
+        # http://gatkforums.broadinstitute.org/gatk/discussion/1259/what-vqsr-training-sets-arguments-should-i-use-for-my-specific-project
         ##############################################################################################################
         # This configuration file is formatted in YAML. Simply write the value (at least one space) after the colon.
         # Edit the values in this configuration file and then rerun the pipeline

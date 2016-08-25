@@ -6,7 +6,6 @@ from copy import deepcopy
 import logging
 import os
 import re
-import time
 from urlparse import urlparse
 
 from bd2k.util.humanize import human2bytes
@@ -76,6 +75,7 @@ def run_gatk_germline_pipeline(job, samples, config):
         if config.run_oncotator:
             annotate = Job.wrapJobFn(annotate_vcfs, run_pipeline.rv(), shared_files.rv())
             run_pipeline.addChild(annotate)
+
 
 def gatk_germline_pipeline(job, samples, config):
     """
@@ -353,22 +353,23 @@ def prepare_bam(job, uuid, url, url2, config, rg_line=None):
                          'provide a BAM URL that includes .bam extension.' % uuid)
 
     # 1: Sort BAM file if necessary
-    if config.sorted:
+    # Realigning BAM file shuffles read order
+    if config.sorted and not config.run_bwa:
         sorted_bam = get_bam
 
     else:
         sorted_bam_disk = PromisedRequirement(lambda bam: 3 * bam.size, get_bam.rv())
-        sorted_bam = job.wrapJobFn(run_samtools_sort,
-                                   get_bam.rv(),
-                                   cores=config.cores,
-                                   disk=sorted_bam_disk)
+        sorted_bam = get_bam.addChildJobFn(run_samtools_sort,
+                                           get_bam.rv(),
+                                           cores=config.cores,
+                                           disk=sorted_bam_disk)
 
     # 2: Index BAM
     index_bam_disk = PromisedRequirement(lambda bam: bam.size, sorted_bam.rv())
     index_bam = job.wrapJobFn(run_samtools_index, sorted_bam.rv(), disk=index_bam_disk)
 
-    output_bam_promise = sorted_bam.rv()
-    output_bai_promise = index_bam.rv()
+    job.addChild(get_bam)
+    sorted_bam.addChild(index_bam)
 
     if config.preprocess:
         preprocess = job.wrapJobFn(run_gatk_preprocessing,
@@ -384,6 +385,10 @@ def prepare_bam(job, uuid, url, url2, config, rg_line=None):
         sorted_bam.addChild(preprocess)
         index_bam.addChild(preprocess)
 
+        # Update output BAM promises
+        output_bam_promise = preprocess.rv(0)
+        output_bai_promise = preprocess.rv(1)
+
         # Save processed BAM
         output_dir = os.path.join(config.output_dir, uuid)
         filename = '{}.processed{}.bam'.format(uuid, config.suffix)
@@ -393,13 +398,11 @@ def prepare_bam(job, uuid, url, url2, config, rg_line=None):
                                    output_dir,
                                    s3_key_path=config.ssec)
         preprocess.addChild(output_bam)
-        output_bam_promise = preprocess.rv(0)
-        output_bai_promise = preprocess.rv(1)
 
-    # Wiring
-    job.addChild(get_bam)
-    get_bam.addChild(sorted_bam)
-    sorted_bam.addChild(index_bam)
+    else:
+        output_bam_promise = sorted_bam.rv()
+        output_bai_promise = index_bam.rv()
+
     return output_bam_promise, output_bai_promise
 
 
