@@ -197,15 +197,14 @@ def static_dag(job, uuid, rg_line, inputs):
     gatk_preprocess = job.wrapJobFn(run_gatk_germline_pipeline,
                                     GermlineSample(uuid,
                                                    's3://{s3_bucket}/alignment{dir_suffix}/{uuid}.bam'.format(**args),
-                                                   None,
+                                                   None,    # Does not require second URL or RG_Line
                                                    None),
                                     gatk_preprocessing_inputs).encapsulate()
 
     adam_call_inputs = inputs
-    adam_call_inputs.indexed = False
     adam_call_inputs.suffix = '.adam'
     adam_call_inputs.preprocess = False
-    adam_call_inputs.run_vqsr = True
+    adam_call_inputs.run_vqsr = False
     adam_call_inputs.joint = False
     adam_call_inputs.output_dir = 's3://{s3_bucket}/analysis{dir_suffix}'.format(**args)
 
@@ -214,12 +213,11 @@ def static_dag(job, uuid, rg_line, inputs):
                                    GermlineSample(uuid,
                                                   's3://{s3_bucket}/analysis{dir_suffix}/{uuid}/{uuid}.adam.bam'.format(**args),
                                                   None,
-                                                  None)
+                                                  None),
                                    adam_call_inputs).encapsulate()
 
     gatk_call_inputs = copy.deepcopy(inputs)
     gatk_call_inputs.sorted = True
-    gatk_call_inputs.indexed = True
     gatk_call_inputs.preprocess = False
     gatk_call_inputs.run_vqsr = False
     gatk_call_inputs.joint = False
@@ -227,8 +225,9 @@ def static_dag(job, uuid, rg_line, inputs):
 
     # get head GATK haplotype caller job function for the result of GATK preprocessing and encapsulate it
     gatk_gatk_call = job.wrapJobFn(run_gatk_germline_pipeline,
-                                   uuid,
-                                   'S3://{s3_bucket}/analysis{dir_suffix}/{uuid}/{uuid}.gatk.bam'.format(**args),
+                                   GermlineSample(uuid,
+                                                  'S3://{s3_bucket}/analysis{dir_suffix}/{uuid}/{uuid}.gatk.bam'.format(**args),
+                                                  None, None),
                                    gatk_call_inputs).encapsulate()
 
     # wire up dag

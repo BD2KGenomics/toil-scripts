@@ -63,7 +63,7 @@ def run_gatk_germline_pipeline(job, samples, config):
         for germline_sample in samples:
             shared_files.addChildJobFn(prepare_bam,
                                        germline_sample.uuid,
-                                       germline_sample.uuid,
+                                       germline_sample.url,
                                        germline_sample.url2,
                                        shared_files.rv(),
                                        rg_line=germline_sample.rg_line)
@@ -427,7 +427,7 @@ def setup_and_run_bwa_kit(job, uuid, url, url2, rg_line, config):
         ext = ext.lower()
 
     require(ext in ['.fq', '.fastq', '.bam'],
-            'Please use .fq or .bam file extensions')
+            'Please use .fq or .bam file extensions:\n%s' % url)
 
     # Download fastq files
     samples = []
@@ -669,7 +669,6 @@ def main():
             require(input_fields > vqsr_fields,
                     'Missing parameters for VQSR:\n{}'
                     .format(', '.join(vqsr_fields - input_fields)))
-
 
         logging.info('Configuring resource parameters')
         # Set resource parameters

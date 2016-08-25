@@ -1,4 +1,5 @@
 import logging
+import os
 import shlex
 import shutil
 import subprocess
@@ -7,7 +8,6 @@ import textwrap
 from unittest import TestCase
 from uuid import uuid4
 
-import os
 from bd2k.util.iterables import concat
 
 log = logging.getLogger(__name__)
@@ -45,38 +45,53 @@ class GermlineTest(TestCase):
 
     def test_cli_sample_option(self):
         """
-        Tests passing a BAM sample using the command line interface
+        Runs a BAM sample using the command line interface
         """
-        self.expected_files |= {'bam_test.processed.ci_test.bam',
-                                'bam_test.ci_test.g.vcf',
-                                'bam_test.genotyped.ci_test.vcf',
-                                'bam_test.hard_filter.ci_test.vcf',
-                                'config-toil-germline-bam.yaml'}
+        expected_files = {'bam_test.processed.ci_test.bam',
+                          'bam_test.ci_test.g.vcf',
+                          'bam_test.genotyped.ci_test.vcf',
+                          'bam_test.hard_filter.ci_test.vcf',
+                          'config-toil-germline.yaml'}
         self._run(self.base_command,
                   '--sample', self.bam_sample,
-                  '--config', self._generate_bam_config())
-        self._assertOutput()
+                  '--config', self._generate_config())
+        self._assertOutput(expected_files)
 
     def test_manifest_option(self):
         """
         Tests using manifest containing FASTQ files
         """
         num_samples = int(os.environ.get('TOIL_SCRIPTS_TEST_NUM_SAMPLES', '3'))
+        expected_files = set()
         for i in range(1, num_samples+1):
-            self.expected_files |= {'fastq_test_%s.processed.ci_test.bam' % i,
-                                    'fastq_test_%s.ci_test.g.vcf' % i,
-                                    'fastq_test_%s.genotyped.ci_test.vcf' % i,
-                                    'fastq_test_%s.hard_filter.ci_test.vcf' % i,
-                                    'config-toil-germline-fastq.yaml',
-                                    'manifest-toil-germline.tsv'}
+            expected_files |= {'fastq_test_%s.processed.ci_test.bam' % i,
+                               'fastq_test_%s.ci_test.g.vcf' % i,
+                               'fastq_test_%s.genotyped.ci_test.vcf' % i,
+                               'fastq_test_%s.hard_filter.ci_test.vcf' % i,
+                               'config-toil-germline.yaml',
+                               'manifest-toil-germline.tsv'}
 
         self._run(self.base_command,
-                  '--config', self._generate_fastq_config(),
+                  '--config', self._generate_config(),
                   '--manifest', self._generate_manifest(num_samples))
-        self._assertOutput()
+        self._assertOutput(expected_files)
 
     def test_preprocess_only(self):
-        pass
+        """
+        Tests preprocess only option
+        """
+        num_samples = int(os.environ.get('TOIL_SCRIPTS_TEST_NUM_SAMPLES', '3'))
+        expected_files = set()
+        for i in range(1, num_samples+1):
+            expected_files |= {'fastq_test_%s.processed.ci_test.bam' % i,
+                               'config-toil-germline.yaml',
+                               'manifest-toil-germline.tsv'}
+
+        self._run(self.base_command,
+                  '--config', self._generate_config(),
+                  '--manifest', self._generate_manifest(num_samples),
+                  '--preprocess-only')
+        self._assertOutput(expected_files)
 
     def _run(self, *args):
         args = list(concat(*args))
@@ -86,46 +101,8 @@ class GermlineTest(TestCase):
     def tearDown(self):
         shutil.rmtree(self.workdir)
 
-    def _generate_bam_config(self):
-        path = os.path.join(self.workdir, 'config-toil-germline-bam.yaml')
-        with open(path, 'w') as f:
-            f.write(textwrap.dedent("""
-                    genome-fasta: s3://cgl-pipeline-inputs/germline/ci/b37_21.fa
-                    assembly: b37
-                    phase: s3://cgl-pipeline-inputs/germline/ci/1000G_phase1.indels.b37.21.recode.vcf
-                    mills: s3://cgl-pipeline-inputs/germline/ci/Mills_and_1000G_gold_standard.indels.b37.21.recode.vcf
-                    dbsnp: s3://cgl-pipeline-inputs/germline/ci/dbsnp_138.b37.21.recode.vcf
-                    hapmap: s3://cgl-pipeline-inputs/germline/ci/hapmap_3.3.b37.21.recode.vcf
-                    omni: s3://cgl-pipeline-inputs/germline/ci/1000G_omni2.5.b37.21.recode.vcf
-                    run-bwa: True
-                    trim: False
-                    amb: s3://cgl-pipeline-inputs/germline/ci/bwa_index_b37_21.amb
-                    ann: s3://cgl-pipeline-inputs/germline/ci/bwa_index_b37_21.ann
-                    bwt: s3://cgl-pipeline-inputs/germline/ci/bwa_index_b37_21.bwt
-                    pac: s3://cgl-pipeline-inputs/germline/ci/bwa_index_b37_21.pac
-                    sa: s3://cgl-pipeline-inputs/germline/ci/bwa_index_b37_21.sa
-                    alt:
-                    preprocess: True
-                    ssec:
-                    file-size: 1G
-                    cores: 2
-                    xmx: 5G
-                    suffix: .ci_test
-                    output-dir: {output_dir}
-                    unsafe-mode:
-                    run-vqsr:
-                    joint: False
-                    preprocess-only:
-                    sorted:
-                    run-oncotator: False
-                    synapse-name:
-                    synapse-pwd:
-                    """[1:]).format(output_dir=self.workdir))
-        return path
-
-
-    def _generate_fastq_config(self):
-        path = os.path.join(self.workdir, 'config-toil-germline-fastq.yaml')
+    def _generate_config(self):
+        path = os.path.join(self.workdir, 'config-toil-germline.yaml')
         with open(path, 'w') as f:
             f.write(textwrap.dedent("""
                     genome-fasta: s3://cgl-pipeline-inputs/germline/ci/b37_21.fa
@@ -154,27 +131,32 @@ class GermlineTest(TestCase):
                     unsafe-mode: False
                     run-vqsr: False
                     joint: False
-                    preprocess-only: False
-                    run-oncotator: False
-                    synapse-name:
-                    synapse-pwd:
+                    preprocess-only:
+                    run-oncotator:
                     """[1:]).format(output_dir=self.workdir))
         return path
 
     def _generate_manifest(self, num_samples):
+        """
+        Makes a Toil Germline manifest containing FASTQ sample data
+
+        :param int num_samples: Number of replicate samples
+        :return: Path to manifest
+        :rtype: str
+        """
         path = os.path.join(self.workdir, 'manifest-toil-germline.tsv')
         with open(path, 'w') as f:
             f.write('\n'.join('\t'.join(['fastq_test_%s' % i,
                                          self.fastq_url,
                                          '@RG\\tID:foo\\tSM:bar\\tPL:ILLUMINA'])
-                          for i in range(1, num_samples+1)))
+                              for i in range(1, num_samples + 1)))
         return path
 
-    def _assertOutput(self):
+    def _assertOutput(self, expected_files):
         """
         Checks that all output files are expected and non-zero in size
         """
         for root, dirs, files in os.walk(self.workdir, topdown=False):
             for name in files:
-                self.assertTrue(name in self.expected_files)
+                self.assertTrue(name in expected_files)
                 self.assertTrue(os.stat(os.path.join(root, name)).st_size > 0)
