@@ -349,7 +349,8 @@ def prepare_bam(job, uuid, url, url2, config, rg_line=None):
                                 disk=config.file_size).encapsulate()
     else:
         raise ValueError('Could not generate BAM file for %s\n'
-                         'Either provide a FASTQ URL and set run-bwa or provide a BAM URL.' % uuid)
+                         'Provide a FASTQ URL and set run-bwa or '
+                         'provide a BAM URL that includes .bam extension.' % uuid)
 
     # 1: Sort BAM file if necessary
     if config.sorted:
@@ -524,15 +525,6 @@ def gatk_haplotype_caller(job, bam_id, bai_id, config, emit_threshold=10.0, call
                 inputs=inputs.keys(),
                 outputs=outputs)
     return job.fileStore.writeGlobalFile(os.path.join(work_dir, 'output.g.vcf'))
-
-
-def timeit(method):
-    def timed(*args, **kwargs):
-        ts = time.time()
-        output = method(*args, **kwargs)
-        te = time.time()
-        return te-ts, output
-    return timed
 
 
 def main():
