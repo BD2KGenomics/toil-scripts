@@ -67,12 +67,19 @@ Run a single sample locally
 ## Acceptable Inputs
 The Toil Germline pipeline accepts FASTQ and BAM files. Sample 
 information should be written to the manifest-toil-germline.tsv file. 
-Each line contains a different sample and the format is different for 
-FASTQ and BAM files. FASTQ samples include a unique identifier, a 
-URL/PATH, an optional paired FASTQ URL/PATH, and the read group line. 
+
+    FASTQ Manifest Information:
+    - unique identifier
+    - URL or local path
+    - Paired FASTQ URL/PATH
+    - Read group line
+    
+    BAM Manifest Information:
+    - unique identifier
+    - sample URL or local path
 GATK requires valid read group information for downstream analysis, so 
-all samples must have this information. BAM files must already contain
-read group information. 
+all samples must have this information. BAM files must already contain 
+read group information.
 
 ## GATK Recalibration Model Resources and Variant Annotations:
 This pipeline is configured to run the [GATK Germline Best Practices 

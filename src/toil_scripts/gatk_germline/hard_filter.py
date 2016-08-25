@@ -6,7 +6,8 @@ from bd2k.util.humanize import human2bytes
 from toil.job import PromisedRequirement
 
 from toil_scripts.lib.files import upload_or_move_job
-from toil_scripts.tools.variant_filters import gatk_genotype_gvcfs, gatk_select_variants, \
+from toil_scripts.tools.variant_annotation import gatk_genotype_gvcfs
+from toil_scripts.tools.variant_filters import gatk_select_variants, \
     gatk_variant_filtration, gatk_combine_variants
 
 
@@ -32,13 +33,15 @@ def hard_filter_pipeline(job, uuid, gvcf_id, config):
     """
     job.fileStore.logToMaster('Running Hard Filter on {}'.format(uuid))
 
-    genotype_gvcf_disk = PromisedRequirement(lambda x: 2*x.size + human2bytes('5G'), gvcf_id)
+    # Estimate all disk resources as twice the input VCF size plus 5G for reference genome data.
+    genotype_gvcf_disk = PromisedRequirement(lambda gvcf: 2 * gvcf.size + human2bytes('5G'),
+                                             gvcf_id)
     genotype_gvcf = job.wrapJobFn(gatk_genotype_gvcfs,
                                   dict(uuid=gvcf_id),
                                   config,
                                   cores=config.cores, memory=config.xmx, disk=genotype_gvcf_disk)
 
-    select_snps_disk = PromisedRequirement(lambda x: 2*x.size + human2bytes('5G'),
+    select_snps_disk = PromisedRequirement(lambda vcf: 2 * vcf.size + human2bytes('5G'),
                                            genotype_gvcf.rv())
     select_snps = job.wrapJobFn(gatk_select_variants,
                                 'SNP',
@@ -46,7 +49,7 @@ def hard_filter_pipeline(job, uuid, gvcf_id, config):
                                 config,
                                 memory=config.xmx, disk=select_snps_disk)
 
-    snp_filter_disk = PromisedRequirement(lambda x: 2*x.size + human2bytes('5G'),
+    snp_filter_disk = PromisedRequirement(lambda vcf: 2 * vcf.size + human2bytes('5G'),
                                           select_snps.rv())
     snp_filter = job.wrapJobFn(gatk_variant_filtration,
                                'SNP',
@@ -54,7 +57,7 @@ def hard_filter_pipeline(job, uuid, gvcf_id, config):
                                config,
                                memory=config.xmx, disk=snp_filter_disk)
 
-    select_indels_disk = PromisedRequirement(lambda x: 2*x.size + human2bytes('5G'),
+    select_indels_disk = PromisedRequirement(lambda vcf: 2 * vcf.size + human2bytes('5G'),
                                              genotype_gvcf.rv())
     select_indels = job.wrapJobFn(gatk_select_variants,
                                   'INDEL',
@@ -62,7 +65,7 @@ def hard_filter_pipeline(job, uuid, gvcf_id, config):
                                   config,
                                   memory=config.xmx, disk=select_indels_disk)
 
-    indel_filter_disk = PromisedRequirement(lambda x: 2*x.size + human2bytes('5G'),
+    indel_filter_disk = PromisedRequirement(lambda vcf: 2 * vcf.size + human2bytes('5G'),
                                             select_indels.rv())
     indel_filter = job.wrapJobFn(gatk_variant_filtration,
                                  'INDEL',
@@ -70,8 +73,9 @@ def hard_filter_pipeline(job, uuid, gvcf_id, config):
                                  config,
                                  memory=config.xmx, disk=indel_filter_disk)
 
-    combine_variants_disk = PromisedRequirement(lambda x, y: 2*(x.size+y.size) + human2bytes('5G'),
-                                                indel_filter.rv(), snp_filter.rv())
+    combine_variants_disk = PromisedRequirement(
+        lambda vcf1, vcf2: 2 * (vcf1.size + vcf2.size) + human2bytes('5G'),
+        indel_filter.rv(), snp_filter.rv())
     merge_variants = job.wrapJobFn(gatk_combine_variants,
                                    {'SNPs': snp_filter.rv(), 'INDELs': indel_filter.rv()},
                                    config,
@@ -87,17 +91,18 @@ def hard_filter_pipeline(job, uuid, gvcf_id, config):
     select_indels.addChild(indel_filter)
     indel_filter.addChild(merge_variants)
 
+    # Output the genotyped VCF and the filtered VCF
     output_dir = os.path.join(config.output_dir, uuid)
-    input_filename = '%s.input%s.vcf' % (uuid, config.suffix)
+    input_filename = '%s.genotyped%s.vcf' % (uuid, config.suffix)
     output_filename = '%s.hard_filter%s.vcf' % (uuid, config.suffix)
     input_vcf = job.wrapJobFn(upload_or_move_job,
-                               input_filename,
-                               genotype_gvcf.rv(),
-                               output_dir, ssec=config.ssec)
+                              input_filename,
+                              genotype_gvcf.rv(),
+                              output_dir, s3_key_path=config.ssec)
     output_vcf = job.wrapJobFn(upload_or_move_job,
                                output_filename,
                                merge_variants.rv(),
-                               output_dir, ssec=config.ssec)
+                               output_dir, s3_key_path=config.ssec)
     merge_variants.addChild(input_vcf)
     merge_variants.addChild(output_vcf)
     return merge_variants.rv()

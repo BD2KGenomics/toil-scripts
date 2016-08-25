@@ -43,11 +43,13 @@ class GermlineTest(TestCase):
                                    jobStore)
         self.expected_files = set()
 
-    def test_samples_option(self):
+    def test_cli_sample_option(self):
         """
         Tests passing a BAM sample using the command line interface
         """
-        self.expected_files |= {'bam_test.raw.ci_test.gvcf',
+        self.expected_files |= {'bam_test.processed.ci_test.bam',
+                                'bam_test.ci_test.g.vcf',
+                                'bam_test.genotyped.ci_test.vcf',
                                 'bam_test.hard_filter.ci_test.vcf',
                                 'config-toil-germline-bam.yaml'}
         self._run(self.base_command,
@@ -61,7 +63,9 @@ class GermlineTest(TestCase):
         """
         num_samples = int(os.environ.get('TOIL_SCRIPTS_TEST_NUM_SAMPLES', '3'))
         for i in range(1, num_samples+1):
-            self.expected_files |= {'fastq_test_%s.raw.ci_test.gvcf' % i,
+            self.expected_files |= {'fastq_test_%s.processed.ci_test.bam' % i,
+                                    'fastq_test_%s.ci_test.g.vcf' % i,
+                                    'fastq_test_%s.genotyped.ci_test.vcf' % i,
                                     'fastq_test_%s.hard_filter.ci_test.vcf' % i,
                                     'config-toil-germline-fastq.yaml',
                                     'manifest-toil-germline.tsv'}
@@ -70,6 +74,9 @@ class GermlineTest(TestCase):
                   '--config', self._generate_fastq_config(),
                   '--manifest', self._generate_manifest(num_samples))
         self._assertOutput()
+
+    def test_preprocess_only(self):
+        pass
 
     def _run(self, *args):
         args = list(concat(*args))
