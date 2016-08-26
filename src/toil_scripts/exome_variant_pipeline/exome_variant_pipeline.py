@@ -227,7 +227,7 @@ def generate_config():
     # This configuration file is formatted in YAML. Simply write the value (at least one space) after the colon.
     # Edit the values in this configuration file and then rerun the pipeline: "toil-variant run"
     #
-    # URLs can take the form: http://, file://, s3://, gnos://
+    # URLs can take the form: http://, ftp://, file://, s3://, gnos://
     # Local inputs follow the URL convention: file:///full/path/to/input
     # S3 URLs follow the convention: s3://bucket/directory/file.txt
     #
@@ -281,8 +281,8 @@ def generate_manifest():
         #   There are 3 tab-separated columns: UUID, Normal BAM URL, Tumor BAM URL
         #
         #   UUID            This should be a unique identifier for the sample to be processed
-        #   Normal URL      A URL (http://, file://, s3://, gnos://) pointing to the normal bam
-        #   Tumor URL       A URL (http://, file://, s3://, gnos://) pointing to the tumor bam
+        #   Normal URL      A URL (http://, ftp://, file://, s3://, gnos://) pointing to the normal bam
+        #   Tumor URL       A URL (http://, ftp://, file://, s3://, gnos://) pointing to the tumor bam
         #
         #   Examples of several combinations are provided below. Lines beginning with # are ignored.
         #
@@ -371,10 +371,10 @@ def main():
                             help='Path to the (filled in) manifest file, generated with "generate-manifest". '
                                  '\nDefault value: "%(default)s"')
     parser_run.add_argument('--normal', default=None, type=str,
-                            help='URL for the normal BAM. URLs can take the form: http://, file://, s3://, '
+                            help='URL for the normal BAM. URLs can take the form: http://, ftp://, file://, s3://, '
                                  'and gnos://. The UUID for the sample must be given with the "--uuid" flag.')
     parser_run.add_argument('--tumor', default=None, type=str,
-                            help='URL for the tumor BAM. URLs can take the form: http://, file://, s3://, '
+                            help='URL for the tumor BAM. URLs can take the form: http://, ftp://, file://, s3://, '
                                  'and gnos://. The UUID for the sample must be given with the "--uuid" flag.')
     parser_run.add_argument('--uuid', default=None, type=str, help='Provide the UUID of a sample when using the'
                                                                    '"--tumor" and "--normal" option')
