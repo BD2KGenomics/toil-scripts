@@ -1,4 +1,36 @@
 #!/usr/bin/env python2.7
+"""
+Pipeline takes a FASTQ or BAM file and generates a filtered VCF file using GATK 3.5
+
+BWA Alignment
+0: Download FASTQ(s)
+1: Align to reference
+2: Sort BAM
+3: Index Bam
+
+GATK Preprocessing
+4: Mark duplicates
+5: Indel Realignment
+6: Base Quality Score Recalibration
+7: Apply Recalibration to BAM
+
+GATK Variant Discovery
+8: Call variants
+9: Genotype variants
+
+GATK Hard Filtering
+10: Isolate SNPs
+11: Isolate Indels
+12: Apply SNP filter
+13: Apply Indel filter
+14: Merge SNP and Indel VCFs
+
+GATK VQSR and Filtering (Optional)
+15: Recalibrate SNPs
+16: Recalibrate Indels
+17: Apply SNP recalibration
+18: Apply Indel recalibration
+"""
 from __future__ import print_function
 import argparse
 from collections import namedtuple
@@ -26,7 +58,7 @@ from toil_scripts.tools.aligners import run_bwakit
 from toil_scripts.tools.indexing import run_samtools_faidx
 from toil_scripts.tools.preprocessing import run_gatk_preprocessing, \
     run_picard_create_sequence_dictionary, run_samtools_index, run_samtools_sort
-from toil_scripts.tools.variant_annotation import run_oncotator
+from toil_scripts.tools.variant_annotation import gatk_genotype_gvcfs, run_oncotator
 from toil_scripts.tools.variant_filters import split_vcf_by_name
 
 logging.basicConfig(level=logging.INFO)
@@ -88,7 +120,9 @@ def gatk_germline_pipeline(job, samples, config):
         - Uploads processed BAM to output directory
     1: Call Variants using HaplotypeCaller
         - Uploads GVCF to output directory
-    2: Filter Variants using either hard filters or VQSR
+    2: Genotype VCF or Joint Genotype
+        - Uploads genotyped VCF
+    3: Filter Variants using either hard filter or VQSR
         - Uploads filtered VCF to output directory
 
     :param JobFunctionWrappingJob job: passed automatically by Toil
@@ -99,6 +133,7 @@ def gatk_germline_pipeline(job, samples, config):
     """
     require(len(samples) > 0, 'No samples were provided!')
 
+    # 0: Generate processed BAM and BAI files for each sample
     # group preprocessing and variant calling steps in empty Job instance
     group_bam_jobs = Job()
     gvcfs = {}
@@ -124,34 +159,80 @@ def gatk_germline_pipeline(job, samples, config):
         gvcfs[uuid] = get_gvcf.rv()
 
         # Upload gvcf before genotyping
-        output_dir = os.path.join(config.output_dir, uuid)
         vqsr_name = '{}{}.g.vcf'.format(uuid, config.suffix)
-        get_gvcf.addFollowOnJobFn(upload_or_move_job,
-                                  vqsr_name,
-                                  gvcfs[uuid],
-                                  output_dir,
-                                  s3_key_path=config.ssec)
+        get_gvcf.addChildJobFn(upload_or_move_job,
+                               vqsr_name,
+                               gvcfs[uuid],
+                               os.path.join(config.output_dir, uuid),
+                               s3_key_path=config.ssec)
+
+    # VQSR requires many variants in order to train a decent model. GATK recommends a minimum of
+    # 30 exomes or one large WGS sample:
+    # https://software.broadinstitute.org/gatk/documentation/article?id=3225
 
     filtered_vcfs = {}
-    if config.run_vqsr:
-        # VQSR requires many variants in order to train a decent model. GATK recommends a minimum of
-        # 30 exomes or one large WGS sample:
-        # https://software.broadinstitute.org/gatk/documentation/article?id=3225
-        if config.joint:
-            joint_vcf = group_bam_jobs.addFollowOnJobFn(vqsr_pipeline, gvcfs, config)
-            filtered_vcfs = joint_vcf.addChildJobFn(split_vcf_by_name, gvcfs.keys(),
-                                                    joint_vcf.rv(), config).rv()
+    if config.joint:
+        joint_genotype_gvcf_disk = PromisedRequirement(
+            lambda lst: 2 * sum(x.size for x in lst) + human2bytes('5G'),
+            gvcfs.values())
+        joint_genotype_gvcf = group_bam_jobs.addChildJobFn(gatk_genotype_gvcfs,
+                                                           gvcfs,
+                                                           config,
+                                                           cores=config.cores,
+                                                           disk=joint_genotype_gvcf_disk,
+                                                           memory=config.xmx)
+
+        joint_genotyped_filename = 'joint.genotyped%s.vcf' % config.suffix
+        joint_genotype_gvcf.addChildJobFn(upload_or_move_job,
+                                          joint_genotyped_filename,
+                                          joint_genotype_gvcf.rv(),
+                                          config.output_dir,
+                                          s3_key_path=config.ssec)
+        # After joint genotyping, run VQSR or hard filter
+        if config.run_vqsr:
+            joint_vcf = joint_genotype_gvcf.addFollowOnJobFn(vqsr_pipeline,
+                                                             'joint',   # Use joint as prefix
+                                                             joint_genotype_gvcf.rv(),
+                                                             config)
         else:
-            job.fileStore.logToMaster('WARNING: Running VQSR without joint genotyping!')
-            for uuid, gvcf in gvcfs.iteritems():
-                filtered_vcfs[uuid] = group_bam_jobs.addFollowOnJobFn(vqsr_pipeline,
-                                                                      dict(uuid=gvcf),
-                                                                      config).rv()
+            joint_vcf = joint_genotype_gvcf.addFollowOnJobFn(hard_filter_pipeline,
+                                                             'joint',   # Use joint as prefix
+                                                             joint_genotype_gvcf.rv(),
+                                                             config).rv()
+
+        # Assumes the UUID matches the VCF sample name
+        filtered_vcfs = joint_vcf.addChildJobFn(split_vcf_by_name, gvcfs.keys(),
+                                                joint_vcf.rv(), config).rv()
+
     else:
-        for uuid, gvcf in gvcfs.iteritems():
-            filtered_vcfs[uuid] = group_bam_jobs.addFollowOnJobFn(hard_filter_pipeline,
-                                                                  uuid, gvcf,
-                                                                  config).rv()
+        for uuid, gvcf_id in gvcfs.iteritems():
+            genotype_gvcf_disk = PromisedRequirement(lambda vcf: 2 * vcf.size + human2bytes('5G'),
+                                                     gvcf_id)
+            genotype_gvcf = group_bam_jobs.addFollowOnJobFn(gatk_genotype_gvcfs,
+                                                            {uuid: gvcf_id},
+                                                            config,
+                                                            cores=config.cores,
+                                                            disk=genotype_gvcf_disk,
+                                                            memory=config.xmx)
+
+            genotyped_filename = '%s.genotyped%s.vcf' % (uuid, config.suffix)
+            genotype_gvcf.addChildJobFn(upload_or_move_job,
+                                        genotyped_filename,
+                                        genotype_gvcf.rv(),
+                                        os.path.join(config.output_dir, uuid),
+                                        s3_key_path=config.ssec)
+
+            if config.run_vqsr:
+                job.fileStore.logToMaster('WARNING: Running VQSR without joint genotyping!')
+                filtered_vcfs[uuid] = genotype_gvcf.addFollowOnJobFn(vqsr_pipeline,
+                                                                     uuid,
+                                                                     genotype_gvcf.rv(),
+                                                                     config).rv()
+            else:
+                filtered_vcfs[uuid] = genotype_gvcf.addFollowOnJobFn(hard_filter_pipeline,
+                                                                     uuid,
+                                                                     genotype_gvcf.rv(),
+                                                                     config).rv()
     job.addChild(group_bam_jobs)
     return filtered_vcfs
 

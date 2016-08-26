@@ -31,7 +31,7 @@ def gatk_genotype_gvcfs(job, gvcf_ids, config, emit_threshold=10.0, call_thresho
     command = ['-T', 'GenotypeGVCFs',
                '-nt', str(job.cores),
                '-R', '/data/genome.fa',
-               '--out', 'joint.vcf',
+               '--out', 'genotyped.vcf',
                # Fix file locking bug on Azure
                '--disable_auto_index_creation_and_locking_when_reading_rods',
                '-stand_emit_conf', str(emit_threshold),
@@ -48,14 +48,14 @@ def gatk_genotype_gvcfs(job, gvcf_ids, config, emit_threshold=10.0, call_thresho
     if config.unsafe_mode:
         command = ['-U', 'ALLOW_SEQ_DICT_INCOMPATIBILITY'] + command
 
-    outputs = {'joint.vcf': None}
+    outputs = {'genotyped.vcf': None}
     docker_call(work_dir = work_dir,
                 env={'JAVA_OPTS': '-Djava.io.tmpdir=/data/ -Xmx{}'.format(job.memory)},
                 parameters=command,
                 tool='quay.io/ucsc_cgl/gatk:3.5--dba6dae49156168a909c43330350c6161dc7ecc2',
                 inputs=inputs.keys(),
                 outputs=outputs)
-    return job.fileStore.writeGlobalFile(os.path.join(work_dir, 'joint.vcf'))
+    return job.fileStore.writeGlobalFile(os.path.join(work_dir, 'genotyped.vcf'))
 
 
 def run_oncotator(job, vcf_id, config):
