@@ -31,7 +31,6 @@ GATK VQSR and Filtering (Optional)
 17: Apply SNP recalibration
 18: Apply Indel recalibration
 """
-from __future__ import print_function
 import argparse
 from collections import namedtuple
 from copy import deepcopy
@@ -42,7 +41,6 @@ from urlparse import urlparse
 
 from bd2k.util.humanize import human2bytes
 from bd2k.util.processes import which
-import synapseclient
 from toil.job import Job, PromisedRequirement
 import yaml
 
@@ -50,7 +48,7 @@ from toil_scripts.gatk_germline.germline_config import generate_config, generate
 from toil_scripts.gatk_germline.hard_filter import hard_filter_pipeline
 from toil_scripts.gatk_germline.vqsr import vqsr_pipeline
 from toil_scripts.lib import require
-from toil_scripts.lib.files import get_files_from_filestore, upload_or_move_job
+from toil_scripts.lib.files import upload_or_move_job
 from toil_scripts.lib.programs import docker_call
 from toil_scripts.lib.urls import download_url_job
 from toil_scripts.rnaseq_cgl.rnaseq_cgl_pipeline import generate_file
@@ -66,8 +64,7 @@ logging.basicConfig(level=logging.INFO)
 
 class GermlineSample(namedtuple('GermlineSample', 'uuid url url2 rg_line')):
     """
-    Namedtuple subclass for Toil Germline samples. Stores essential information
-    for a single input sample.
+    Namedtuple subclass for Toil Germline samples. Stores essential sample information.
 
     Attributes
     uuid: unique sample identifier that matches sample name in read group
@@ -111,9 +108,7 @@ def run_gatk_germline_pipeline(job, samples, config):
 
 def gatk_germline_pipeline(job, samples, config):
     """
-    Configures and runs the GATK Best Practices Germline pipeline. VQSR is done if the
-    run_vqsr config parameter is set to True. Otherwise, each sample VCF is hard
-    filtered using recommended GATK parameters.
+    Configures and runs the GATK Best Practices Germline pipeline.
 
     Steps in Pipeline
     0: Generate and preprocess BAM
@@ -123,7 +118,7 @@ def gatk_germline_pipeline(job, samples, config):
     2: Genotype VCF or Joint Genotype
         - Uploads genotyped VCF
     3: Filter Variants using either hard filter or VQSR
-        - Uploads filtered VCF to output directory
+        - Uploads filtered VCF
 
     :param JobFunctionWrappingJob job: passed automatically by Toil
     :param list samples: List of tuples (uuid, url, url2, rg_line) for joint genotyping.
@@ -335,9 +330,9 @@ def download_shared_files(job, config):
     nonessential_files = {'genome_fai', 'genome_dict'}
 
     # Corrects naming convention in other Toil scripts
-    if getattr(config, 'ref', None): config.genome_fasta = config.ref
-    if getattr(config, 'fai', None): config.genome_fai = config.fai
-    if getattr(config, 'dict', None): config.genome_dict = config.dict
+    config.genome_fasta = config.ref if hasattr(config, 'ref') else config.genome_fasta
+    config.genome_fai = config.fai if hasattr(config, 'fai') else config.genome_fai
+    config.genome_dict = config.dict if hasattr(config, 'dict') else config.genome_dict
 
     # Download necessary files for pipeline configuration
     if config.run_bwa:
@@ -357,7 +352,6 @@ def download_shared_files(job, config):
             setattr(config, name, job.addChildJobFn(download_url_job,
                                                     url,
                                                     name=name,
-                                                    synapse_login=config.synapse_login,
                                                     s3_key_path=config.ssec,
                                                     disk='5G').rv())
         finally:
@@ -425,7 +419,6 @@ def prepare_bam(job, uuid, url, url2, config, rg_line=None):
         get_bam = job.wrapJobFn(download_url_job,
                                 url,
                                 name='toil.bam',
-                                synapse_login=config.synapse_login,
                                 s3_key_path=config.ssec,
                                 disk=config.file_size).encapsulate()
     else:
@@ -519,7 +512,6 @@ def setup_and_run_bwa_kit(job, uuid, url, url2, rg_line, config):
     input1 = job.addChildJobFn(download_url_job,
                                url,
                                name='file1',
-                               synapse_login=config.synapse_login,
                                s3_key_path=config.ssec,
                                disk=config.file_size)
     samples.append(input1.rv())
@@ -538,7 +530,6 @@ def setup_and_run_bwa_kit(job, uuid, url, url2, rg_line, config):
         input2 = job.addChildJobFn(download_url_job,
                                    url2,
                                    name='file2',
-                                   synapse_login=config.synapse_login,
                                    s3_key_path=config.ssec,
                                    disk=config.file_size)
         samples.append(input2.rv())
@@ -577,7 +568,8 @@ def gatk_haplotype_caller(job, bam_id, bai_id, config, emit_threshold=10.0, call
               'genome.fa.fai': config.genome_fai,
               'genome.dict': config.genome_dict,
               'input.bam': bam_id, 'input.bam.bai': bai_id}
-    get_files_from_filestore(job, work_dir, inputs)
+    for name, file_store_id in inputs.iteritems():
+        job.fileStore.readGlobalFile(file_store_id, os.path.join(work_dir, name))
 
     # Call GATK -- HaplotypeCaller with parameters to produce a genomic VCF file:
     # https://software.broadinstitute.org/gatk/documentation/article?id=2803
@@ -626,16 +618,19 @@ def main():
 
     ===================================================================
     :Dependencies:
+    Python 2.7
     curl            - apt-get install curl
-    docker          - apt-get install docker (or 'docker.io' for linux)
-    toil            - pip install --pre toil
+    virtualenv       - apt-get install python-virtualenv
+    pip             - apt-get install python-pip
+    toil            - pip install toil
+    docker          - http://docs.docker.com/engine/installation/
     """
     # Define Parser object and add to jobTree
     parser = argparse.ArgumentParser(description=main.__doc__,
                                      formatter_class=argparse.RawTextHelpFormatter)
     # Generate subparsers
     subparsers = parser.add_subparsers(dest='command')
-    subparsers.add_parser('generate-inputs',
+    subparsers.add_parser('generate-config',
                           help='Generates an editable inputs in the current working directory.')
     subparsers.add_parser('generate-manifest',
                           help='Generates an editable manifest in the current working directory.')
@@ -643,8 +638,7 @@ def main():
                           help='Generates a inputs and manifest in the current working directory.')
 
     # Run subparser
-    parser_run = subparsers.add_parser('run',
-                                       help='Runs the GATK germline pipeline')
+    parser_run = subparsers.add_parser('run', help='Runs the GATK germline pipeline')
     parser_run.add_argument('--config',
                             required=True,
                             type=str,
@@ -762,17 +756,6 @@ def main():
                                  'MappingQualityRankSumTest',
                                  'RMSMappingQuality',
                                  'InbreedingCoeff']
-
-        # Login to Synapse using the Python API
-        if inputs.get('synapse_credentials', None) is not None:
-            synapse_name, synapse_pwd = open(inputs['synapse_credentials'],
-                                             'r').readline().strip().split(',')
-            inputs['synapse_login'] = synapseclient.login(synapse_name,
-                                                          synapse_pwd,
-                                                          rememberMe=False,
-                                                          silent=True)
-        else:
-            inputs['synapse_login'] = None
 
         # It is a toil-scripts convention to store input parameters in a Namespace object
         config = argparse.Namespace(**inputs)

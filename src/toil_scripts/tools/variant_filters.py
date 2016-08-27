@@ -1,7 +1,6 @@
 import os
 import subprocess
 
-from toil_scripts.lib.files import get_files_from_filestore
 from toil_scripts.lib.programs import docker_call
 
 
@@ -22,24 +21,23 @@ def gatk_select_variants(job, mode, vcf_id, config):
               'genome.fa.fai': config.genome_fai,
               'genome.dict': config.genome_dict,
               'input.vcf': vcf_id}
-    get_files_from_filestore(job, work_dir, inputs)
-
-    output = "raw_%s.vcf" % mode
+    for name, file_store_id in inputs.iteritems():
+        job.fileStore.readGlobalFile(file_store_id, os.path.join(work_dir, name))
 
     command = ['-T', 'SelectVariants',
                '-R', 'genome.fa',
                '-V', 'input.vcf',
-               '-o', output,
+               '-o', 'output.vcf',
                '-selectType', mode]
 
-    outputs = {output: None}
-    docker_call(work_dir = work_dir,
+    outputs = {'output.vcf': None}
+    docker_call(work_dir=work_dir,
                 env={'JAVA_OPTS': '-Djava.io.tmpdir=/data/ -Xmx{}'.format(job.memory)},
                 parameters=command,
                 tool='quay.io/ucsc_cgl/gatk:3.5--dba6dae49156168a909c43330350c6161dc7ecc2',
                 inputs=inputs.keys(),
                 outputs=outputs)
-    return job.fileStore.writeGlobalFile(os.path.join(work_dir, output))
+    return job.fileStore.writeGlobalFile(os.path.join(work_dir, 'output.vcf'))
 
 
 def split_vcf_by_name(job, sample_names, vcf_id, config):
@@ -59,7 +57,8 @@ def split_vcf_by_name(job, sample_names, vcf_id, config):
               'genome.fa.fai': config.genome_fai,
               'genome.dict': config.genome_dict,
               'input.vcf': vcf_id}
-    get_files_from_filestore(job, work_dir, inputs)
+    for name, file_store_id in inputs.iteritems():
+        job.fileStore.readGlobalFile(file_store_id, os.path.join(work_dir, name))
 
     vcfs = {}
     for sample in sample_names:
@@ -70,7 +69,7 @@ def split_vcf_by_name(job, sample_names, vcf_id, config):
                    '-o', output,
                    '--sample_name', sample]
         outputs = {output: None}
-        docker_call(work_dir = work_dir,
+        docker_call(work_dir=work_dir,
                     env={'JAVA_OPTS': '-Djava.io.tmpdir=/data/ -Xmx{}'.format(job.memory)},
                     parameters=command,
                     tool='quay.io/ucsc_cgl/gatk:3.5--dba6dae49156168a909c43330350c6161dc7ecc2',
@@ -98,17 +97,19 @@ def gatk_variant_filtration(job, mode, vcf_id, config):
     :return: Filtered VCF FileStoreID
     :rtype: str
     """
+    mode = mode.upper()
     job.fileStore.logToMaster('Apply %s Filter' % mode)
     work_dir = job.fileStore.getLocalTempDir()
     inputs = {'genome.fa': config.genome_fasta,
               'genome.fa.fai': config.genome_fai,
               'genome.dict': config.genome_dict,
               'input.vcf': vcf_id}
-    get_files_from_filestore(job, work_dir, inputs)
+    for name, file_store_id in inputs.iteritems():
+        job.fileStore.readGlobalFile(file_store_id, os.path.join(work_dir, name))
 
     # Recommended GATK hard filters:
     # https://software.broadinstitute.org/gatk/documentation/article?id=2806
-    mode = mode.upper()
+    # Filters are different for SNPs and INDELs. Please refer to GATK documentation.
     if mode == 'SNP':
         expression = '"QD < 2.0 || FS > 60.0 || MQ < 40.0 || ' \
                      'MQRankSum < -12.5 || ReadPosRankSum < -8.0"'
@@ -123,14 +124,14 @@ def gatk_variant_filtration(job, mode, vcf_id, config):
                '-R', 'genome.fa',
                '-V', 'input.vcf',
                '--filterExpression', expression,
-               '--filterName', 'GATK_Germline_Hard_Filter_%s' % mode,
+               '--filterName', 'GATK_Germline_Hard_Filter_%s' % mode,   # Documents filter in header
                '-o', 'filtered_variants.vcf']
 
     outputs = {'filtered_variants.vcf': None}
-    docker_call(work_dir = work_dir,
-                env={'JAVA_OPTS':'-Djava.io.tmpdir=/data/ -Xmx{}'.format(job.memory)},
-                parameters = command,
-                tool = 'quay.io/ucsc_cgl/gatk:3.5--dba6dae49156168a909c43330350c6161dc7ecc2',
+    docker_call(work_dir=work_dir,
+                env={'JAVA_OPTS': '-Djava.io.tmpdir=/data/ -Xmx{}'.format(job.memory)},
+                parameters=command,
+                tool='quay.io/ucsc_cgl/gatk:3.5--dba6dae49156168a909c43330350c6161dc7ecc2',
                 inputs=inputs.keys(),
                 outputs=outputs)
 
@@ -144,10 +145,11 @@ def gatk_variant_filtration(job, mode, vcf_id, config):
 
 def gatk_variant_recalibrator(job, mode, vcf_id, config):
     """
-    Variant quality score recalibration for SNP or INDEL variants.
+    Variant quality score recalibration for SNP or INDEL variants. VQSR must be run twice because
+    SNP and INDEL VQSR use distinct models.
 
     :param JobFunctionWrappingJob job: Job instance
-    :param str mode: Determines variant filter type (SNP or INDEL)
+    :param str mode: Determines variant recalibration mode (SNP or INDEL)
     :param str vcf_id: VCF FileStoreID
     :param Namespace config: Input parameters and shared FileStoreIDs
     :return: recalibration table, tranches, plot FileStoreIDs
@@ -164,9 +166,11 @@ def gatk_variant_recalibrator(job, mode, vcf_id, config):
               'genome.dict': config.genome_dict,
               'input.vcf': vcf_id}
 
-    # GATK recommended parameters:
+    # Refer to GATK documentation for description of recommended parameters:
     # https://software.broadinstitute.org/gatk/documentation/article?id=1259
     # https://software.broadinstitute.org/gatk/documentation/article?id=2805
+
+    # This base command includes parameters for both INDEL and SNP VQSR.
     # DP is a recommended annotation, but does not work well with exome data
     command = ['-T', 'VariantRecalibrator',
                '-R', 'genome.fa',
@@ -187,15 +191,18 @@ def gatk_variant_recalibrator(job, mode, vcf_id, config):
                '-tranchesFile', 'tranches',
                '-rscriptFile', 'plots']
 
-    if mode.upper() == 'INDEL':
+    # These parameters and resource files are specific for INDEL VQSR.
+    if mode == 'INDEL':
         command += ['-resource:mills,known=false,training=true,truth=true,prior=12.0', 'mills.vcf',
                     '-resource:dbsnp,known=true,training=false,truth=false,prior=2.0', 'dbsnp.vcf',
                     '-mode', 'INDEL']
         inputs['mills.vcf'] = config.mills
         inputs['dbsnp.vcf'] = config.dbsnp
 
-    if mode.upper() == 'SNP':
-        command += ['-resource:hapmap,known=false,training=true,truth=true,prior=15.0', 'hapmap.vcf',
+    # These parameters and resource files are specific for SNP VQSR.
+    if mode == 'SNP':
+        command += ['-resource:hapmap,known=false,training=true,truth=true,prior=15.0',
+                    'hapmap.vcf',
                     '-resource:omni,known=false,training=true,truth=true,prior=12.0', 'omni.vcf',
                     '-resource:dbsnp,known=true,training=false,truth=false,prior=2.0', 'dbsnp.vcf',
                     '-resource:1000G,known=false,training=true,truth=false,prior=10.0', '1000G.vcf',
@@ -207,14 +214,17 @@ def gatk_variant_recalibrator(job, mode, vcf_id, config):
         inputs['1000G.vcf'] = config.phase
 
     if config.unsafe_mode:
-        command = ['-U', 'ALLOW_SEQ_DICT_INCOMPATIBILITY'] + command
+        command.extend(['-U', 'ALLOW_SEQ_DICT_INCOMPATIBILITY'])
 
-    get_files_from_filestore(job, work_dir, inputs)
+    # Delay reading in files until function is configured
+    for name, file_store_id in inputs.iteritems():
+        job.fileStore.readGlobalFile(file_store_id, os.path.join(work_dir, name))
+
     outputs = {'recal': None, 'tranches': None, 'plots': None}
-    docker_call(work_dir = work_dir,
-                env={'JAVA_OPTS':'-Djava.io.tmpdir=/data/ -Xmx{}'.format(job.memory)},
-                parameters = command,
-                tool ='quay.io/ucsc_cgl/gatk:3.5--dba6dae49156168a909c43330350c6161dc7ecc2',
+    docker_call(work_dir=work_dir,
+                env={'JAVA_OPTS': '-Djava.io.tmpdir=/data/ -Xmx{}'.format(job.memory)},
+                parameters=command,
+                tool='quay.io/ucsc_cgl/gatk:3.5--dba6dae49156168a909c43330350c6161dc7ecc2',
                 inputs=inputs.keys(),
                 outputs=outputs)
     recal_id = job.fileStore.writeGlobalFile(os.path.join(work_dir, 'recal'))
@@ -236,7 +246,8 @@ def gatk_apply_variant_recalibration(job, mode, vcf_id, recal_id, tranches_id, c
     :rtype: str
     """
     mode = mode.upper()
-    job.fileStore.logToMaster('Running GATK ApplyRecalibration ({} Mode): {}'.format(mode, config.uuid))
+    job.fileStore.logToMaster(
+        'Running GATK ApplyRecalibration ({} Mode): {}'.format(mode, config.uuid))
     work_dir = job.fileStore.getLocalTempDir()
     inputs = {'genome.fa': config.genome_fasta,
               'genome.fa.fai': config.genome_fai,
@@ -244,28 +255,29 @@ def gatk_apply_variant_recalibration(job, mode, vcf_id, recal_id, tranches_id, c
               'input.vcf': vcf_id,
               'recal': recal_id,
               'tranches': tranches_id}
-    get_files_from_filestore(job, work_dir, inputs)
+    for name, file_store_id in inputs.iteritems():
+        job.fileStore.readGlobalFile(file_store_id, os.path.join(work_dir, name))
 
     # GATK recommended parameters:
     # https://software.broadinstitute.org/gatk/documentation/article?id=2805
     command = ['-T', 'ApplyRecalibration',
                '-nt', str(job.cores),
+               '-mode', mode,
                '-R', 'genome.fa',
                '-input', 'input.vcf',
                '-o', 'vqsr.vcf',
                '-ts_filter_level', '99.0',
                '-recalFile', 'recal',
-               '-tranchesFile', 'tranches',
-               '-mode', mode]
+               '-tranchesFile', 'tranches']
 
     if config.unsafe_mode:
-        command = ['-U', 'ALLOW_SEQ_DICT_INCOMPATIBILITY'] + command
+        command.extend(['-U', 'ALLOW_SEQ_DICT_INCOMPATIBILITY'])
 
-    outputs={'vqsr.vcf': None}
-    docker_call(work_dir = work_dir,
-                env={'JAVA_OPTS':'-Djava.io.tmpdir=/data/ -Xmx{}'.format(job.memory)},
-                parameters = command,
-                tool = 'quay.io/ucsc_cgl/gatk:3.5--dba6dae49156168a909c43330350c6161dc7ecc2',
+    outputs = {'vqsr.vcf': None}
+    docker_call(work_dir=work_dir,
+                env={'JAVA_OPTS': '-Djava.io.tmpdir=/data/ -Xmx{}'.format(job.memory)},
+                parameters=command,
+                tool='quay.io/ucsc_cgl/gatk:3.5--dba6dae49156168a909c43330350c6161dc7ecc2',
                 inputs=inputs.keys(),
                 outputs=outputs)
     return job.fileStore.writeGlobalFile(os.path.join(work_dir, 'vqsr.vcf'))
@@ -273,7 +285,7 @@ def gatk_apply_variant_recalibration(job, mode, vcf_id, recal_id, tranches_id, c
 
 def gatk_combine_variants(job, vcfs, config):
     """
-    Combine a dictionary of VCF FileStoreIDs
+    Combine a dictionary of VCF FileStoreIDs from the same sample
 
     :param JobFunctionWrappingJob job: Toil Job instance
     :param dict vcfs: Dictionary of VCF FileStoreIDs
@@ -287,22 +299,23 @@ def gatk_combine_variants(job, vcfs, config):
     inputs = {'genome.fa': config.genome_fasta,
               'genome.fa.fai': config.genome_fai,
               'genome.dict': config.genome_dict}
+    inputs.update(vcfs)
+    for name, file_store_id in inputs.iteritems():
+        job.fileStore.readGlobalFile(file_store_id, os.path.join(work_dir, name))
 
     command = ['-T', 'CombineVariants',
                '-R', '/data/genome.fa',
                '-o', '/data/merged.vcf',
-               '-genotypeMergeOptions', 'UNIQUIFY']
+               '--genotypemergeoption', 'UNSORTED']  # For merging VCFs from same sample
 
     for uuid, vcf_id in vcfs.iteritems():
-        inputs[uuid] = vcf_id
         command.extend(['--variant', os.path.join('/data', uuid)])
 
-    get_files_from_filestore(job, work_dir, inputs)
-    outputs={'merged.vcf': None}
-    docker_call(work_dir = work_dir,
-                env={'JAVA_OPTS':'-Djava.io.tmpdir=/data/ -Xmx{}'.format(job.memory)},
-                parameters = command,
-                tool = 'quay.io/ucsc_cgl/gatk:3.5--dba6dae49156168a909c43330350c6161dc7ecc2',
+    outputs = {'merged.vcf': None}
+    docker_call(work_dir=work_dir,
+                env={'JAVA_OPTS': '-Djava.io.tmpdir=/data/ -Xmx{}'.format(job.memory)},
+                parameters=command,
+                tool='quay.io/ucsc_cgl/gatk:3.5--dba6dae49156168a909c43330350c6161dc7ecc2',
                 inputs=inputs.keys(),
                 outputs=outputs)
     return job.fileStore.writeGlobalFile(os.path.join(work_dir, 'merged.vcf'))
