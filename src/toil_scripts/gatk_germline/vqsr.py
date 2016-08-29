@@ -5,15 +5,15 @@ import os
 from toil.job import PromisedRequirement
 from bd2k.util.humanize import human2bytes
 
+from toil_scripts.gatk_germline.common import output_file_job
 from toil_scripts.tools.variant_filters import gatk_variant_recalibrator, \
     gatk_apply_variant_recalibration
-from toil_scripts.lib.files import upload_or_move_job
 
 
 def vqsr_pipeline(job, uuid, vcf_id, config):
     """
     Runs GATK Variant Quality Score Recalibration. Writes VQSR VCF to an output directory defined
-    in the config dictionary. Multiple GVCFs are joined and recalibrated into a single VCF.
+    in the config dictionary. Multiple GVCFs are joint genotyped and recalibrated into a single VCF.
 
     0: Start                        0 --> 1 --> 3 --> 4 --> 5
     1: Recalibrate SNPs                   |      |
@@ -81,7 +81,7 @@ def vqsr_pipeline(job, uuid, vcf_id, config):
     output_dir = config.output_dir
     output_dir = os.path.join(output_dir, uuid)
     vqsr_name = '%s.vqsr%s.vcf' % (uuid, config.suffix)
-    output_vqsr = job.wrapJobFn(upload_or_move_job,
+    output_vqsr = job.wrapJobFn(output_file_job,
                                 vqsr_name,
                                 apply_indel_recal.rv(),
                                 output_dir,

@@ -187,22 +187,13 @@ def gatk_variant_recalibrator(job, mode, vcf_id, config):
                '-tranche', '99.9',
                '-tranche', '99.0',
                '-tranche', '90.0',
-               '-recalFile', 'recal',
-               '-tranchesFile', 'tranches',
-               '-rscriptFile', 'plots']
-
-    # These parameters and resource files are specific for INDEL VQSR.
-    if mode == 'INDEL':
-        command += ['-resource:mills,known=false,training=true,truth=true,prior=12.0', 'mills.vcf',
-                    '-resource:dbsnp,known=true,training=false,truth=false,prior=2.0', 'dbsnp.vcf',
-                    '-mode', 'INDEL']
-        inputs['mills.vcf'] = config.mills
-        inputs['dbsnp.vcf'] = config.dbsnp
+               '-recalFile', 'output.recal',
+               '-tranchesFile', 'output.tranches',
+               '-rscriptFile', 'output.plots.R']
 
     # These parameters and resource files are specific for SNP VQSR.
     if mode == 'SNP':
-        command += ['-resource:hapmap,known=false,training=true,truth=true,prior=15.0',
-                    'hapmap.vcf',
+        command += ['-resource:hapmap,known=false,training=true,truth=true,prior=15.0', 'hapmap.vcf',
                     '-resource:omni,known=false,training=true,truth=true,prior=12.0', 'omni.vcf',
                     '-resource:dbsnp,known=true,training=false,truth=false,prior=2.0', 'dbsnp.vcf',
                     '-resource:1000G,known=false,training=true,truth=false,prior=10.0', '1000G.vcf',
@@ -213,6 +204,14 @@ def gatk_variant_recalibrator(job, mode, vcf_id, config):
         inputs['dbsnp.vcf'] = config.dbsnp
         inputs['1000G.vcf'] = config.phase
 
+    # These parameters and resource files are specific for INDEL VQSR.
+    if mode == 'INDEL':
+        command += ['-resource:mills,known=false,training=true,truth=true,prior=12.0', 'mills.vcf',
+                    '-resource:dbsnp,known=true,training=false,truth=false,prior=2.0', 'dbsnp.vcf',
+                    '-mode', 'INDEL']
+        inputs['mills.vcf'] = config.mills
+        inputs['dbsnp.vcf'] = config.dbsnp
+
     if config.unsafe_mode:
         command.extend(['-U', 'ALLOW_SEQ_DICT_INCOMPATIBILITY'])
 
@@ -220,16 +219,16 @@ def gatk_variant_recalibrator(job, mode, vcf_id, config):
     for name, file_store_id in inputs.iteritems():
         job.fileStore.readGlobalFile(file_store_id, os.path.join(work_dir, name))
 
-    outputs = {'recal': None, 'tranches': None, 'plots': None}
+    outputs = {'output.recal': None, 'output.tranches': None, 'output.plots.R': None}
     docker_call(work_dir=work_dir,
                 env={'JAVA_OPTS': '-Djava.io.tmpdir=/data/ -Xmx{}'.format(job.memory)},
                 parameters=command,
                 tool='quay.io/ucsc_cgl/gatk:3.5--dba6dae49156168a909c43330350c6161dc7ecc2',
                 inputs=inputs.keys(),
                 outputs=outputs)
-    recal_id = job.fileStore.writeGlobalFile(os.path.join(work_dir, 'recal'))
-    tranches_id = job.fileStore.writeGlobalFile(os.path.join(work_dir, 'tranches'))
-    plots_id = job.fileStore.writeGlobalFile(os.path.join(work_dir, 'plots'))
+    recal_id = job.fileStore.writeGlobalFile(os.path.join(work_dir, 'output.recal'))
+    tranches_id = job.fileStore.writeGlobalFile(os.path.join(work_dir, 'output.tranches'))
+    plots_id = job.fileStore.writeGlobalFile(os.path.join(work_dir, 'output.plots.R'))
     return recal_id, tranches_id, plots_id
 
 

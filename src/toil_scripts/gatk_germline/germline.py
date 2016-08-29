@@ -3,7 +3,7 @@
 Pipeline takes a FASTQ or BAM file and generates a filtered VCF file using GATK 3.5
 
 BWA Alignment
-0: Download FASTQ(s)
+0: Download FASTQ(s) or BAM
 1: Align to reference
 2: Sort BAM
 3: Index Bam
@@ -12,7 +12,7 @@ GATK Preprocessing
 4: Mark duplicates
 5: Indel Realignment
 6: Base Quality Score Recalibration
-7: Apply Recalibration to BAM
+7: Apply Recalibration
 
 GATK Variant Discovery
 8: Call variants
@@ -44,11 +44,11 @@ from bd2k.util.processes import which
 from toil.job import Job, PromisedRequirement
 import yaml
 
+from toil_scripts.gatk_germline.common import output_file_job
 from toil_scripts.gatk_germline.germline_config import generate_config, generate_manifest
 from toil_scripts.gatk_germline.hard_filter import hard_filter_pipeline
 from toil_scripts.gatk_germline.vqsr import vqsr_pipeline
 from toil_scripts.lib import require
-from toil_scripts.lib.files import upload_or_move_job
 from toil_scripts.lib.programs import docker_call
 from toil_scripts.lib.urls import download_url_job
 from toil_scripts.rnaseq_cgl.rnaseq_cgl_pipeline import generate_file
@@ -155,7 +155,7 @@ def gatk_germline_pipeline(job, samples, config):
 
         # Upload gvcf before genotyping
         vqsr_name = '{}{}.g.vcf'.format(uuid, config.suffix)
-        get_gvcf.addChildJobFn(upload_or_move_job,
+        get_gvcf.addChildJobFn(output_file_job,
                                vqsr_name,
                                gvcfs[uuid],
                                os.path.join(config.output_dir, uuid),
@@ -167,37 +167,7 @@ def gatk_germline_pipeline(job, samples, config):
 
     filtered_vcfs = {}
     if config.joint:
-        joint_genotype_gvcf_disk = PromisedRequirement(
-            lambda lst: 2 * sum(x.size for x in lst) + human2bytes('5G'),
-            gvcfs.values())
-        joint_genotype_gvcf = group_bam_jobs.addChildJobFn(gatk_genotype_gvcfs,
-                                                           gvcfs,
-                                                           config,
-                                                           cores=config.cores,
-                                                           disk=joint_genotype_gvcf_disk,
-                                                           memory=config.xmx)
-
-        joint_genotyped_filename = 'joint.genotyped%s.vcf' % config.suffix
-        joint_genotype_gvcf.addChildJobFn(upload_or_move_job,
-                                          joint_genotyped_filename,
-                                          joint_genotype_gvcf.rv(),
-                                          config.output_dir,
-                                          s3_key_path=config.ssec)
-        # After joint genotyping, run VQSR or hard filter
-        if config.run_vqsr:
-            joint_vcf = joint_genotype_gvcf.addFollowOnJobFn(vqsr_pipeline,
-                                                             'joint',   # Use joint as prefix
-                                                             joint_genotype_gvcf.rv(),
-                                                             config)
-        else:
-            joint_vcf = joint_genotype_gvcf.addFollowOnJobFn(hard_filter_pipeline,
-                                                             'joint',   # Use joint as prefix
-                                                             joint_genotype_gvcf.rv(),
-                                                             config).rv()
-
-        # Assumes the UUID matches the VCF sample name
-        filtered_vcfs = joint_vcf.addChildJobFn(split_vcf_by_name, gvcfs.keys(),
-                                                joint_vcf.rv(), config).rv()
+        filtered_vcfs = joint_genotype_and_filter(group_bam_jobs, gvcfs, config)
 
     else:
         for uuid, gvcf_id in gvcfs.iteritems():
@@ -211,7 +181,7 @@ def gatk_germline_pipeline(job, samples, config):
                                                             memory=config.xmx)
 
             genotyped_filename = '%s.genotyped%s.vcf' % (uuid, config.suffix)
-            genotype_gvcf.addChildJobFn(upload_or_move_job,
+            genotype_gvcf.addChildJobFn(output_file_job,
                                         genotyped_filename,
                                         genotype_gvcf.rv(),
                                         os.path.join(config.output_dir, uuid),
@@ -232,6 +202,48 @@ def gatk_germline_pipeline(job, samples, config):
     return filtered_vcfs
 
 
+def joint_genotype_and_filter(job, gvcfs, config):
+    """
+    Joint genotypes a cohort of GVCFs and filters the output using hard filters or VQSR. Input
+    dictionary keys must match the sample name in GVCF files.
+
+    :param JobFunctionWrappingJob job: passed automatically by Toil
+    :param dict gvcfs: Dictionary of UUIDs and GVCF FileStoreIDs
+    :param Namespace config: Input parameters and shared FileStoreIDs
+    :return: Dictionary of filtered VCFs
+    """
+    joint_genotype_gvcf_disk = PromisedRequirement(
+        lambda lst: 2 * sum(x.size for x in lst) + human2bytes('5G'),
+        gvcfs.values())
+    joint_genotype_gvcf = job.addChildJobFn(gatk_genotype_gvcfs,
+                                            gvcfs,
+                                            config,
+                                            cores=config.cores,
+                                            disk=joint_genotype_gvcf_disk,
+                                            memory=config.xmx)
+
+    joint_genotyped_filename = 'joint.genotyped%s.vcf' % config.suffix
+    joint_genotype_gvcf.addChildJobFn(output_file_job,
+                                      joint_genotyped_filename,
+                                      joint_genotype_gvcf.rv(),
+                                      config.output_dir,
+                                      s3_key_path=config.ssec)
+    # After joint genotyping, run VQSR or hard filter
+    if config.run_vqsr:
+        joint_vcf = joint_genotype_gvcf.addFollowOnJobFn(vqsr_pipeline,
+                                                         'joint',   # Use joint as prefix
+                                                         joint_genotype_gvcf.rv(),
+                                                         config)
+    else:
+        joint_vcf = joint_genotype_gvcf.addFollowOnJobFn(hard_filter_pipeline,
+                                                         'joint',   # Use joint as prefix
+                                                         joint_genotype_gvcf.rv(),
+                                                         config).rv()
+
+    # Assumes the UUID matches the VCF sample name
+    return joint_vcf.addChildJobFn(split_vcf_by_name, gvcfs.keys(), joint_vcf.rv(), config).rv()
+
+
 def annotate_vcfs(job, vcfs, config):
     """
     Annotates VCF files using Oncotator.
@@ -249,7 +261,7 @@ def annotate_vcfs(job, vcfs, config):
 
         output_dir = os.path.join(config.output_dir, uuid)
         filename = '{}.annotated{}.vcf'.format(uuid, config.suffix)
-        annotated_vcf.addChildJobFn(upload_or_move_job,
+        annotated_vcf.addChildJobFn(output_file_job,
                                     filename,
                                     annotated_vcf.rv(),
                                     output_dir,
@@ -329,11 +341,6 @@ def download_shared_files(job, config):
     shared_files = {'genome_fasta', 'genome_fai', 'genome_dict'}
     nonessential_files = {'genome_fai', 'genome_dict'}
 
-    # Corrects naming convention in other Toil scripts
-    config.genome_fasta = config.ref if hasattr(config, 'ref') else config.genome_fasta
-    config.genome_fai = config.fai if hasattr(config, 'fai') else config.genome_fai
-    config.genome_dict = config.dict if hasattr(config, 'dict') else config.genome_dict
-
     # Download necessary files for pipeline configuration
     if config.run_bwa:
         shared_files |= {'amb', 'ann', 'bwt', 'pac', 'sa', 'alt'}
@@ -353,7 +360,8 @@ def download_shared_files(job, config):
                                                     url,
                                                     name=name,
                                                     s3_key_path=config.ssec,
-                                                    disk='5G').rv())
+                                                    disk='15G'   # Estimated reference file size
+                                                    ).rv())
         finally:
             if getattr(config, name, None) is None and name not in nonessential_files:
                 raise ValueError("Necessary configuration parameter is missing:\n{}".format(name))
@@ -466,7 +474,7 @@ def prepare_bam(job, uuid, url, url2, config, rg_line=None):
         # Save processed BAM
         output_dir = os.path.join(config.output_dir, uuid)
         filename = '{}.processed{}.bam'.format(uuid, config.suffix)
-        output_bam = job.wrapJobFn(upload_or_move_job,
+        output_bam = job.wrapJobFn(output_file_job,
                                    filename,
                                    preprocess.rv(0),
                                    output_dir,
@@ -667,7 +675,7 @@ def main():
     options = parser.parse_args()
 
     cwd = os.getcwd()
-    if options.command == 'generate-inputs' or options.command == 'generate':
+    if options.command == 'generate-config' or options.command == 'generate':
         generate_file(os.path.join(cwd, 'config-toil-germline.yaml'), generate_config)
     if options.command == 'generate-manifest' or options.command == 'generate':
         generate_file(os.path.join(cwd, 'manifest-toil-germline.tsv'), generate_manifest)

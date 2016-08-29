@@ -4,7 +4,7 @@ import os
 from bd2k.util.humanize import human2bytes
 from toil.job import PromisedRequirement
 
-from toil_scripts.lib.files import upload_or_move_job
+from toil_scripts.gatk_germline.common import output_file_job
 from toil_scripts.tools.variant_filters import gatk_select_variants, \
     gatk_variant_filtration, gatk_combine_variants
 
@@ -84,7 +84,7 @@ def hard_filter_pipeline(job, uuid, vcf_id, config):
     # Output the hard filtered VCF
     output_dir = os.path.join(config.output_dir, uuid)
     output_filename = '%s.hard_filter%s.vcf' % (uuid, config.suffix)
-    output_vcf = job.wrapJobFn(upload_or_move_job,
+    output_vcf = job.wrapJobFn(output_file_job,
                                output_filename,
                                merge_variants.rv(),
                                output_dir, s3_key_path=config.ssec)
