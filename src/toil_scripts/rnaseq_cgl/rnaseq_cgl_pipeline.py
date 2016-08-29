@@ -324,7 +324,7 @@ def generate_config():
         # Edit the values in this configuration file and then rerun the pipeline: "toil-rnaseq run"
         # Just Kallisto or STAR/RSEM can be run by supplying only the inputs to those tools
         #
-        # URLs can take the form: http://, file://, s3://, gnos://
+        # URLs can take the form: http://, ftp://, file://, s3://, gnos://
         # Local inputs follow the URL convention: file:///full/path/to/input
         # S3 URLs follow the convention: s3://bucket/directory/file.txt
         #

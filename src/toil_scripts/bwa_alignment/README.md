@@ -85,7 +85,7 @@ Run a variety of samples locally
     # BWA Alignment Pipeline configuration file
     # This configuration file is formatted in YAML. Simply write the value (at least one space) after the colon.
     # Edit the values in this configuration file and then rerun the pipeline: "toil-bwa run"
-    # URLs can take the form: http://, file://, s3://, gnos://.
+    # URLs can take the form: http://, ftp://, file://, s3://, gnos://.
     # Comments (beginning with #) do not need to be removed. Optional parameters may be left blank
     ##############################################################################################################
     # Required: Reference fasta file

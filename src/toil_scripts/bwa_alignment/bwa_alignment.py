@@ -101,7 +101,7 @@ def generate_config():
         # This configuration file is formatted in YAML. Simply write the value (at least one space) after the colon.
         # Edit the values in this configuration file and then rerun the pipeline: "toil-bwa run"
         #
-        # URLs can take the form: http://, file://, s3://, gnos://
+        # URLs can take the form: http://, ftp://, file://, s3://, gnos://
         # Local inputs follow the URL convention: file:///full/path/to/input
         # S3 URLs follow the convention: s3://bucket/directory/file.txt
         #
