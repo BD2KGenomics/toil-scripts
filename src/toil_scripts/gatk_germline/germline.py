@@ -57,20 +57,20 @@ from toil_scripts.tools.indexing import run_samtools_faidx
 from toil_scripts.tools.preprocessing import run_gatk_preprocessing, \
     run_picard_create_sequence_dictionary, run_samtools_index, run_samtools_sort
 from toil_scripts.tools.variant_annotation import gatk_genotype_gvcfs, run_oncotator
-from toil_scripts.tools.variant_filters import split_vcf_by_name
+
 
 logging.basicConfig(level=logging.INFO)
 
 
-class GermlineSample(namedtuple('GermlineSample', 'uuid url url2 rg_line')):
+class GermlineSample(namedtuple('GermlineSample', 'uuid url paired_url rg_line')):
     """
     Namedtuple subclass for Toil Germline samples. Stores essential sample information.
 
     Attributes
     uuid: unique sample identifier that matches sample name in read group
     url: URL/PATH to FASTQ or BAM file
-    url2: URL/PATH to paired FASTQ file
-    rg_line: Read group information
+    paired_url: URL/PATH to paired FASTQ file
+    rg_line: Read group information (i.e. @RG\tID:foo\tSM:bar)
     """
 
 
@@ -92,8 +92,8 @@ def run_gatk_germline_pipeline(job, samples, config):
             shared_files.addChildJobFn(prepare_bam,
                                        germline_sample.uuid,
                                        germline_sample.url,
-                                       germline_sample.url2,
                                        shared_files.rv(),
+                                       paired_url=germline_sample.paired_url,
                                        rg_line=germline_sample.rg_line)
     else:
         run_pipeline = Job.wrapJobFn(gatk_germline_pipeline,
@@ -121,7 +121,7 @@ def gatk_germline_pipeline(job, samples, config):
         - Uploads filtered VCF
 
     :param JobFunctionWrappingJob job: passed automatically by Toil
-    :param list samples: List of tuples (uuid, url, url2, rg_line) for joint genotyping.
+    :param list samples: List of tuples (uuid, url, paired_url, rg_line)
     :param Namespace config: Input parameters and reference FileStoreIDs
     :return: Dictionary of filtered VCF FileStoreIDs
     :rtype: dict
@@ -132,13 +132,13 @@ def gatk_germline_pipeline(job, samples, config):
     # group preprocessing and variant calling steps in empty Job instance
     group_bam_jobs = Job()
     gvcfs = {}
-    for uuid, url, url2, rg_line in samples:
+    for uuid, url, paired_url, rg_line in samples:
         # 0: Generate processed BAM and BAI files for each sample
         get_bam = group_bam_jobs.addChildJobFn(prepare_bam,
                                                uuid,
                                                url,
-                                               url2,
                                                config,
+                                               paired_url=paired_url,
                                                rg_line=rg_line)
 
         # 1: Generate per sample gvcfs {uuid: gvcf_id}
@@ -204,13 +204,13 @@ def gatk_germline_pipeline(job, samples, config):
 
 def joint_genotype_and_filter(job, gvcfs, config):
     """
-    Joint genotypes a cohort of GVCFs and filters the output using hard filters or VQSR. Input
-    dictionary keys must match the sample name in GVCF files.
+    Joint genotypes a cohort of GVCFs and filters the output.
 
     :param JobFunctionWrappingJob job: passed automatically by Toil
     :param dict gvcfs: Dictionary of UUIDs and GVCF FileStoreIDs
     :param Namespace config: Input parameters and shared FileStoreIDs
-    :return: Dictionary of filtered VCFs
+    :return: Dictionary containing joint-filtered VCF
+    :rtype: dict
     """
     joint_genotype_gvcf_disk = PromisedRequirement(
         lambda lst: 2 * sum(x.size for x in lst) + human2bytes('5G'),
@@ -228,6 +228,7 @@ def joint_genotype_and_filter(job, gvcfs, config):
                                       joint_genotype_gvcf.rv(),
                                       config.output_dir,
                                       s3_key_path=config.ssec)
+
     # After joint genotyping, run VQSR or hard filter
     if config.run_vqsr:
         joint_vcf = joint_genotype_gvcf.addFollowOnJobFn(vqsr_pipeline,
@@ -240,13 +241,12 @@ def joint_genotype_and_filter(job, gvcfs, config):
                                                          joint_genotype_gvcf.rv(),
                                                          config).rv()
 
-    # Assumes the UUID matches the VCF sample name
-    return joint_vcf.addChildJobFn(split_vcf_by_name, gvcfs.keys(), joint_vcf.rv(), config).rv()
+    return {'joint-filtered': joint_vcf.rv()}
 
 
 def annotate_vcfs(job, vcfs, config):
     """
-    Annotates VCF files using Oncotator.
+    Runs Oncotator for a group of VCF files. Each sample is annotated individually.
 
     :param JobFunctionWrappingJob job: passed automatically by Toil
     :param dict vcfs: Dictionary of UUIDs and VCF FileStoreIDs
@@ -254,8 +254,10 @@ def annotate_vcfs(job, vcfs, config):
     """
     job.fileStore.logToMaster('Annotating VCFs')
     for uuid, vcf_id in vcfs.iteritems():
-        onco_disk = PromisedRequirement(lambda vcf, db: vcf.size + db.size + human2bytes('10G'),
-                                        vcf_id, config.oncotator_db)
+        # Estimate disk space as twice the input VCF size plus the database size
+        onco_disk = PromisedRequirement(lambda vcf, db: 2 * vcf.size + db.size,
+                                        vcf_id,
+                                        config.oncotator_db)
         annotated_vcf = job.addChildJobFn(run_oncotator, vcf_id, config,
                                           disk=onco_disk, cores=config.cores, memory=config.xmx)
 
@@ -268,11 +270,16 @@ def annotate_vcfs(job, vcfs, config):
                                     s3_key_path=config.ssec)
 
 
+#####################################
+#  Pipeline convenience functions   #
+#####################################
+
+
 def parse_manifest(path_to_manifest):
     """
     Parses manifest file for Toil Germline Pipeline
 
-    :param path_to_manifest str: Path to configuration file
+    :param str path_to_manifest: Path to sample manifest file
     :return: List of GermlineSample namedtuples
     :rtype: list[GermlineSample]
     """
@@ -393,7 +400,7 @@ def reference_preprocessing(job, config):
     return config
 
 
-def prepare_bam(job, uuid, url, url2, config, rg_line=None):
+def prepare_bam(job, uuid, url, config, paired_url=None, rg_line=None):
     """
     Prepares BAM file for GATK Germline pipeline.
 
@@ -408,7 +415,8 @@ def prepare_bam(job, uuid, url, url2, config, rg_line=None):
     :param str uuid: Unique identifier for the sample
     :param str url: URL to BAM file or FASTQs
     :param Namespace config: Configuration options for pipeline
-    :param str|None rg_line: RG line for BWA alignment. Default is None.
+    :param str|None paired_url: URL to paired FASTQ file
+    :param str|None rg_line: RG line for BWA alignment (i.e. @RG\tID:foo\tSM:bar). Default is None.
     :return: BAM and BAI FileStoreIDs
     :rtype: tuple
     """
@@ -417,9 +425,9 @@ def prepare_bam(job, uuid, url, url2, config, rg_line=None):
         get_bam = job.wrapJobFn(setup_and_run_bwa_kit,
                                 uuid,
                                 url,
-                                url2,
                                 rg_line,
-                                config).encapsulate()
+                                config,
+                                paired_url=paired_url).encapsulate()
 
     # 0: Download BAM
     elif '.bam' in url.lower():
@@ -488,13 +496,15 @@ def prepare_bam(job, uuid, url, url2, config, rg_line=None):
     return output_bam_promise, output_bai_promise
 
 
-def setup_and_run_bwa_kit(job, uuid, url, url2, rg_line, config):
+def setup_and_run_bwa_kit(job, uuid, url, rg_line, config, paired_url=None):
     """
     Downloads and aligns FASTQs or realigns BAM using BWA.
 
     :param JobFunctionWrappingJob job: passed automatically by Toil
     :param str url: FASTQ or BAM sample URL. BAM alignment URL must have .bam extension.
     :param Namespace config: Input parameters and shared FileStoreIDs
+    :param str|None paired_url: URL to paired FASTQ
+    :param str|None rg_line: Read group line (i.e. @RG\tID:foo\tSM:bar)
     :return: BAM FileStoreID
     :rtype: str
     """
@@ -529,14 +539,14 @@ def setup_and_run_bwa_kit(job, uuid, url, url2, rg_line, config):
         bwa_config.r1 = input1.rv()
 
     # Uses first url to deduce paired FASTQ URL, if url looks like a paired file.
-    if url2 is None and '1.fq' in url:
-        url2 = url.replace('1.fq', '2.fq')
+    if paired_url is None and '1.fq' in url:
+        paired_url = url.replace('1.fq', '2.fq')
         job.fileStore.logToMaster(
-            'Trying to find paired reads using FASTQ URL:\n%s\n%s' % (url, url2))
+            'Trying to find paired reads using FASTQ URL:\n%s\n%s' % (url, paired_url))
 
-    if url2:
+    if paired_url:
         input2 = job.addChildJobFn(download_url_job,
-                                   url2,
+                                   paired_url,
                                    name='file2',
                                    s3_key_path=config.ssec,
                                    disk=config.file_size)
@@ -628,7 +638,7 @@ def main():
     :Dependencies:
     Python 2.7
     curl            - apt-get install curl
-    virtualenv       - apt-get install python-virtualenv
+    virtualenv      - apt-get install python-virtualenv
     pip             - apt-get install python-pip
     toil            - pip install toil
     docker          - http://docs.docker.com/engine/installation/
@@ -639,11 +649,11 @@ def main():
     # Generate subparsers
     subparsers = parser.add_subparsers(dest='command')
     subparsers.add_parser('generate-config',
-                          help='Generates an editable inputs in the current working directory.')
+                          help='Generates an editable config in the current working directory.')
     subparsers.add_parser('generate-manifest',
                           help='Generates an editable manifest in the current working directory.')
     subparsers.add_parser('generate',
-                          help='Generates a inputs and manifest in the current working directory.')
+                          help='Generates a config and manifest in the current working directory.')
 
     # Run subparser
     parser_run = subparsers.add_parser('run', help='Runs the GATK germline pipeline')
@@ -697,7 +707,7 @@ def main():
         # Add BAM sample from command line
         if options.sample:
             uuid, url = options.sample
-            # samples tuple: (uuid, url, url2, rg_line)
+            # samples tuple: (uuid, url, paired_url, rg_line)
             # BAM samples should not have as paired URL or read group line
             samples.append(GermlineSample(uuid, url, None, None))
 

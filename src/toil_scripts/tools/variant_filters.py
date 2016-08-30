@@ -40,45 +40,6 @@ def gatk_select_variants(job, mode, vcf_id, config):
     return job.fileStore.writeGlobalFile(os.path.join(work_dir, 'output.vcf'))
 
 
-def split_vcf_by_name(job, sample_names, vcf_id, config):
-    """
-    Splits a VCF using a list of sample names.
-
-    :param JobFunctionWrappingJob job: passed automatically by Toil
-    :param list sample_names: Sample names
-    :param str vcf_id: VCF FileStoreID
-    :param Namespace config: Configuration and shared FileStoreIDs
-    :return: VCF FileStoreIDs
-    :rtype: dictionary
-    """
-    job.fileStore.logToMaster('Splitting VCF with GATK SelectVariants')
-    work_dir = job.fileStore.getLocalTempDir()
-    inputs = {'genome.fa': config.genome_fasta,
-              'genome.fa.fai': config.genome_fai,
-              'genome.dict': config.genome_dict,
-              'input.vcf': vcf_id}
-    for name, file_store_id in inputs.iteritems():
-        job.fileStore.readGlobalFile(file_store_id, os.path.join(work_dir, name))
-
-    vcfs = {}
-    for sample in sample_names:
-        output = '{}.vcf'.format(sample)
-        command = ['-T', 'SelectVariants',
-                   '-R', 'genome.fa',
-                   '-V', 'input.vcf',
-                   '-o', output,
-                   '--sample_name', sample]
-        outputs = {output: None}
-        docker_call(work_dir=work_dir,
-                    env={'JAVA_OPTS': '-Djava.io.tmpdir=/data/ -Xmx{}'.format(job.memory)},
-                    parameters=command,
-                    tool='quay.io/ucsc_cgl/gatk:3.5--dba6dae49156168a909c43330350c6161dc7ecc2',
-                    inputs=inputs.keys(),
-                    outputs=outputs)
-        vcfs[sample] = job.fileStore.writeGlobalFile(os.path.join(work_dir, output))
-    return vcfs
-
-
 def gatk_variant_filtration(job, mode, vcf_id, config):
     """
     Filters VCF using GATK recommended filters. VCF must contain a single variant
