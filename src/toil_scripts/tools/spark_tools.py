@@ -8,7 +8,6 @@ ADAM/Spark pipeline
 
 import os.path
 
-from toil_scripts.adam_uberscript.automated_scaling import SparkMasterAddress
 from toil_scripts.lib import require
 from toil_scripts.lib.programs import docker_call
 
@@ -34,13 +33,8 @@ class MasterAddress(str):
     True
     """
     def __init__(self, master_ip):
-        # TBD: this could do more tricks like always mapping an IP address to 'spark-master' etc.
-        if master_ip == 'auto':
-            super(MasterAddress, self).__init__('spark-master')
-            self.actual = SparkMasterAddress.load_in_toil().value
-        else:
-            super(MasterAddress, self).__init__(master_ip)
-            self.actual = self
+        super(MasterAddress, self).__init__(master_ip)
+        self.actual = self
 
     def docker_parameters(self, docker_parameters=None):
         """
