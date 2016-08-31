@@ -33,8 +33,8 @@ help:
 	@echo "$$help"
 
 
-python=python2.7
-pip=pip2.7
+python=python
+pip=pip
 tests=src
 extras=
 
@@ -78,7 +78,7 @@ clean: clean_develop clean_sdist clean_pypi
 
 check_venv:
 	@$(python) -c 'import sys; sys.exit( int( not hasattr(sys, "real_prefix") ) )' \
-		|| ( echo "$(red)A virtualenv must be active.$(normal)" ; false )
+		|| ( echo "$(red)A virtualenv must be active.$(normal)" ; true )
 
 
 check_clean_working_copy:

@@ -120,6 +120,8 @@ from multiprocessing import cpu_count
 import yaml
 # import toil features
 from toil.job import Job
+# these don't seem necessary! but, must be imported here due to a serialization issue
+from toil.lib.spark import spawn_spark_cluster
 
 # import job steps from other toil pipelines
 from toil_scripts.adam_pipeline.adam_preprocessing import * #static_adam_preprocessing_dag
@@ -128,13 +130,7 @@ from toil_scripts.gatk_germline.germline import * #batch_start
 from toil_scripts.gatk_processing.gatk_preprocessing import * #download_gatk_files
 from toil_scripts.rnaseq_cgl.rnaseq_cgl_pipeline import generate_file
 
-# these don't seem necessary! but, must be imported here due to a serialization issue
-from toil_scripts.spark_utils.spawn_cluster import *
-
 from toil_scripts.lib.programs import mock_mode
-
-# import autoscaling tools
-from toil_scripts.adam_uberscript.automated_scaling import Samples
 
 def sample_loop(job, uuid_list, inputs):
   """
@@ -148,10 +144,6 @@ def sample_loop(job, uuid_list, inputs):
     rg_line = None
     if len(uuid_items) > 1:
         rg_line = uuid_items[1]
-
-    # are we autoscaling? if so, bump the cluster size by one now
-    if inputs.autoscale_cluster:
-        Samples.increase_nodes(uuid, 1)
 
     job.addChildJobFn(static_dag, uuid, rg_line, inputs)
 
@@ -172,6 +164,7 @@ def static_dag(job, uuid, rg_line, inputs):
     work_dir = job.fileStore.getLocalTempDir()
 
     inputs.cpu_count = cpu_count()
+    inputs.maxCores = sys.maxint
     args = {'uuid': uuid,
             's3_bucket': inputs.s3_bucket,
             'sequence_dir': inputs.sequence_dir,
@@ -182,9 +175,9 @@ def static_dag(job, uuid, rg_line, inputs):
     inputs.output_dir = 's3://{s3_bucket}/alignment{dir_suffix}'.format(**args)
     bwa = job.wrapJobFn(download_reference_files,
                         inputs,
-                        [uuid,
-                         's3://{s3_bucket}/{sequence_dir}/{uuid}_1.fastq.gz'.format(**args),
-                         's3://{s3_bucket}/{sequence_dir}/{uuid}_2.fastq.gz'.format(**args)]).encapsulate()
+                        [[uuid,
+                         ['s3://{s3_bucket}/{sequence_dir}/{uuid}_1.fastq.gz'.format(**args),
+                          's3://{s3_bucket}/{sequence_dir}/{uuid}_2.fastq.gz'.format(**args)]]]).encapsulate()
 
     # get head ADAM preprocessing job function and encapsulate it
     adam_preprocess = job.wrapJobFn(static_adam_preprocessing_dag,
@@ -219,102 +212,38 @@ def static_dag(job, uuid, rg_line, inputs):
                                    's3://{s3_bucket}/analysis{dir_suffix}/{uuid}'.format(**args),
                                    suffix='.gatk').encapsulate()
 
-    # add code to bump the number of jobs after alignment
-    # start with -1 since we already have a single node for our sample
-    nodes_needed_after_alignment = -1
-
-    # adam needs:
-    # - a spark driver
-    # - a spark master/hdfs namenode
-    # - _n_ spark workers/hdfs datanodes
-    if (inputs.pipeline_to_run == "adam" or
-        inputs.pipeline_to_run == "both"):
-        if inputs.master_ip:
-            nodes_needed_after_alignment += 1
-        else:
-            nodes_needed_after_alignment += (inputs.num_nodes + 1)
-
-    # gatk needs one node
-    if (inputs.pipeline_to_run == "gatk" or
-        inputs.pipeline_to_run == "both"):
-        nodes_needed_after_alignment += 1
-
-    # since we evaluate this conditional repeatedly, just calculate it once
-    # we should only schedule the job that increases the node count if we
-    # are using autoscaling _and_ we are increasing the node count
-    autoscale_after_alignment = (nodes_needed_after_alignment > 1) and inputs.autoscale_cluster
-
-    if autoscale_after_alignment:
-        # create a job that runs after alignment and increases the number of nodes in the system
-        increase_nodes_after_alignment = job.wrapJobFn(increase_node_count,
-                                                       nodes_needed_after_alignment - 1,
-                                                       uuid)
-
-        # create a job that runs after ADAM's preprocessing to decrease the number of nodes
-        decrease_nodes_after_adam_preprocess = job.wrapJobFn(decrease_node_count,
-                                                             inputs.num_nodes,
-                                                             uuid)
-
     # wire up dag
     if not inputs.skip_alignment:
         job.addChild(bwa)
 
-        if autoscale_after_alignment:
-            bwa.addChild(increase_nodes_after_alignment)
-    elif autoscale_after_alignment:
-        job.addChild(increase_nodes_after_alignment)
-
     if (inputs.pipeline_to_run == "adam" or
         inputs.pipeline_to_run == "both"):
 
         if inputs.skip_preprocessing:
 
-            # TODO: currently, we don't support autoscaling if you're just
-            # running variant calling
             job.addChild(gatk_adam_call)
         else:
-            if autoscale_after_alignment:
-                increase_nodes_after_alignment.addChild(adam_preprocess)
-            elif inputs.skip_alignment:
+            if inputs.skip_alignment:
                 job.addChild(adam_preprocess)
             else:
                 bwa.addChild(adam_preprocess)
 
-            # if we are running autoscaling, then we should decrease the cluster
-            # size after adam completes
-            if inputs.autoscale_cluster and not inputs.master_ip:
-                adam_preprocess.addChild(decrease_nodes_after_adam_preprocess)
-                decrease_nodes_after_adam_preprocess.addChild(gatk_adam_call)
-            else:
-                adam_preprocess.addChild(gatk_adam_call)
+            adam_preprocess.addChild(gatk_adam_call)
 
     if (inputs.pipeline_to_run == "gatk" or
         inputs.pipeline_to_run == "both"):
 
         if inputs.skip_preprocessing:
 
-            # TODO: currently, we don't support autoscaling if you're just
-            # running variant calling
             job.addChild(gatk_gatk_call)
         else:
-            if autoscale_after_alignment:
-                increase_nodes_after_alignment.addChild(gatk_preprocess)
-            elif inputs.skip_alignment:
+            if inputs.skip_alignment:
                 job.addChild(gatk_preprocess)
             else:
                 bwa.addChild(gatk_preprocess)
 
             gatk_preprocess.addChild(gatk_gatk_call)
 
-
-def increase_node_count(job, nodes_to_add, uuid):
-
-    Samples.increase_nodes(uuid, nodes_to_add)
-
-
-def decrease_node_count(job, nodes_to_add, uuid):
-
-    Samples.decrease_nodes(uuid, nodes_to_add)
 
 def generate_mock_config():
 

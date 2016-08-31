@@ -21,7 +21,6 @@ from setuptools.command.test import test as TestCommand
 from version import version
 from pkg_resources import parse_version, require, DistributionNotFound
 
-
 def check_provided(distribution, min_version, max_version=None, optional=False):
     min_version = parse_version(min_version)
     if max_version is not None:

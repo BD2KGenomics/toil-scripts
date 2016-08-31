@@ -6,7 +6,9 @@ ADAM/Spark pipeline
 @author Frank Austin Nothaft, fnothaft@berkeley.
 """
 
-from toil_scripts.adam_uberscript.automated_scaling import SparkMasterAddress
+import os.path
+
+from toil_scripts.lib import require
 from toil_scripts.lib.programs import docker_call
 
 
@@ -31,13 +33,8 @@ class MasterAddress(str):
     True
     """
     def __init__(self, master_ip):
-        # TBD: this could do more tricks like always mapping an IP address to 'spark-master' etc.
-        if master_ip == 'auto':
-            super(MasterAddress, self).__init__('spark-master')
-            self.actual = SparkMasterAddress.load_in_toil().value
-        else:
-            super(MasterAddress, self).__init__(master_ip)
-            self.actual = self
+        super(MasterAddress, self).__init__(master_ip)
+        self.actual = self
 
     def docker_parameters(self, docker_parameters=None):
         """
@@ -115,7 +112,7 @@ def call_conductor(master_ip, src, dst, memory=None, override_parameters=None):
     :type override_parameters: list of string or None
     """
 
-    arguments = ["--", "-C", src, dst]
+    arguments = ["-C", src, dst]
 
     docker_call(rm=False,
                 tool="quay.io/ucsc_cgl/conductor",
@@ -128,7 +125,11 @@ def call_conductor(master_ip, src, dst, memory=None, override_parameters=None):
                 mock=False)
 
 
-def call_adam(master_ip, arguments, memory=None, override_parameters=None):
+def call_adam(master_ip, arguments,
+              memory=None,
+              override_parameters=None,
+              run_local=False,
+              native_adam_path=None):
     """
     Invokes the ADAM container. Find ADAM at https://github.com/bigdatagenomics/adam.
 
@@ -136,20 +137,54 @@ def call_adam(master_ip, arguments, memory=None, override_parameters=None):
     :param arguments: Arguments to pass to ADAM.
     :param memory: Gigabytes of memory to provision for Spark driver/worker.
     :param override_parameters: Parameters passed by the user, that override our defaults.
+    :param native_adam_path: Path to ADAM executable. If not provided, Docker is used.
+    :param run_local: If true, runs Spark with the --master local[*] setting, which uses
+      all cores on the local machine. The master_ip will be disregarded.
 
     :type masterIP: MasterAddress
     :type arguments: list of string
     :type memory: int or None
     :type override_parameters: list of string or None
+    :type native_adam_path: string or None
+    :type run_local: boolean
     """
-    default_params = ["--conf", "spark.driver.maxResultSize=0"] # set max result size to unlimited, see #177
+    if local:
+        master = ["--master", "local[*]"]
+    else:
+        master = ["--master",
+                  ("spark://%s:%s" % (master_ip, SPARK_MASTER_PORT)),
+                  "--conf", ("spark.hadoop.fs.default.name=hdfs://%s:%s" % (master_ip, HDFS_MASTER_PORT)),]
 
-    docker_call(rm=False,
-                tool="quay.io/ucsc_cgl/adam:962-ehf--6e7085f8cac4b9a927dc9fb06b48007957256b80",
-                docker_parameters=master_ip.docker_parameters(["--net=host"]),
-                parameters=_make_parameters(master_ip,
-                                            default_params,
-                                            memory,
-                                            arguments,
-                                            override_parameters),
-                mock=False)
+    default_params = (master + [
+            # set max result size to unlimited, see #177
+            "--conf", "spark.driver.maxResultSize=0",
+            # these memory tuning parameters were derived in the course of running the
+            # experiments for the ADAM sigmod paper:
+            #
+            # Nothaft, Frank Austin, et al. "Rethinking data-intensive science using scalable
+            # analytics systems." Proceedings of the 2015 ACM SIGMOD International Conference
+            # on Management of Data. ACM, 2015.
+            #
+            # the memory tunings reduce the amount of memory dedicated to caching, which we don't
+            # take advantage of, and the network timeout flag reduces the number of job failures
+            # caused by heavy gc load
+            "--conf", "spark.storage.memoryFraction=0.3",
+            "--conf", "spark.storage.unrollFraction=0.1",
+            "--conf", "spark.network.timeout=300s"])
+
+    # are we running adam via docker, or do we have a native path?
+    if native_adam_path is None:
+        docker_call(rm=False,
+                    tool="quay.io/ucsc_cgl/adam:962-ehf--6e7085f8cac4b9a927dc9fb06b48007957256b80",
+                    docker_parameters=master_ip.docker_parameters(["--net=host"]),
+                    parameters=_make_parameters(master_ip,
+                                                default_params,
+                                                memory,
+                                                arguments,
+                                                override_parameters),
+                    mock=False)
+    else:
+        check_call([os.path.join(native_adam_path, "bin/adam-submit")] +
+                   default_params +
+                   arguments)
+

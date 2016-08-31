@@ -1,7 +1,7 @@
 from contextlib import closing
 import os
-import tarfile
 import shutil
+import tarfile
 
 
 def tarball_files(tar_name, file_paths, output_dir='.', prefix=''):
@@ -21,18 +21,18 @@ def tarball_files(tar_name, file_paths, output_dir='.', prefix=''):
             f_out.add(file_path, arcname=arcname)
 
 
-def copy_files(file_paths, output_dir):
+def __forall_files(file_paths, output_dir, op):
     """
-    Moves files from the working directory to the output directory.
+    Applies a function to a set of files and an output directory.
 
     :param str output_dir: Output directory
     :param list[str] file_paths: Absolute file paths to move
     """
     for file_path in file_paths:
         if not file_path.startswith('/'):
-            raise ValueError('Path provided is relative not absolute.')
+            raise ValueError('Path provided (%s) is relative not absolute.' % file_path)
         dest = os.path.join(output_dir, os.path.basename(file_path))
-        shutil.copy(file_path, dest)
+        op(file_path, dest)
 
 
 def copy_file_job(job, name, file_id, output_dir):
@@ -47,6 +47,33 @@ def copy_file_job(job, name, file_id, output_dir):
     work_dir = job.fileStore.getLocalTempDir()
     fpath = job.fileStore.readGlobalFile(file_id, os.path.join(work_dir, name))
     copy_files([fpath], output_dir)
+
+
+def move_files(file_paths, output_dir):
+    """
+    Moves files from the working directory to the output directory.
+
+    Important note: this function can couple dangerously with caching.
+    Specifically, if this function is called on a file in the cache, the cache
+    will contain a broken reference. This may lead to a non-existent file path
+    being passed to later jobs. Don't call this function on files that are in
+    the cache, unless you know for sure that the input file will not be used by
+    any later jobs.
+
+    :param str output_dir: Output directory
+    :param list[str] file_paths: Absolute file paths to move
+    """
+    __forall_files(file_paths, output_dir, shutil.move)
+
+
+def copy_files(file_paths, output_dir):
+    """
+    Moves files from the working directory to the output directory.
+
+    :param str output_dir: Output directory
+    :param list[str] file_paths: Absolute file paths to move
+    """
+    __forall_files(file_paths, output_dir, shutil.copy)
 
 
 def consolidate_tarballs_job(job, fname_to_id):
