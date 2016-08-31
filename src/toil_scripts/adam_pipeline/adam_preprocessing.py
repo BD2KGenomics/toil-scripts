@@ -39,7 +39,6 @@ import yaml
 from toil.job import Job
 from toil.lib.spark import spawn_spark_cluster
 
-from toil_scripts.adam_uberscript.automated_scaling import SparkMasterAddress
 from toil_scripts.lib import require
 from toil_scripts.lib.files import copy_files, move_files
 from toil_scripts.lib.programs import docker_call, mock_mode
@@ -117,7 +116,6 @@ def adam_convert(master_ip, inputs, in_file, in_snps, adam_file, adam_snps, spar
               ["transform", in_file, adam_file],
               memory=inputs.memory,
               run_local=inputs.run_local,
-              local_dir=inputs.local_dir,
               native_adam_path=inputs.native_adam_path)
 
     in_file_name = in_file.split("/")[-1]
@@ -129,7 +127,6 @@ def adam_convert(master_ip, inputs, in_file, in_snps, adam_file, adam_snps, spar
               ["vcf2adam", "-only_variants", in_snps, adam_snps],
               memory=inputs.memory,
               run_local=inputs.run_local,
-              local_dir=inputs.local_dir,
               native_adam_path=inputs.native_adam_path)
 
     in_snps_name = in_snps.split("/")[-1]
@@ -153,7 +150,6 @@ def adam_transform(master_ip, inputs, in_file, snp_file, hdfs_dir, out_file, spa
                "-mark_duplicate_reads"],
               memory=inputs.memory,
               run_local=inputs.run_local,
-              local_dir=inputs.local_dir,
               native_adam_path=inputs.native_adam_path)
 
     #FIXME
@@ -168,7 +164,6 @@ def adam_transform(master_ip, inputs, in_file, snp_file, hdfs_dir, out_file, spa
                "-realign_indels"],
               memory=inputs.memory,
               run_local=inputs.run_local,
-              local_dir=inputs.local_dir,
               native_adam_path=inputs.native_adam_path)
 
     remove_file(master_ip, hdfs_dir + "/mkdups.adam*", spark_on_toil)
@@ -182,7 +177,6 @@ def adam_transform(master_ip, inputs, in_file, snp_file, hdfs_dir, out_file, spa
                "-known_snps", snp_file],
               memory=inputs.memory,
               run_local=inputs.run_local,
-              local_dir=inputs.local_dir,
               native_adam_path=inputs.native_adam_path)
 
     remove_file(master_ip, "ri.adam*", spark_on_toil)
@@ -195,7 +189,6 @@ def adam_transform(master_ip, inputs, in_file, snp_file, hdfs_dir, out_file, spa
                "-sort_reads", "-single"],
               memory=inputs.memory,
               run_local=inputs.run_local,
-              local_dir=inputs.local_dir,
               native_adam_path=inputs.native_adam_path)
 
     remove_file(master_ip, "bqsr.adam*", spark_on_toil)
@@ -352,7 +345,8 @@ def main():
     parser_run.add_argument('--config', default='adam_preprocessing.config', type=str,
                             help='Path to the (filled in) config file, generated with "generate-config". '
                                  '\nDefault value: "%(default)s"')
-    parser_run.add_argument('--sample', help='The full s3 url/path to the input SAM or BAM file')
+    parser_run.add_argument('--sample', help='The S3 URL or local path to the input SAM or BAM file.'
+                            'NOTE: unlike other pipelines, we do not support ftp://, gnos://, etc. schemes.')
     parser_run.add_argument('--output-dir', required=True, default=None,
                             help='full path where final results will be output')
     parser_run.add_argument('-s', '--suffix', default='',

@@ -53,6 +53,13 @@ def move_files(file_paths, output_dir):
     """
     Moves files from the working directory to the output directory.
 
+    Important note: this function can couple dangerously with caching.
+    Specifically, if this function is called on a file in the cache, the cache
+    will contain a broken reference. This may lead to a non-existent file path
+    being passed to later jobs. Don't call this function on files that are in
+    the cache, unless you know for sure that the input file will not be used by
+    any later jobs.
+
     :param str output_dir: Output directory
     :param list[str] file_paths: Absolute file paths to move
     """

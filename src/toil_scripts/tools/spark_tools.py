@@ -129,7 +129,6 @@ def call_adam(master_ip, arguments,
               memory=None,
               override_parameters=None,
               run_local=False,
-              local_dir=None,
               native_adam_path=None):
     """
     Invokes the ADAM container. Find ADAM at https://github.com/bigdatagenomics/adam.
@@ -139,27 +138,36 @@ def call_adam(master_ip, arguments,
     :param memory: Gigabytes of memory to provision for Spark driver/worker.
     :param override_parameters: Parameters passed by the user, that override our defaults.
     :param native_adam_path: Path to ADAM executable. If not provided, Docker is used.
+    :param run_local: If true, runs Spark with the --master local[*] setting, which uses
+      all cores on the local machine. The master_ip will be disregarded.
 
     :type masterIP: MasterAddress
     :type arguments: list of string
     :type memory: int or None
     :type override_parameters: list of string or None
     :type native_adam_path: string or None
+    :type run_local: boolean
     """
     if local:
         master = ["--master", "local[*]"]
-        require(local_dir is not None,
-                "If running in local mode, the work dir must be set.")
-        work_dir = local_dir
     else:
         master = ["--master",
                   ("spark://%s:%s" % (master_ip, SPARK_MASTER_PORT)),
                   "--conf", ("spark.hadoop.fs.default.name=hdfs://%s:%s" % (master_ip, HDFS_MASTER_PORT)),]
-        work_dir = '.'
 
     default_params = (master + [
             # set max result size to unlimited, see #177
             "--conf", "spark.driver.maxResultSize=0",
+            # these memory tuning parameters were derived in the course of running the
+            # experiments for the ADAM sigmod paper:
+            #
+            # Nothaft, Frank Austin, et al. "Rethinking data-intensive science using scalable
+            # analytics systems." Proceedings of the 2015 ACM SIGMOD International Conference
+            # on Management of Data. ACM, 2015.
+            #
+            # the memory tunings reduce the amount of memory dedicated to caching, which we don't
+            # take advantage of, and the network timeout flag reduces the number of job failures
+            # caused by heavy gc load
             "--conf", "spark.storage.memoryFraction=0.3",
             "--conf", "spark.storage.unrollFraction=0.1",
             "--conf", "spark.network.timeout=300s"])
