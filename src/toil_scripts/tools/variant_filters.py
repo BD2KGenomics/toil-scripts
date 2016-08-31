@@ -138,9 +138,9 @@ def gatk_variant_recalibrator(job, mode, vcf_id, config):
                '-input', 'input.vcf',
                '-nt', str(job.cores),
                '--maxGaussians', '4',
-               '-an', 'QualByDepth',
-               '-an', 'FisherStrand',
-               '-an', 'StrandOddsRatio',
+               '-an', 'QD',   # QualByDepth
+               '-an', 'FS',   # FisherStrand'
+               '-an', 'SOR',  # StrandOddsRatio'
                '-an', 'ReadPosRankSum',
                '-an', 'MQRankSum',
                '-an', 'InbreedingCoeff',
@@ -158,7 +158,7 @@ def gatk_variant_recalibrator(job, mode, vcf_id, config):
                     '-resource:omni,known=false,training=true,truth=true,prior=12.0', 'omni.vcf',
                     '-resource:dbsnp,known=true,training=false,truth=false,prior=2.0', 'dbsnp.vcf',
                     '-resource:1000G,known=false,training=true,truth=false,prior=10.0', '1000G.vcf',
-                    '-an', 'RMSMappingQuality',
+                    '-an', 'MQ',  # RMSMappingQuality'
                     '-mode', 'SNP']
         inputs['hapmap.vcf'] = config.hapmap
         inputs['omni.vcf'] = config.omni
@@ -243,13 +243,17 @@ def gatk_apply_variant_recalibration(job, mode, vcf_id, recal_id, tranches_id, c
     return job.fileStore.writeGlobalFile(os.path.join(work_dir, 'vqsr.vcf'))
 
 
-def gatk_combine_variants(job, vcfs, config):
+def gatk_combine_variants(job, vcfs, config, merge_option='UNIQUIFY'):
     """
-    Combine a dictionary of VCF FileStoreIDs from the same sample
+    Combines a dictionary of VCF FileStoreIDs.
 
     :param JobFunctionWrappingJob job: Toil Job instance
     :param dict vcfs: Dictionary of VCF FileStoreIDs
     :param Namespace config: Pipeline configuration options and shared files
+    :param str merge_option: Value for --genotypemergeoption flag (Default: 'UNIQUIFY')
+                            'UNIQUIFY': Multiple variants at a single site are merged into a
+                                        single variant record.
+                            'UNSORTED': Used to merge variants from the same sample
     :return: Merged VCF FileStoreID
     :rtype: str
     """
@@ -266,7 +270,7 @@ def gatk_combine_variants(job, vcfs, config):
     command = ['-T', 'CombineVariants',
                '-R', '/data/genome.fa',
                '-o', '/data/merged.vcf',
-               '--genotypemergeoption', 'UNSORTED']  # For merging VCFs from same sample
+               '--genotypemergeoption', merge_option]
 
     for uuid, vcf_id in vcfs.iteritems():
         command.extend(['--variant', os.path.join('/data', uuid)])

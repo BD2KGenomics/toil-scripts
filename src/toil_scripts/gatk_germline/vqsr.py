@@ -34,7 +34,7 @@ def vqsr_pipeline(job, uuid, vcf_id, config):
                               'SNP',
                               vcf_id,
                               config,
-                              disk=snp_recal_disk, cores=config.cores)
+                              disk=snp_recal_disk, cores=config.cores, memory=config.xmx)
 
     # Estimate disk resource as twice the input VCF plus 10G for genome data and INDEL databases
     indel_recal_disk = PromisedRequirement(lambda x: 2 * x.size + human2bytes('10G'), vcf_id)
@@ -88,3 +88,82 @@ def vqsr_pipeline(job, uuid, vcf_id, config):
                                 s3_key_path=config.ssec)
     apply_indel_recal.addChild(output_vqsr)
     return apply_indel_recal.rv()
+
+
+def main():
+    """
+    Simple command line interface to run VQSR pipeline
+    """
+    import argparse
+
+    from toil.job import Job
+    import yaml
+
+    from toil_scripts.gatk_germline.germline import download_shared_files, batch_and_joint_genotype
+    from toil_scripts.lib.urls import download_url_job
+
+    parser = argparse.ArgumentParser(description=main.__doc__,
+                                     formatter_class=argparse.RawTextHelpFormatter)
+
+    parser.add_argument('--manifest',
+                        required=True,
+                        type=str,
+                        help='Path to UUID and GVCF file in the format: uuid url')
+
+    parser.add_argument('--config',
+                        required=True,
+                        type=str,
+                        help='Path or URL to Toil germline config file')
+
+    parser.add_argument('--output-dir',
+                        default=None,
+                        help='Path/URL to output directory')
+
+    Job.Runner.addToilOptions(parser)
+    options = parser.parse_args()
+
+    # Parse inputs
+    inputs = {x.replace('-', '_'): y for x, y in
+              yaml.load(open(options.config).read()).iteritems()}
+
+    inputs = argparse.Namespace(**inputs)
+
+    inputs.cores = 8
+    inputs.xmx = '10G'
+    inputs.run_bwa = False
+    inputs.preprocess = False
+    inputs.joint = True
+    inputs.run_vqsr = True
+    inputs.run_oncotator = False
+    inputs.ssec = None
+    inputs.suffix = ''
+    inputs.unsafe_mode = False
+    inputs.annotations = ['QualByDepth',
+                           'FisherStrand',
+                           'StrandOddsRatio',
+                           'ReadPosRankSumTest',
+                           'MappingQualityRankSumTest',
+                           'RMSMappingQuality',
+                           'InbreedingCoeff']
+
+    shared_files = Job.wrapJobFn(download_shared_files, inputs).encapsulate()
+
+    gvcfs = {}
+
+    with open(options.manifest, 'r') as f:
+        for line in f:
+            uuid, url = line.strip().split()
+            gvcfs[uuid] = shared_files.addChildJobFn(download_url_job,
+                                                     url,
+                                                     name='toil.g.vcf',
+                                                     s3_key_path=None).rv()
+
+    shared_files.addFollowOnJobFn(batch_and_joint_genotype,
+                                  gvcfs.items(),
+                                  shared_files.rv(),
+                                  cores=8)
+
+    Job.Runner.startToil(shared_files, options)
+
+if __name__ == '__main__':
+    main()

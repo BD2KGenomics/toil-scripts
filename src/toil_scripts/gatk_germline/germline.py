@@ -35,6 +35,8 @@ import argparse
 from collections import namedtuple
 from copy import deepcopy
 import logging
+import math
+from multiprocessing import cpu_count
 import os
 import re
 from urlparse import urlparse
@@ -167,7 +169,11 @@ def gatk_germline_pipeline(job, samples, config):
 
     filtered_vcfs = {}
     if config.joint:
-        filtered_vcfs = joint_genotype_and_filter(group_bam_jobs, gvcfs, config)
+        filtered_vcfs = job.addChildJobFn(batch_and_joint_genotype,
+                                          gvcfs.items(),
+                                          config,
+                                          cores=cpu_count()  # Reserve entire node
+                                          ).rv()
 
     else:
         for uuid, gvcf_id in gvcfs.iteritems():
@@ -202,7 +208,55 @@ def gatk_germline_pipeline(job, samples, config):
     return filtered_vcfs
 
 
-def joint_genotype_and_filter(job, gvcfs, config):
+def batch_and_joint_genotype(job, iterable, config, disk_buffer=0.5):
+    """
+    Uses the available disk on worker node and the total file sizes to organize which samples
+    are batched together. Request all available cores when calling this function to get a better
+    estimate of the available disk space on the worker node.
+
+    :param JobFunctionWrappingJob job: passed automatically by Toil
+    :param list[tuples] iterable: Paired UUID and FileStoreID
+    :param float disk_buffer: Fraction of available disk to reserve for VCFs (Default: 0.5)
+    :returns: Yields a batch of paired UUIDs and FileStoreIDs
+    :rtype: dict
+    """
+    work_dir = job.fileStore.getLocalTempDir()
+    st = os.statvfs(work_dir)
+    free = st.f_bavail * st.f_frsize
+    usable = int(disk_buffer * free)
+
+    total_size = sum(elem[1].size for elem in iterable)
+
+    # Number of times the usable disk space goes into the total file size
+    times_in = total_size / usable
+
+    # If total size is less than available disk, return entire cohort
+    joint_filtered_vcfs = {}
+    if times_in <= 1:
+        joint_filtered_vcfs['joint-filter'] = job.addChildJobFn(joint_genotype_and_filter,
+                                                                'joint-filter',
+                                                                dict(iterable),
+                                                                config).rv()
+
+    else:
+        # Determine how many batches there will be
+        batches = [[] for _ in range(int(math.ceil(times_in)))]
+        # Sort iterable by the file size
+        sorted_iterable = sorted(iterable, key=lambda elem: elem[1].size, reverse=True)
+        for elem in sorted_iterable:
+            batches = sorted(batches, key=lambda b: sum(elem[1].size for elem in b))
+            # Add the next VCF to batch with the smallest disk footprint
+            batches[0].append(elem)
+        for index, batch in enumerate(batches):
+            uuid = 'joint-batch-%d' % index
+            joint_filtered_vcfs[uuid] = job.addChildJobFn(joint_genotype_and_filter,
+                                                          uuid,
+                                                          dict(batch),
+                                                          config).rv()
+    return joint_filtered_vcfs
+
+
+def joint_genotype_and_filter(job, uuid, gvcfs, config):
     """
     Joint genotypes a cohort of GVCFs and filters the output.
 
@@ -212,8 +266,10 @@ def joint_genotype_and_filter(job, gvcfs, config):
     :return: Dictionary containing joint-filtered VCF
     :rtype: dict
     """
+    # Estimate disk requirement as 50% more than the sum of the VCF file sizes plus 5G for
+    # reference data.
     joint_genotype_gvcf_disk = PromisedRequirement(
-        lambda lst: 2 * sum(x.size for x in lst) + human2bytes('5G'),
+        lambda lst: int(1.5 * sum(x.size for x in lst)) + human2bytes('5G'),
         gvcfs.values())
     joint_genotype_gvcf = job.addChildJobFn(gatk_genotype_gvcfs,
                                             gvcfs,
@@ -222,7 +278,7 @@ def joint_genotype_and_filter(job, gvcfs, config):
                                             disk=joint_genotype_gvcf_disk,
                                             memory=config.xmx)
 
-    joint_genotyped_filename = 'joint.genotyped%s.vcf' % config.suffix
+    joint_genotyped_filename = '%s.genotyped%s.vcf' % (uuid, config.suffix)
     joint_genotype_gvcf.addChildJobFn(output_file_job,
                                       joint_genotyped_filename,
                                       joint_genotype_gvcf.rv(),
@@ -232,16 +288,15 @@ def joint_genotype_and_filter(job, gvcfs, config):
     # After joint genotyping, run VQSR or hard filter
     if config.run_vqsr:
         joint_vcf = joint_genotype_gvcf.addFollowOnJobFn(vqsr_pipeline,
-                                                         'joint',   # Use joint as prefix
+                                                         uuid,
                                                          joint_genotype_gvcf.rv(),
                                                          config)
     else:
         joint_vcf = joint_genotype_gvcf.addFollowOnJobFn(hard_filter_pipeline,
-                                                         'joint',   # Use joint as prefix
+                                                         uuid,
                                                          joint_genotype_gvcf.rv(),
                                                          config).rv()
-
-    return {'joint-filtered': joint_vcf.rv()}
+    return joint_vcf.rv()
 
 
 def annotate_vcfs(job, vcfs, config):
@@ -308,7 +363,7 @@ def parse_manifest(path_to_manifest):
                 require('.fq' in url.lower() or '.fastq' in url.lower(),
                         'Expected .fq extension:\n{}:\t{}'.format(uuid, url))
             else:
-                msg = 'Could not parse entry in manifest: %s\n%s' % (f.path, line)
+                msg = 'Could not parse entry in manifest: %s\n%s' % (f.name, line)
                 raise ValueError(msg)
             require(urlparse(url).scheme or url.startswith('syn'),
                     'Invalid URL passed for {}'.format(url))
@@ -697,7 +752,7 @@ def main():
                     program + ' must be installed on every node.'.format(program))
 
         require(os.path.exists(options.config), '{} not found. Please run '
-                                                '"generate-inputs"'.format(options.config))
+                                                '"generate-config"'.format(options.config))
 
         # Read sample manifest
         samples = []

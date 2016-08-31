@@ -69,6 +69,7 @@ def hard_filter_pipeline(job, uuid, vcf_id, config):
     merge_variants = job.wrapJobFn(gatk_combine_variants,
                                    {'SNPs': snp_filter.rv(), 'INDELs': indel_filter.rv()},
                                    config,
+                                   merge_option='UNSORTED',
                                    memory=config.xmx, disk=combine_variants_disk)
 
     job.addChild(select_snps)
