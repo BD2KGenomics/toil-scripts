@@ -92,9 +92,10 @@ def vqsr_pipeline(job, uuid, vcf_id, config):
 
 def main():
     """
-    Simple command line interface to run VQSR pipeline
+    Runs GATK VQSR for a cohort of GVCFs
     """
     import argparse
+    from multiprocessing import cpu_count
 
     from toil.job import Job
     import yaml
@@ -128,23 +129,18 @@ def main():
 
     inputs = argparse.Namespace(**inputs)
 
-    inputs.cores = 8
-    inputs.xmx = '10G'
     inputs.run_bwa = False
     inputs.preprocess = False
     inputs.joint = True
     inputs.run_vqsr = True
     inputs.run_oncotator = False
-    inputs.ssec = None
-    inputs.suffix = ''
-    inputs.unsafe_mode = False
     inputs.annotations = ['QualByDepth',
-                           'FisherStrand',
-                           'StrandOddsRatio',
-                           'ReadPosRankSumTest',
-                           'MappingQualityRankSumTest',
-                           'RMSMappingQuality',
-                           'InbreedingCoeff']
+                          'FisherStrand',
+                          'StrandOddsRatio',
+                          'ReadPosRankSumTest',
+                          'MappingQualityRankSumTest',
+                          'RMSMappingQuality',
+                          'InbreedingCoeff']
 
     shared_files = Job.wrapJobFn(download_shared_files, inputs).encapsulate()
 
@@ -161,7 +157,7 @@ def main():
     shared_files.addFollowOnJobFn(joint_genotype_and_filter,
                                   gvcfs.items(),
                                   shared_files.rv(),
-                                  cores=8)
+                                  cores=cpu_count())
 
     Job.Runner.startToil(shared_files, options)
 

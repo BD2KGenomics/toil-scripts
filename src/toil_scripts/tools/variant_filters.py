@@ -283,3 +283,40 @@ def gatk_combine_variants(job, vcfs, config, merge_option='UNIQUIFY'):
                 inputs=inputs.keys(),
                 outputs=outputs)
     return job.fileStore.writeGlobalFile(os.path.join(work_dir, 'merged.vcf'))
+
+
+def gatk_combine_gvcfs(job, gvcfs, config):
+    """
+    Combines a dictionary of GVCF FileStoreIDs.
+
+    :param JobFunctionWrappingJob job: Toil Job instance
+    :param dict gvcfs: Dictionary of GVCF FileStoreIDs
+    :param Namespace config: Pipeline configuration options and shared files
+    :return: Merged GVCF FileStoreID
+    :rtype: str
+    """
+    job.fileStore.logToMaster('Running GATK CombineGVCFs')
+    work_dir = job.fileStore.getLocalTempDir()
+
+    inputs = {'genome.fa': config.genome_fasta,
+              'genome.fa.fai': config.genome_fai,
+              'genome.dict': config.genome_dict}
+    inputs.update(gvcfs)
+    for name, file_store_id in inputs.iteritems():
+        job.fileStore.readGlobalFile(file_store_id, os.path.join(work_dir, name))
+
+    command = ['-T', 'CombineGVCFs',
+               '-R', '/data/genome.fa',
+               '-o', '/data/merged.g.vcf']
+
+    for uuid, vcf_id in gvcfs.iteritems():
+        command.extend(['--variant', os.path.join('/data', uuid)])
+
+    outputs = {'merged.vcf': None}
+    docker_call(work_dir=work_dir,
+                env={'JAVA_OPTS': '-Djava.io.tmpdir=/data/ -Xmx{}'.format(job.memory)},
+                parameters=command,
+                tool='quay.io/ucsc_cgl/gatk:3.5--dba6dae49156168a909c43330350c6161dc7ecc2',
+                inputs=inputs.keys(),
+                outputs=outputs)
+    return job.fileStore.writeGlobalFile(os.path.join(work_dir, 'merged.vcf'))

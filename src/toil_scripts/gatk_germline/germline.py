@@ -59,7 +59,7 @@ from toil_scripts.tools.indexing import run_samtools_faidx
 from toil_scripts.tools.preprocessing import run_gatk_preprocessing, \
     run_picard_create_sequence_dictionary, run_samtools_index, run_samtools_sort
 from toil_scripts.tools.variant_annotation import gatk_genotype_gvcfs, run_oncotator
-from toil_scripts.tools.variant_filters import gatk_combine_variants
+from toil_scripts.tools.variant_filters import gatk_combine_gvcfs
 
 
 logging.basicConfig(level=logging.INFO)
@@ -202,7 +202,7 @@ def joint_genotype_and_filter(job, iterable, config, disk_fraction=0.5):
     work_dir = job.fileStore.getLocalTempDir()
     st = os.statvfs(work_dir)
     free_disk = st.f_bavail * st.f_frsize
-    usable_disk = int(disk_fraction * free_disk)
+    usable_disk = disk_fraction * free_disk
 
     total_size = sum(elem[1].size for elem in iterable)
 
@@ -230,22 +230,23 @@ def joint_genotype_and_filter(job, iterable, config, disk_fraction=0.5):
         batch_dict = dict(batch)
         merged_batch_disk = PromisedRequirement(lambda lst: int(1.5 * sum(x.size for x in lst)),
                                                batch_dict.values())
-        merged_batches[batch_name] = job.addChildJobFn(gatk_combine_variants,
+        merged_batches[batch_name] = job.addChildJobFn(gatk_combine_gvcfs,
                                                        batch_dict,
                                                        config,
-                                                       merge_option='UNIQUIFY',
                                                        disk=merged_batch_disk,
                                                        memory=config.xmx).rv()
 
     total_merge_disk = PromisedRequirement(lambda lst: int(1.5 * sum(x.size for x in lst)),
                                            merged_batches.values())
-    total_merge_job = job.addFollowOnJobFn(gatk_combine_variants,
+    total_merge_job = job.addFollowOnJobFn(gatk_combine_gvcfs,
                                            merged_batches,
                                            config,
-                                           merge_option='UNIQUIFY',
                                            disk=total_merge_disk,
                                            memory=config.xmx)
-    return job.addFollowOnJobFn(genotype_and_filter, 'joint', total_merge_job.rv(), config).rv()
+    return total_merge_job.addChildJobFn(genotype_and_filter,
+                                         'joint',
+                                         total_merge_job.rv(),
+                                         config).rv()
 
 
 def genotype_and_filter(job, uuid, gvcf, config):
@@ -264,7 +265,7 @@ def genotype_and_filter(job, uuid, gvcf, config):
     genotype_gvcf_disk = PromisedRequirement(lambda x: int(1.5 * x.size + human2bytes('5G')),
                                                            gvcf)
     genotype_gvcf = job.addChildJobFn(gatk_genotype_gvcfs,
-                                      dict((uuid, gvcf)),
+                                      {uuid: gvcf},
                                       config,
                                       cores=config.cores,
                                       disk=genotype_gvcf_disk,
@@ -366,23 +367,23 @@ def parse_manifest(path_to_manifest):
     return samples
 
 
-def convert_space_resource(attribute, default):
+def convert_space_resource(value, default):
     """
     Converts resource requirement from human readable bytes to raw integer value.
 
-    :param str|int|None attribute: Space resource value
+    :param str|int|None value: Space resource value
     :param str default: Human readable parameter size
     :return: bytes
     :rtype: int
     """
-    if attribute is None:
+    if value is None:
         return human2bytes(default)
-    elif isinstance(attribute, str) and re.match('\d+\s*[MKG]', attribute.upper()):
-        return human2bytes(attribute)
-    elif isinstance(attribute, int):
-        return attribute
+    elif isinstance(value, str) and re.match('\d+\s*[MKG]', value.upper()):
+        return human2bytes(value)
+    elif isinstance(value, int):
+        return value
     else:
-        raise ValueError('Could not convert resource requirement: %s' % attribute)
+        raise ValueError('Could not convert resource requirement: %s' % value)
 
 
 def download_shared_files(job, config):
