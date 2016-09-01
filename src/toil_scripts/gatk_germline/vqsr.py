@@ -99,7 +99,7 @@ def main():
     from toil.job import Job
     import yaml
 
-    from toil_scripts.gatk_germline.germline import download_shared_files, batch_and_joint_genotype
+    from toil_scripts.gatk_germline.germline import download_shared_files, joint_genotype_and_filter
     from toil_scripts.lib.urls import download_url_job
 
     parser = argparse.ArgumentParser(description=main.__doc__,
@@ -158,7 +158,7 @@ def main():
                                                      name='toil.g.vcf',
                                                      s3_key_path=None).rv()
 
-    shared_files.addFollowOnJobFn(batch_and_joint_genotype,
+    shared_files.addFollowOnJobFn(joint_genotype_and_filter,
                                   gvcfs.items(),
                                   shared_files.rv(),
                                   cores=8)

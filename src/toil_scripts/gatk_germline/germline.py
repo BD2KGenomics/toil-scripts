@@ -59,6 +59,7 @@ from toil_scripts.tools.indexing import run_samtools_faidx
 from toil_scripts.tools.preprocessing import run_gatk_preprocessing, \
     run_picard_create_sequence_dictionary, run_samtools_index, run_samtools_sort
 from toil_scripts.tools.variant_annotation import gatk_genotype_gvcfs, run_oncotator
+from toil_scripts.tools.variant_filters import gatk_combine_variants
 
 
 logging.basicConfig(level=logging.INFO)
@@ -169,7 +170,7 @@ def gatk_germline_pipeline(job, samples, config):
 
     filtered_vcfs = {}
     if config.joint:
-        filtered_vcfs = job.addChildJobFn(batch_and_joint_genotype,
+        filtered_vcfs = job.addChildJobFn(joint_genotype_and_filter,
                                           gvcfs.items(),
                                           config,
                                           cores=cpu_count()  # Reserve entire node
@@ -177,125 +178,119 @@ def gatk_germline_pipeline(job, samples, config):
 
     else:
         for uuid, gvcf_id in gvcfs.iteritems():
-            genotype_gvcf_disk = PromisedRequirement(lambda vcf: 2 * vcf.size + human2bytes('5G'),
-                                                     gvcf_id)
-            genotype_gvcf = group_bam_jobs.addFollowOnJobFn(gatk_genotype_gvcfs,
-                                                            {uuid: gvcf_id},
-                                                            config,
-                                                            cores=config.cores,
-                                                            disk=genotype_gvcf_disk,
-                                                            memory=config.xmx)
+            filtered_vcfs[uuid] = job.addChildJobFn(genotype_and_filter,
+                                                    uuid,
+                                                    gvcf_id,
+                                                    config).rv()
 
-            genotyped_filename = '%s.genotyped%s.vcf' % (uuid, config.suffix)
-            genotype_gvcf.addChildJobFn(output_file_job,
-                                        genotyped_filename,
-                                        genotype_gvcf.rv(),
-                                        os.path.join(config.output_dir, uuid),
-                                        s3_key_path=config.ssec)
-
-            if config.run_vqsr:
-                job.fileStore.logToMaster('WARNING: Running VQSR without joint genotyping!')
-                filtered_vcfs[uuid] = genotype_gvcf.addFollowOnJobFn(vqsr_pipeline,
-                                                                     uuid,
-                                                                     genotype_gvcf.rv(),
-                                                                     config).rv()
-            else:
-                filtered_vcfs[uuid] = genotype_gvcf.addFollowOnJobFn(hard_filter_pipeline,
-                                                                     uuid,
-                                                                     genotype_gvcf.rv(),
-                                                                     config).rv()
     job.addChild(group_bam_jobs)
     return filtered_vcfs
 
 
-def batch_and_joint_genotype(job, iterable, config, disk_buffer=0.5):
+def joint_genotype_and_filter(job, iterable, config, disk_fraction=0.5):
     """
-    Uses the available disk on worker node and the total file sizes to organize which samples
-    are batched together. Request all available cores when calling this function to get a better
-    estimate of the available disk space on the worker node.
+    Batches GVCFs into one GVCF file and runs the genotype and filter pipeline.
+    Request all available cores when calling this function to get a better estimate of the
+    available disk space on the worker node.
 
     :param JobFunctionWrappingJob job: passed automatically by Toil
-    :param list[tuples] iterable: Paired UUID and FileStoreID
-    :param float disk_buffer: Fraction of available disk to reserve for VCFs (Default: 0.5)
+    :param list[tuples] iterable: Paired UUID and FileStoreIDs
+    :param float disk_fraction: Fraction of available disk to reserve for VCFs (Default: 0.5)
     :returns: Yields a batch of paired UUIDs and FileStoreIDs
     :rtype: dict
     """
     work_dir = job.fileStore.getLocalTempDir()
     st = os.statvfs(work_dir)
-    free = st.f_bavail * st.f_frsize
-    usable = int(disk_buffer * free)
+    free_disk = st.f_bavail * st.f_frsize
+    usable_disk = int(disk_fraction * free_disk)
 
     total_size = sum(elem[1].size for elem in iterable)
 
     # Number of times the usable disk space goes into the total file size
-    times_in = total_size / usable
+    times_in = total_size / usable_disk
 
-    # If total size is less than available disk, return entire cohort
-    joint_filtered_vcfs = {}
-    if times_in <= 1:
-        joint_filtered_vcfs['joint-filter'] = job.addChildJobFn(joint_genotype_and_filter,
-                                                                'joint-filter',
-                                                                dict(iterable),
-                                                                config).rv()
+    # Determine how many batches there will be
+    batches = [[] for _ in range(int(math.ceil(times_in)))]
+    batch_sums = {index: 0 for index in xrange(len(batches))}
+    # Sort iterable by the file size
+    sorted_iterable = sorted(iterable, key=lambda elem: elem[1].size, reverse=True)
+    # Iterate over sorted list of FileStoreIDs in descending order. Then, assign a GVCF
+    # to the smallest GVCF batch. Finally, merge all merged batches into a single GVCF
+    for elem in sorted_iterable:
+        # Add VCF to batch with the smallest disk footprint
+        min_batch_sum = min(batch_sums, key=batch_sums.get)
+        batches[min_batch_sum].append(elem)
+        # Unpack file store ID
+        _, FileStoreID = elem
+        batch_sums[min_batch_sum] += FileStoreID.size
 
-    else:
-        # Determine how many batches there will be
-        batches = [[] for _ in range(int(math.ceil(times_in)))]
-        # Sort iterable by the file size
-        sorted_iterable = sorted(iterable, key=lambda elem: elem[1].size, reverse=True)
-        for elem in sorted_iterable:
-            batches = sorted(batches, key=lambda b: sum(elem[1].size for elem in b))
-            # Add the next VCF to batch with the smallest disk footprint
-            batches[0].append(elem)
-        for index, batch in enumerate(batches):
-            uuid = 'joint-batch-%d' % index
-            joint_filtered_vcfs[uuid] = job.addChildJobFn(joint_genotype_and_filter,
-                                                          uuid,
-                                                          dict(batch),
-                                                          config).rv()
-    return joint_filtered_vcfs
+    merged_batches = {}
+    for index, batch in enumerate(batches):
+        batch_name = 'joint-batch-%d' % index
+        batch_dict = dict(batch)
+        merged_batch_disk = PromisedRequirement(lambda lst: int(1.5 * sum(x.size for x in lst)),
+                                               batch_dict.values())
+        merged_batches[batch_name] = job.addChildJobFn(gatk_combine_variants,
+                                                       batch_dict,
+                                                       config,
+                                                       merge_option='UNIQUIFY',
+                                                       disk=merged_batch_disk,
+                                                       memory=config.xmx).rv()
+
+    total_merge_disk = PromisedRequirement(lambda lst: int(1.5 * sum(x.size for x in lst)),
+                                           merged_batches.values())
+    total_merge_job = job.addFollowOnJobFn(gatk_combine_variants,
+                                           merged_batches,
+                                           config,
+                                           merge_option='UNIQUIFY',
+                                           disk=total_merge_disk,
+                                           memory=config.xmx)
+    return job.addFollowOnJobFn(genotype_and_filter, 'joint', total_merge_job.rv(), config).rv()
 
 
-def joint_genotype_and_filter(job, uuid, gvcfs, config):
+def genotype_and_filter(job, uuid, gvcf, config):
     """
-    Joint genotypes a cohort of GVCFs and filters the output.
+    Genotypes and filters a single VCF file using VQSR or hard filters
 
     :param JobFunctionWrappingJob job: passed automatically by Toil
-    :param dict gvcfs: Dictionary of UUIDs and GVCF FileStoreIDs
+    :param str uuid: sample unique identifier
+    :param str gvcf: GVCF FileStoreIDs
     :param Namespace config: Input parameters and shared FileStoreIDs
-    :return: Dictionary containing joint-filtered VCF
-    :rtype: dict
+    :return: Genotyped and filtered VCF FileStoreID
+    :rtype: str
     """
     # Estimate disk requirement as 50% more than the sum of the VCF file sizes plus 5G for
     # reference data.
-    joint_genotype_gvcf_disk = PromisedRequirement(
-        lambda lst: int(1.5 * sum(x.size for x in lst)) + human2bytes('5G'),
-        gvcfs.values())
-    joint_genotype_gvcf = job.addChildJobFn(gatk_genotype_gvcfs,
-                                            gvcfs,
-                                            config,
-                                            cores=config.cores,
-                                            disk=joint_genotype_gvcf_disk,
-                                            memory=config.xmx)
+    genotype_gvcf_disk = PromisedRequirement(lambda x: int(1.5 * x.size + human2bytes('5G')),
+                                                           gvcf)
+    genotype_gvcf = job.addChildJobFn(gatk_genotype_gvcfs,
+                                      dict((uuid, gvcf)),
+                                      config,
+                                      cores=config.cores,
+                                      disk=genotype_gvcf_disk,
+                                      memory=config.xmx)
 
-    joint_genotyped_filename = '%s.genotyped%s.vcf' % (uuid, config.suffix)
-    joint_genotype_gvcf.addChildJobFn(output_file_job,
-                                      joint_genotyped_filename,
-                                      joint_genotype_gvcf.rv(),
-                                      config.output_dir,
-                                      s3_key_path=config.ssec)
+    genotyped_filename = '%s.genotyped%s.vcf' % (uuid, config.suffix)
+    genotyped_gvcf_disk = PromisedRequirement(lambda x: x.size, genotype_gvcf.rv())
+    genotype_gvcf.addChildJobFn(output_file_job,
+                                genotyped_filename,
+                                genotype_gvcf.rv(),
+                                config.output_dir,
+                                s3_key_path=config.ssec,
+                                disk=genotyped_gvcf_disk)
 
-    # After joint genotyping, run VQSR or hard filter
     if config.run_vqsr:
-        joint_vcf = joint_genotype_gvcf.addFollowOnJobFn(vqsr_pipeline,
-                                                         uuid,
-                                                         joint_genotype_gvcf.rv(),
-                                                         config)
+        if not config.joint:
+            job.fileStore.logToMaster('WARNING: Running VQSR without joint genotyping!')
+        joint_vcf = genotype_gvcf.addFollowOnJobFn(vqsr_pipeline,
+                                                   uuid,
+                                                   genotype_gvcf.rv(),
+                                                   config)
     else:
-        joint_vcf = joint_genotype_gvcf.addFollowOnJobFn(hard_filter_pipeline,
-                                                         uuid,
-                                                         joint_genotype_gvcf.rv(),
-                                                         config).rv()
+        joint_vcf = genotype_gvcf.addFollowOnJobFn(hard_filter_pipeline,
+                                                   uuid,
+                                                   genotype_gvcf.rv(),
+                                                   config).rv()
     return joint_vcf.rv()
 
 
