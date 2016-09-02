@@ -283,7 +283,7 @@ def main():
         parsed_config = {x.replace('-', '_'): y for x, y in yaml.load(open(args.config).read()).iteritems()}
         config = argparse.Namespace(**parsed_config)
         config.maxCores = int(args.maxCores) if args.maxCores else sys.maxint
-        samples = [args.sample] if args.sample else parse_manifest(args.manifest)
+        samples = [args.sample[0], args.sample[1:]] if args.sample else parse_manifest(args.manifest)
         # Sanity checks
         require(config.ref, 'Missing URL for reference file: {}'.format(config.ref))
         require(config.output_dir, 'No output location specified: {}'.format(config.output_dir))
