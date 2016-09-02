@@ -16,26 +16,26 @@ GATK Preprocessing
 
 GATK Variant Discovery
 8: Call variants
-9: Genotype variants
+9: Merge variant calls
+10: Genotype variants
 
 GATK Hard Filtering
-10: Isolate SNPs
-11: Isolate Indels
-12: Apply SNP filter
-13: Apply Indel filter
-14: Merge SNP and Indel VCFs
+11: Isolate SNPs
+12: Isolate Indels
+13: Apply SNP filter
+14: Apply Indel filter
+15: Merge SNP and Indel VCFs
 
 GATK VQSR and Filtering (Optional)
-15: Recalibrate SNPs
-16: Recalibrate Indels
-17: Apply SNP recalibration
-18: Apply Indel recalibration
+16: Recalibrate SNPs
+17: Recalibrate Indels
+18: Apply SNP recalibration
+19: Apply Indel recalibration
 """
 import argparse
 from collections import namedtuple
 from copy import deepcopy
 import logging
-import math
 from multiprocessing import cpu_count
 import os
 import re
@@ -135,14 +135,14 @@ def gatk_germline_pipeline(job, samples, config):
     # group preprocessing and variant calling steps in empty Job instance
     group_bam_jobs = Job()
     gvcfs = {}
-    for uuid, url, paired_url, rg_line in samples:
+    for sample in samples:
         # 0: Generate processed BAM and BAI files for each sample
         get_bam = group_bam_jobs.addChildJobFn(prepare_bam,
-                                               uuid,
-                                               url,
+                                               sample.uuid,
+                                               sample.url,
                                                config,
-                                               paired_url=paired_url,
-                                               rg_line=rg_line)
+                                               paired_url=sample.paired_url,
+                                               rg_line=sample.rg_line)
 
         # 1: Generate per sample gvcfs {uuid: gvcf_id}
         # Estimate disk resource as twice the input bam plus 5Gs of reference data
@@ -154,14 +154,14 @@ def gatk_germline_pipeline(job, samples, config):
                                             cores=config.cores,
                                             disk=hc_disk,
                                             memory=config.xmx)
-        gvcfs[uuid] = get_gvcf.rv()
+        gvcfs[sample.uuid] = get_gvcf.rv()
 
         # Upload gvcf before genotyping
-        vqsr_name = '{}{}.g.vcf'.format(uuid, config.suffix)
+        vqsr_name = '{}{}.g.vcf'.format(sample.uuid, config.suffix)
         get_gvcf.addChildJobFn(output_file_job,
                                vqsr_name,
-                               gvcfs[uuid],
-                               os.path.join(config.output_dir, uuid),
+                               get_gvcf.rv(),
+                               os.path.join(config.output_dir, sample.uuid),
                                s3_key_path=config.ssec)
 
     # VQSR requires many variants in order to train a decent model. GATK recommends a minimum of
@@ -169,84 +169,55 @@ def gatk_germline_pipeline(job, samples, config):
     # https://software.broadinstitute.org/gatk/documentation/article?id=3225
 
     filtered_vcfs = {}
-    if config.joint:
-        filtered_vcfs = job.addChildJobFn(joint_genotype_and_filter,
-                                          gvcfs.items(),
-                                          config,
-                                          cores=cpu_count()  # Reserve entire node
-                                          ).rv()
+    if config.joint_genotype:
+        filtered_vcfs = group_bam_jobs.addFollowOnJobFn(joint_genotype_and_filter,
+                                                        gvcfs,
+                                                        config,
+                                                        cores=cpu_count()  # Reserve entire node
+                                                        ).rv()
 
     else:
         for uuid, gvcf_id in gvcfs.iteritems():
-            filtered_vcfs[uuid] = job.addChildJobFn(genotype_and_filter,
-                                                    uuid,
-                                                    gvcf_id,
-                                                    config).rv()
+            filtered_vcfs[uuid] = group_bam_jobs.addFollowOnJobFn(genotype_and_filter,
+                                                                  uuid,
+                                                                  gvcf_id,
+                                                                  config).rv()
 
     job.addChild(group_bam_jobs)
     return filtered_vcfs
 
 
-def joint_genotype_and_filter(job, iterable, config, disk_fraction=0.5):
+def joint_genotype_and_filter(job, gvcfs, config):
     """
-    Batches GVCFs into one GVCF file and runs the genotype and filter pipeline.
-    Request all available cores when calling this function to get a better estimate of the
-    available disk space on the worker node.
+    Merges cohort of GVCFs into one GVCF file and runs the genotype and filter pipeline.
 
     :param JobFunctionWrappingJob job: passed automatically by Toil
-    :param list[tuples] iterable: Paired UUID and FileStoreIDs
-    :param float disk_fraction: Fraction of available disk to reserve for VCFs (Default: 0.5)
-    :returns: Yields a batch of paired UUIDs and FileStoreIDs
-    :rtype: dict
+    :param dict gvcfs: Dictionary of GVCFs {UUID: FileStoreID}
+    :returns: genotype and filter return value
+    :rtype: PromisedReturnValue
     """
     work_dir = job.fileStore.getLocalTempDir()
+
+    # Get available disk space
     st = os.statvfs(work_dir)
     free_disk = st.f_bavail * st.f_frsize
-    usable_disk = disk_fraction * free_disk
 
-    total_size = sum(elem[1].size for elem in iterable)
+    require(int(1.5 * sum(gvcf.size for gvcf in gvcfs.values())) < free_disk,
+            'There is not enough disk to joint '
+            'genotype and filter samples:\n{}'.format('\n'.join(gvcfs.keys())))
 
-    # Number of times the usable disk space goes into the total file size
-    times_in = total_size / usable_disk
+    merged_disk = PromisedRequirement(lambda lst: int(1.5 * sum(x.size for x in lst)),
+                                      gvcfs.values())
+    merged_gvcfs = job.addChildJobFn(gatk_combine_gvcfs,
+                                     gvcfs,
+                                     config,
+                                     disk=merged_disk,
+                                     memory=config.xmx)
 
-    # Determine how many batches there will be
-    batches = [[] for _ in range(int(math.ceil(times_in)))]
-    batch_sums = {index: 0 for index in xrange(len(batches))}
-    # Sort iterable by the file size
-    sorted_iterable = sorted(iterable, key=lambda elem: elem[1].size, reverse=True)
-    # Iterate over sorted list of FileStoreIDs in descending order. Then, assign a GVCF
-    # to the smallest GVCF batch. Finally, merge all merged batches into a single GVCF
-    for elem in sorted_iterable:
-        # Add VCF to batch with the smallest disk footprint
-        min_batch_sum = min(batch_sums, key=batch_sums.get)
-        batches[min_batch_sum].append(elem)
-        # Unpack file store ID
-        _, FileStoreID = elem
-        batch_sums[min_batch_sum] += FileStoreID.size
-
-    merged_batches = {}
-    for index, batch in enumerate(batches):
-        batch_name = 'joint-batch-%d' % index
-        batch_dict = dict(batch)
-        merged_batch_disk = PromisedRequirement(lambda lst: int(1.5 * sum(x.size for x in lst)),
-                                               batch_dict.values())
-        merged_batches[batch_name] = job.addChildJobFn(gatk_combine_gvcfs,
-                                                       batch_dict,
-                                                       config,
-                                                       disk=merged_batch_disk,
-                                                       memory=config.xmx).rv()
-
-    total_merge_disk = PromisedRequirement(lambda lst: int(1.5 * sum(x.size for x in lst)),
-                                           merged_batches.values())
-    total_merge_job = job.addFollowOnJobFn(gatk_combine_gvcfs,
-                                           merged_batches,
-                                           config,
-                                           disk=total_merge_disk,
-                                           memory=config.xmx)
-    return total_merge_job.addChildJobFn(genotype_and_filter,
-                                         'joint',
-                                         total_merge_job.rv(),
-                                         config).rv()
+    return merged_gvcfs.addChildJobFn(genotype_and_filter,
+                                      'joint_genotyped',
+                                      merged_gvcfs.rv(),
+                                      config).rv()
 
 
 def genotype_and_filter(job, uuid, gvcf, config):
@@ -260,6 +231,7 @@ def genotype_and_filter(job, uuid, gvcf, config):
     :return: Genotyped and filtered VCF FileStoreID
     :rtype: str
     """
+    job.fileStore.logToMaster('Genotyping: %s' % uuid)
     # Estimate disk requirement as 50% more than the sum of the VCF file sizes plus 5G for
     # reference data.
     genotype_gvcf_disk = PromisedRequirement(lambda x: int(1.5 * x.size + human2bytes('5G')),
@@ -276,23 +248,23 @@ def genotype_and_filter(job, uuid, gvcf, config):
     genotype_gvcf.addChildJobFn(output_file_job,
                                 genotyped_filename,
                                 genotype_gvcf.rv(),
-                                config.output_dir,
+                                os.path.join(config.output_dir, uuid),
                                 s3_key_path=config.ssec,
                                 disk=genotyped_gvcf_disk)
 
     if config.run_vqsr:
-        if not config.joint:
+        if not config.joint_genotype:
             job.fileStore.logToMaster('WARNING: Running VQSR without joint genotyping!')
-        joint_vcf = genotype_gvcf.addFollowOnJobFn(vqsr_pipeline,
+        joint_genotype_vcf = genotype_gvcf.addFollowOnJobFn(vqsr_pipeline,
                                                    uuid,
                                                    genotype_gvcf.rv(),
                                                    config)
     else:
-        joint_vcf = genotype_gvcf.addFollowOnJobFn(hard_filter_pipeline,
+        joint_genotype_vcf = genotype_gvcf.addFollowOnJobFn(hard_filter_pipeline,
                                                    uuid,
                                                    genotype_gvcf.rv(),
-                                                   config).rv()
-    return joint_vcf.rv()
+                                                   config)
+    return joint_genotype_vcf.rv()
 
 
 def annotate_vcfs(job, vcfs, config):
@@ -473,6 +445,7 @@ def prepare_bam(job, uuid, url, config, paired_url=None, rg_line=None):
     """
     # 0: Align FASQ or realign BAM
     if config.run_bwa:
+        job.fileStore.logToMaster("Aligning Sample: %s" % uuid)
         get_bam = job.wrapJobFn(setup_and_run_bwa_kit,
                                 uuid,
                                 url,
@@ -776,7 +749,7 @@ def main():
                            'preprocess',
                            'preprocess_only',
                            'run_vqsr',
-                           'joint',
+                           'joint_genotype',
                            'run_oncotator',
                            'cores',
                            'file_size',

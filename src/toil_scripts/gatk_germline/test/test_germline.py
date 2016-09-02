@@ -1,3 +1,4 @@
+import argparse
 import logging
 import os
 import shlex
@@ -9,6 +10,7 @@ from unittest import TestCase
 from uuid import uuid4
 
 from bd2k.util.iterables import concat
+
 
 log = logging.getLogger(__name__)
 
@@ -35,13 +37,13 @@ class GermlineTest(TestCase):
     def setUp(self):
         self.workdir = tempfile.mkdtemp()
         self.fastq_url = 's3://cgl-pipeline-inputs/germline/ci/NIST7035_NIST7086.aln21.ci.1.fq'
+        self.vcf_url = 's3://cgl-pipeline-inputs/germline/ci/NA12878.21.genotyped.aug30.vcf'
         self.bam_sample = ['bam_test', 's3://cgl-pipeline-inputs/germline/ci/NIST7035_NIST7086.aln21.ci.bam']
-        jobStore = os.getenv('TOIL_SCRIPTS_TEST_JOBSTORE', os.path.join(self.workdir, 'jobstore-%s' % uuid4()))
-        toilOptions = shlex.split(os.environ.get('TOIL_SCRIPTS_TEST_TOIL_OPTIONS', ''))
+        self.jobStore = os.getenv('TOIL_SCRIPTS_TEST_JOBSTORE', os.path.join(self.workdir, 'jobstore-%s' % uuid4()))
+        self.toilOptions = shlex.split(os.environ.get('TOIL_SCRIPTS_TEST_TOIL_OPTIONS', ''))
         self.base_command = concat('toil-germline', 'run',
-                                   toilOptions,
-                                   jobStore)
-        self.expected_files = set()
+                                   self.toilOptions,
+                                   self.jobStore)
 
     def test_cli_sample_option(self):
         """
@@ -52,46 +54,93 @@ class GermlineTest(TestCase):
                           'bam_test.genotyped.ci_test.vcf',
                           'bam_test.hard_filter.ci_test.vcf',
                           'config-toil-germline.yaml'}
+
+        inputs = self._get_default_inputs()
+        inputs.run_bwa = True
+        inputs.preprocess = True
+
         self._run(self.base_command,
                   '--sample', self.bam_sample,
-                  '--config', self._generate_config())
+                  '--config', self._generate_config(inputs))
         self._assertOutput(expected_files)
 
-    def test_manifest_option(self):
+    def test_cli_manifest_option(self):
         """
-        Tests using manifest containing FASTQ files
+        Tests using manifest containing FASTQ files and hard filters
         """
         num_samples = int(os.environ.get('TOIL_SCRIPTS_TEST_NUM_SAMPLES', '3'))
-        expected_files = set()
+        expected_files = {'joint_genotyped.genotyped.ci_test.vcf',
+                          'joint_genotyped.hard_filter.ci_test.vcf',
+                          'config-toil-germline.yaml',
+                          'manifest-toil-germline.tsv'}
+
         for i in range(1, num_samples+1):
             expected_files |= {'fastq_test_%s.processed.ci_test.bam' % i,
-                               'fastq_test_%s.ci_test.g.vcf' % i,
-                               'fastq_test_%s.genotyped.ci_test.vcf' % i,
-                               'fastq_test_%s.hard_filter.ci_test.vcf' % i,
-                               'config-toil-germline.yaml',
-                               'manifest-toil-germline.tsv'}
+                               'fastq_test_%s.ci_test.g.vcf' % i}
+
+        inputs = self._get_default_inputs()
+        inputs.run_bwa = True
+        inputs.preprocess = True
+        inputs.joint_genotype = True
 
         self._run(self.base_command,
-                  '--config', self._generate_config(),
+                  '--config', self._generate_config(inputs),
                   '--manifest', self._generate_manifest(num_samples))
         self._assertOutput(expected_files)
 
-    def test_preprocess_only(self):
+    def test_cli_preprocess_only(self):
         """
         Tests preprocess only option
         """
         num_samples = int(os.environ.get('TOIL_SCRIPTS_TEST_NUM_SAMPLES', '3'))
-        expected_files = set()
+        expected_files = {'config-toil-germline.yaml', 'manifest-toil-germline.tsv'}
         for i in range(1, num_samples+1):
-            expected_files |= {'fastq_test_%s.processed.ci_test.bam' % i,
-                               'config-toil-germline.yaml',
-                               'manifest-toil-germline.tsv'}
+            expected_files.add('fastq_test_%s.processed.ci_test.bam' % i)
+
+        inputs = self._get_default_inputs()
+        inputs.run_bwa = True
+        inputs.preprocess = True
+        inputs.preprocess_only = True
 
         self._run(self.base_command,
-                  '--config', self._generate_config(),
+                  '--config', self._generate_config(inputs),
                   '--manifest', self._generate_manifest(num_samples),
                   '--preprocess-only')
         self._assertOutput(expected_files)
+
+    def test_joint_genotype_hard_filter(self):
+        pass
+
+    def test_vqsr(self):
+        """
+        Tests VQSR pipeline using a pre-cooked VCF
+        """
+        from multiprocessing import cpu_count
+
+        from toil.job import Job
+
+        from toil_scripts.gatk_germline.germline import download_shared_files
+        from toil_scripts.gatk_germline.vqsr import vqsr_pipeline
+        from toil_scripts.lib.urls import download_url_job
+
+        options = Job.Runner.getDefaultOptions(self.jobStore)
+        inputs = self._get_default_inputs()
+        inputs.run_vqsr = True
+        shared_files = Job.wrapJobFn(download_shared_files, inputs).encapsulate()
+
+        gvcf = shared_files.addChildJobFn(download_url_job,
+                                          self.vcf_url,
+                                          name='toil.g.vcf',
+                                          s3_key_path=None)
+
+        shared_files.addFollowOnJobFn(vqsr_pipeline,
+                                      'test',
+                                      gvcf.rv(),
+                                      shared_files.rv(),
+                                      cores=cpu_count())
+
+        Job.Runner.startToil(shared_files, options)
+        self._assertOutput({'test.vqsr.vcf'})
 
     def _run(self, *args):
         args = list(concat(*args))
@@ -101,25 +150,27 @@ class GermlineTest(TestCase):
     def tearDown(self):
         shutil.rmtree(self.workdir)
 
-    def _generate_config(self):
+    def _generate_config(self, inputs=None):
+        if inputs is None:
+            inputs = self._get_default_inputs()
+
         path = os.path.join(self.workdir, 'config-toil-germline.yaml')
         with open(path, 'w') as f:
             f.write(textwrap.dedent("""
-                    genome-fasta: s3://cgl-pipeline-inputs/germline/ci/b37_21.fa
-                    assembly: b37
-                    phase: s3://cgl-pipeline-inputs/germline/ci/1000G_phase1.indels.b37.21.recode.vcf
-                    mills: s3://cgl-pipeline-inputs/germline/ci/Mills_and_1000G_gold_standard.indels.b37.21.recode.vcf
-                    dbsnp: s3://cgl-pipeline-inputs/germline/ci/dbsnp_138.b37.21.recode.vcf
-                    hapmap: s3://cgl-pipeline-inputs/germline/ci/hapmap_3.3.b37.21.recode.vcf
-                    omni: s3://cgl-pipeline-inputs/germline/ci/1000G_omni2.5.b37.21.recode.vcf
-                    run-bwa: True
+                    genome-fasta: {genome_fasta}
+                    phase: {phase}
+                    mills: {mills}
+                    dbsnp: {dbsnp}
+                    hapmap: {hapmap}
+                    omni: {omni}
+                    run-bwa: {run_bwa}
                     trim: False
-                    preprocess: True
-                    amb: s3://cgl-pipeline-inputs/germline/ci/bwa_index_b37_21.amb
-                    ann: s3://cgl-pipeline-inputs/germline/ci/bwa_index_b37_21.ann
-                    bwt: s3://cgl-pipeline-inputs/germline/ci/bwa_index_b37_21.bwt
-                    pac: s3://cgl-pipeline-inputs/germline/ci/bwa_index_b37_21.pac
-                    sa: s3://cgl-pipeline-inputs/germline/ci/bwa_index_b37_21.sa
+                    preprocess: {preprocess}
+                    amb: {amb}
+                    ann: {ann}
+                    bwt: {bwt}
+                    pac: {pac}
+                    sa: {sa}
                     alt:
                     ssec:
                     file-size: 1G
@@ -129,11 +180,11 @@ class GermlineTest(TestCase):
                     sorted:
                     output-dir: {output_dir}
                     unsafe-mode: False
-                    run-vqsr: False
-                    joint: False
+                    run-vqsr: {run_vqsr}
+                    joint-genotype: {joint_genotype}
                     preprocess-only:
-                    run-oncotator:
-                    """[1:]).format(output_dir=self.workdir))
+                    run-oncotator: {run_oncotator}
+                    """[1:]).format(**vars(inputs)))
         return path
 
     def _generate_manifest(self, num_samples):
@@ -160,3 +211,35 @@ class GermlineTest(TestCase):
             for name in files:
                 self.assertTrue(name in expected_files)
                 self.assertTrue(os.stat(os.path.join(root, name)).st_size > 0)
+
+    def _get_default_inputs(self):
+        """
+        Creates a Namespace object with default parameters
+        :return: Namespace object
+        """
+        inputs = argparse.Namespace()
+        inputs.run_bwa = False
+        inputs.preprocess = False
+        inputs.run_vqsr = False
+        inputs.run_oncotator = False
+        inputs.joint_genotype = False
+        inputs.ssec = None
+        inputs.sorted = False
+        inputs.cores = 4
+        inputs.xmx = '8G'
+        inputs.output_dir = self.workdir
+        inputs.suffix = ''
+        inputs.unsafe_mode = False
+        inputs.genome_fasta = 's3://cgl-pipeline-inputs/germline/ci/b37_21.fa'
+        inputs.phase = 's3://cgl-pipeline-inputs/germline/ci/1000G_phase1.indels.b37.21.recode.vcf'
+        inputs.mills = 's3://cgl-pipeline-inputs/germline/ci/Mills_and_1000G_gold_standard.indels.b37.21.recode.vcf'
+        inputs.dbsnp = 's3://cgl-pipeline-inputs/germline/ci/dbsnp_138.b37.21.recode.vcf'
+        inputs.hapmap = 's3://cgl-pipeline-inputs/germline/ci/hapmap_3.3.b37.21.recode.vcf'
+        inputs.omni = 's3://cgl-pipeline-inputs/germline/ci/1000G_omni2.5.b37.21.recode.vcf'
+        inputs.amb = 's3://cgl-pipeline-inputs/germline/ci/bwa_index_b37_21.amb'
+        inputs.ann = 's3://cgl-pipeline-inputs/germline/ci/bwa_index_b37_21.ann'
+        inputs.bwt = 's3://cgl-pipeline-inputs/germline/ci/bwa_index_b37_21.bwt'
+        inputs.pac = 's3://cgl-pipeline-inputs/germline/ci/bwa_index_b37_21.pac'
+        inputs.sa = 's3://cgl-pipeline-inputs/germline/ci/bwa_index_b37_21.sa'
+        return inputs
+

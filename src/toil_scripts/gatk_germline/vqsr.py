@@ -74,8 +74,9 @@ def vqsr_pipeline(job, uuid, vcf_id, config):
 
     job.addChild(snp_recal)
     job.addChild(indel_recal)
-    job.addFollowOn(apply_snp_recal)
-    apply_snp_recal.addFollowOn(apply_indel_recal)
+    snp_recal.addChild(apply_snp_recal)
+    indel_recal.addChild(apply_indel_recal)
+    apply_snp_recal.addChild(apply_indel_recal)
 
     # Output input VCF and recalibrated VCF
     output_dir = config.output_dir
@@ -100,16 +101,17 @@ def main():
     from toil.job import Job
     import yaml
 
-    from toil_scripts.gatk_germline.germline import download_shared_files, joint_genotype_and_filter
+    from toil_scripts.gatk_germline.germline import download_shared_files
     from toil_scripts.lib.urls import download_url_job
 
     parser = argparse.ArgumentParser(description=main.__doc__,
                                      formatter_class=argparse.RawTextHelpFormatter)
 
-    parser.add_argument('--manifest',
-                        required=True,
+    parser.add_argument('--sample',
+                        default=None,
+                        nargs=2,
                         type=str,
-                        help='Path to UUID and GVCF file in the format: uuid url')
+                        help='Space delimited sample UUID and VCF file in the format: uuid url')
 
     parser.add_argument('--config',
                         required=True,
@@ -131,8 +133,6 @@ def main():
 
     inputs.run_bwa = False
     inputs.preprocess = False
-    inputs.joint = True
-    inputs.run_vqsr = True
     inputs.run_oncotator = False
     inputs.annotations = ['QualByDepth',
                           'FisherStrand',
@@ -144,18 +144,15 @@ def main():
 
     shared_files = Job.wrapJobFn(download_shared_files, inputs).encapsulate()
 
-    gvcfs = {}
+    uuid, url = options.sample
+    gvcf = shared_files.addChildJobFn(download_url_job,
+                                      url,
+                                      name='toil.g.vcf',
+                                      s3_key_path=None)
 
-    with open(options.manifest, 'r') as f:
-        for line in f:
-            uuid, url = line.strip().split()
-            gvcfs[uuid] = shared_files.addChildJobFn(download_url_job,
-                                                     url,
-                                                     name='toil.g.vcf',
-                                                     s3_key_path=None).rv()
-
-    shared_files.addFollowOnJobFn(joint_genotype_and_filter,
-                                  gvcfs.items(),
+    shared_files.addFollowOnJobFn(vqsr_pipeline,
+                                  uuid,
+                                  gvcf.rv(),
                                   shared_files.rv(),
                                   cores=cpu_count())
 

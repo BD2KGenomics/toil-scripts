@@ -86,8 +86,8 @@ def generate_config():
         # Optional: Run GATK VQSR (Default: False)
         run-vqsr:
 
-        # Optional: Joint Genotyping (Default: False)
-        joint:
+        # Optional: Merges all samples into a single GVCF for genotyping and filtering (Default: False)
+        joint-genotype:
 
         # Optional: Run Oncotator (Default: False)
         run-oncotator:

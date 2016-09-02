@@ -136,14 +136,12 @@ def gatk_variant_recalibrator(job, mode, vcf_id, config):
     command = ['-T', 'VariantRecalibrator',
                '-R', 'genome.fa',
                '-input', 'input.vcf',
-               '-nt', str(job.cores),
                '--maxGaussians', '4',
                '-an', 'QD',   # QualByDepth
                '-an', 'FS',   # FisherStrand'
                '-an', 'SOR',  # StrandOddsRatio'
                '-an', 'ReadPosRankSum',
                '-an', 'MQRankSum',
-               '-an', 'InbreedingCoeff',
                '-tranche', '100.0',
                '-tranche', '99.9',
                '-tranche', '99.0',
@@ -207,7 +205,7 @@ def gatk_apply_variant_recalibration(job, mode, vcf_id, recal_id, tranches_id, c
     """
     mode = mode.upper()
     job.fileStore.logToMaster(
-        'Running GATK ApplyRecalibration ({} Mode): {}'.format(mode, config.uuid))
+        'Running GATK ApplyRecalibration ({} Mode)'.format(mode))
     work_dir = job.fileStore.getLocalTempDir()
     inputs = {'genome.fa': config.genome_fasta,
               'genome.fa.fai': config.genome_fai,
@@ -312,11 +310,11 @@ def gatk_combine_gvcfs(job, gvcfs, config):
     for uuid, vcf_id in gvcfs.iteritems():
         command.extend(['--variant', os.path.join('/data', uuid)])
 
-    outputs = {'merged.vcf': None}
+    outputs = {'merged.g.vcf': None}
     docker_call(work_dir=work_dir,
                 env={'JAVA_OPTS': '-Djava.io.tmpdir=/data/ -Xmx{}'.format(job.memory)},
                 parameters=command,
                 tool='quay.io/ucsc_cgl/gatk:3.5--dba6dae49156168a909c43330350c6161dc7ecc2',
                 inputs=inputs.keys(),
                 outputs=outputs)
-    return job.fileStore.writeGlobalFile(os.path.join(work_dir, 'merged.vcf'))
+    return job.fileStore.writeGlobalFile(os.path.join(work_dir, 'merged.g.vcf'))
