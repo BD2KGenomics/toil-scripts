@@ -5,8 +5,9 @@
 
 The Toil Germline pipeline accepts FASTQ and BAM files as input and 
 generates per sample variant callsets using GATK tools. This pipeline 
-includes GATK preprocessing, variant calling, variant filtering, and 
-functional variant annotation using Oncotator.
+can be configured to run GATK preprocessing, variant calling, 
+filtering, and functional annotation using Oncotator. Samples can also
+be processed individually or merged for joint genotyping and filtering.
 
 #### General Dependencies
 
@@ -83,12 +84,13 @@ when using the joint genotyping feature.
 
 ## Tools
 
-| Tool         | Version | Description                 |
-|--------------|---------|-----------------------------|
-| Bwakit       | 0.7.12  | Maps sequencing reads       |
-| SAMtools     | 0.1.19  | Manipulates SAM/BAM files   |
-| Picard tools | 1.95    | Processes HTS data formats  |
-| GATK         | 3.5     | Identifies genomic variants |
+| Tool         | Version | Description                      |
+|--------------|---------|----------------------------------|
+| Bwakit       | 0.7.12  | Maps sequencing reads            |
+| SAMtools     | 0.1.19  | Manipulates SAM/BAM files        |
+| Picard tools | 1.95    | Processes HTS data formats       |
+| GATK         | 3.5     | Identifies genomic variants      |
+| Oncotator    | 1.9     | Adds cancer relevant annotations |
 
 ## GATK Recalibration Model Resources and Variant Annotations
 This pipeline is configured to run the [GATK Germline Best Practices 
@@ -99,7 +101,7 @@ for training sets and variant annotations. One annotation we do not
 use is Coverage because this annotation is not recommended for WES data.
 
 ## GATK Variant Annotations
-
+The following annotations are automatically added to each variant call:
 - QualByDepth
 - FischerStrand
 - StrandOddsRatio
@@ -108,14 +110,21 @@ use is Coverage because this annotation is not recommended for WES data.
 - RMSMappingQuality
 - InbreedingCoeff
 
+## Joint Genotyping
+[Joint genotyping](https://software.broadinstitute.org/gatk/guide/article?id=3893)
+provides the benefits of joint calling without the exponential increase 
+in runtimes. If the joint-genotype parameter is set to True in the 
+config, then the pipeline will merge the entire cohorts genomic VCF 
+files into a single GVCF. All downstream steps will use the merged GVCF.
+
 ## VQSR
 
 Variant Quality Score Recalibration is applied whenever the config
 parameter run-vqsr is set to True. [VQSR](https://software.broadinstitute.org/gatk/guide/tooldocs/org_broadinstitute_gatk_tools_walkers_variantrecalibration_VariantRecalibrator.php)
-is a filtering method that uses a well-calibrated variant probability 
-to remove false positives. For this reason, VQSR requires many samples 
-to train on in order to create an accurate probabilistic model. We use the 
-following VQSR parameters:
+is a filtering method that uses machine learning to remove false i
+ositives. For this reason, VQSR requires many samples to train on in 
+order to create an accurate statistical model. We use the following VQSR 
+parameters:
 
 ### SNP Recalibration Parameters
 ```
@@ -128,7 +137,6 @@ java -jar GenomeAnalysisTK.jar \
 -an StrandOddsRatio \
 -an ReadPosRankSum \
 -an MQRankSum \
--an InbreedingCoeff \
 -an RMSMappingQuality \
 -tranche 100.0 \
 -tranche 99.9 \
@@ -154,7 +162,6 @@ java -jar GenomeAnalysisTK.jar \
 -an FisherStrand \
 -an StrandOddsRatio \
 -an MQRankSum \
--an InbreedingCoeff \
 -tranche 100.0 \
 -tranche 99.9 \
 -tranche 99.0 \
@@ -169,8 +176,10 @@ java -jar GenomeAnalysisTK.jar \
 ```
 
 ## Hard Filters
-If run-vqsr is False, then GATK recommended [hard filters](http://gatkforums.broadinstitute.org/wdl/discussion/2806/howto-apply-hard-filters-to-a-call-set),
-are used instead:
+If run-vqsr is False, then GATK recommends using the following 
+[hard filters](http://gatkforums.broadinstitute.org/wdl/discussion/2806/howto-apply-hard-filters-to-a-call-set),
+to remove false positives. This technique is less sensitive, but should
+be used if running a small cohort of samples. 
 
 SNP Filter:
     "QD < 2.0 || FS > 60.0 || MQ < 40.0 || MQRankSum < -12.5 || ReadPosRankSum < -8.0"
@@ -178,8 +187,6 @@ SNP Filter:
 INDEL Filter:
     "QD < 2.0 || FS > 200.0 || ReadPosRankSum < -20.0"
     
-After filtration, the separate SNP and INDEL VCF files are combined into
-a single VCF file.
 
 ## Example Config
 
@@ -200,7 +207,7 @@ bwt: s3://cgl-pipeline-inputs/alignment/hg19.fa.bwt
 pac: s3://cgl-pipeline-inputs/alignment/hg19.fa.pac
 sa: s3://cgl-pipeline-inputs/alignment/hg19.fa.sa
 run-vqsr: True
-joint: True
+joint-genotype: True
 file-size: 200G
 xmx: 30G
 suffix: .toil

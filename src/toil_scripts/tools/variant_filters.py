@@ -15,7 +15,7 @@ def gatk_select_variants(job, mode, vcf_id, config):
     :return: VCF FileStoreID
     :rtype: str
     """
-    job.fileStore.logToMaster('Running GATK SelectVariants: %s' % mode)
+    job.fileStore.logToMaster('GATK SelectVariants: %s' % mode)
     work_dir = job.fileStore.getLocalTempDir()
     inputs = {'genome.fa': config.genome_fasta,
               'genome.fa.fai': config.genome_fai,
@@ -59,7 +59,7 @@ def gatk_variant_filtration(job, mode, vcf_id, config):
     :rtype: str
     """
     mode = mode.upper()
-    job.fileStore.logToMaster('Apply %s Filter' % mode)
+    job.fileStore.logToMaster('Applied %s Hard Filter' % mode)
     work_dir = job.fileStore.getLocalTempDir()
     inputs = {'genome.fa': config.genome_fasta,
               'genome.fa.fai': config.genome_fai,
@@ -120,7 +120,7 @@ def gatk_variant_recalibrator(job, mode, vcf_id, config):
     if mode not in {'INDEL', 'SNP'}:
         raise ValueError('Variant recalibration mode must be INDEL or SNP, got %s' % mode)
 
-    job.fileStore.logToMaster('Running GATK VariantRecalibrator ({} Mode)'.format(mode.upper()))
+    job.fileStore.logToMaster('GATK VariantRecalibrator ({} Mode)'.format(mode.upper()))
     work_dir = job.fileStore.getLocalTempDir()
     inputs = {'genome.fa': config.genome_fasta,
               'genome.fa.fai': config.genome_fai,
@@ -204,8 +204,7 @@ def gatk_apply_variant_recalibration(job, mode, vcf_id, recal_id, tranches_id, c
     :rtype: str
     """
     mode = mode.upper()
-    job.fileStore.logToMaster(
-        'Running GATK ApplyRecalibration ({} Mode)'.format(mode))
+    job.fileStore.logToMaster('GATK ApplyRecalibration ({} Mode)'.format(mode))
     work_dir = job.fileStore.getLocalTempDir()
     inputs = {'genome.fa': config.genome_fasta,
               'genome.fa.fai': config.genome_fai,
@@ -255,7 +254,7 @@ def gatk_combine_variants(job, vcfs, config, merge_option='UNIQUIFY'):
     :return: Merged VCF FileStoreID
     :rtype: str
     """
-    job.fileStore.logToMaster('Running GATK CombineVariants')
+    job.fileStore.logToMaster('GATK CombineVariants')
     work_dir = job.fileStore.getLocalTempDir()
 
     inputs = {'genome.fa': config.genome_fasta,

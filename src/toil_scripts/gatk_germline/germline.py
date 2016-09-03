@@ -604,7 +604,7 @@ def gatk_haplotype_caller(job, bam_id, bai_id, config, emit_threshold=10.0, call
     :return: GVCF FileStoreID
     :rtype: str
     """
-    job.fileStore.logToMaster('Running GATK HaplotypeCaller')
+    job.fileStore.logToMaster('GATK HaplotypeCaller')
     work_dir = job.fileStore.getLocalTempDir()
     inputs = {'genome.fa': config.genome_fasta,
               'genome.fa.fai': config.genome_fai,
