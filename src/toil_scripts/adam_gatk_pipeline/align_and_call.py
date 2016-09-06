@@ -112,11 +112,15 @@ S3AM            - pip install --s3am (requires ~/.boto config file)
 """
 
 # import from python system libraries
+import argparse
+import textwrap
 import copy
 from multiprocessing import cpu_count
 
 # import toil features
+from toil.job import Job
 # these don't seem necessary! but, must be imported here due to a serialization issue
+from toil.lib.spark import spawn_spark_cluster
 
 # import job steps from other toil pipelines
 from toil_scripts.adam_pipeline.adam_preprocessing import * #static_adam_preprocessing_dag
