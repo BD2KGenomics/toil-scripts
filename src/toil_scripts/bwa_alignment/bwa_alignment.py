@@ -8,14 +8,14 @@ from urlparse import urlparse
 
 import yaml
 from toil.job import Job
+from toil_lib import require, required_length
+from toil_lib.files import copy_file_job
+from toil_lib.jobs import map_job
+from toil_lib.tools.aligners import run_bwakit
+from toil_lib.tools.indexing import run_samtools_faidx, run_bwa_index
+from toil_lib.urls import download_url_job, s3am_upload_job
 
-from toil_scripts.lib import require, required_length
-from toil_scripts.lib.files import copy_file_job
-from toil_scripts.lib.jobs import map_job
-from toil_scripts.lib.urls import download_url_job, s3am_upload_job
 from toil_scripts.rnaseq_cgl.rnaseq_cgl_pipeline import generate_file
-from toil_scripts.tools.aligners import run_bwakit
-from toil_scripts.tools.indexing import run_samtools_faidx, run_bwa_index
 
 
 def download_reference_files(job, inputs, samples):

@@ -55,17 +55,18 @@ Boto:       pip install boto
 """
 import argparse
 import base64
-from collections import OrderedDict
-from contextlib import closing
+import errno
 import glob
 import hashlib
-import os
-import subprocess
-import errno
 import multiprocessing
+import os
 import shutil
+import subprocess
 import tarfile
+from collections import OrderedDict
+from contextlib import closing
 from urlparse import urlparse
+
 from toil.job import Job
 
 

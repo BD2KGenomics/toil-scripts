@@ -42,10 +42,11 @@ from collections import OrderedDict
 
 import yaml
 from toil.job import Job
+from toil_lib import require
+from toil_lib.programs import docker_call
+from toil_lib.urls import s3am_upload
+
 from toil_scripts import download_from_s3_url
-from toil_scripts.lib import require
-from toil_scripts.lib.programs import docker_call
-from toil_scripts.lib.urls import s3am_upload
 from toil_scripts.rnaseq_cgl.rnaseq_cgl_pipeline import generate_file
 
 
