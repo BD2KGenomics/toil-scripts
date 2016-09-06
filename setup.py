@@ -73,8 +73,7 @@ kwargs = dict(
     author_email='cgl-toil@googlegroups.com',
     url="https://github.com/BD2KGenomics/toil-scripts",
     install_requires=[
-        'toil-lib==1.0.2',
-        'tqdm==3.8.0',  # FIXME: Remove once ADAM stops using it (superfluous import)
+        'toil-lib==1.0.3',
         'pyyaml==3.11'],
     tests_require=[
         'pytest==2.8.3'],
