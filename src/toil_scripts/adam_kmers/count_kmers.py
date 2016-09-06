@@ -11,8 +11,8 @@ import shlex
 from toil.lib.spark import spawn_spark_cluster
 
 # imports from toil_scripts
-from toil_scripts.lib import require
-from toil_scripts.tools.spark_tools import call_adam, call_conductor, \
+from toil_lib import require
+from toil_lib.tools.spark_tools import call_adam, call_conductor, \
     MasterAddress, HDFS_MASTER_PORT, SPARK_MASTER_PORT
 
 

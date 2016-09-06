@@ -29,16 +29,15 @@ import tarfile
 from contextlib import closing
 from glob import glob
 
-from toil.job import Job
-
-from toil_scripts.lib.files import tarball_files
-from toil_scripts.lib.jobs import map_job
-from toil_scripts.lib.programs import docker_call
-from toil_scripts.lib.urls import s3am_upload_job
-from toil_scripts.lib.urls import download_url_job
-from toil_scripts.lib.urls import download_url
-from bd2k.util.processes import which
 from bd2k.util.files import mkdir_p
+from bd2k.util.processes import which
+from toil.job import Job
+from toil_lib.files import tarball_files
+from toil_lib.jobs import map_job
+from toil_lib.programs import docker_call
+from toil_lib.urls import download_url
+from toil_lib.urls import download_url_job
+from toil_lib.urls import s3am_upload_job
 
 
 def parse_input_samples(job, inputs):

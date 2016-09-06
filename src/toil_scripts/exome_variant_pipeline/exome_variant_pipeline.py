@@ -12,18 +12,17 @@ import yaml
 from bd2k.util.files import mkdir_p
 from bd2k.util.processes import which
 from toil.job import Job
-
-from toil_scripts.lib import require
-from toil_scripts.lib.files import copy_files
-from toil_scripts.lib.jobs import map_job
-from toil_scripts.lib.urls import download_url_job, s3am_upload
-from toil_scripts.tools.mutation_callers import run_muse
-from toil_scripts.tools.mutation_callers import run_mutect
-from toil_scripts.tools.mutation_callers import run_pindel
-from toil_scripts.tools.preprocessing import run_gatk_preprocessing
-from toil_scripts.tools.preprocessing import run_picard_create_sequence_dictionary
-from toil_scripts.tools.preprocessing import run_samtools_faidx
-from toil_scripts.tools.preprocessing import run_samtools_index
+from toil_lib import require
+from toil_lib.files import copy_files
+from toil_lib.jobs import map_job
+from toil_lib.tools.mutation_callers import run_muse
+from toil_lib.tools.mutation_callers import run_mutect
+from toil_lib.tools.mutation_callers import run_pindel
+from toil_lib.tools.preprocessing import run_gatk_preprocessing
+from toil_lib.tools.preprocessing import run_picard_create_sequence_dictionary
+from toil_lib.tools.preprocessing import run_samtools_faidx
+from toil_lib.tools.preprocessing import run_samtools_index
+from toil_lib.urls import download_url_job, s3am_upload
 
 
 # Start of Job Functions

@@ -39,11 +39,12 @@ import yaml
 from toil.job import Job
 from toil.lib.spark import spawn_spark_cluster
 
-from toil_scripts.lib import require
-from toil_scripts.lib.files import copy_files, move_files
-from toil_scripts.lib.programs import docker_call, mock_mode
+from toil_lib import require
+from toil_lib.files import copy_files, move_files
+from toil_lib.programs import docker_call, mock_mode
+from toil_lib.tools.spark_tools import call_adam, call_conductor, MasterAddress, HDFS_MASTER_PORT, SPARK_MASTER_PORT
+
 from toil_scripts.rnaseq_cgl.rnaseq_cgl_pipeline import generate_file
-from toil_scripts.tools.spark_tools import call_adam, call_conductor, MasterAddress, HDFS_MASTER_PORT, SPARK_MASTER_PORT
 
 log = logging.getLogger(__name__)
 
