@@ -1,5 +1,3 @@
-#!/usr/bin/env python2.7
-from __future__ import print_function
 import os
 
 from toil_scripts.lib.programs import docker_call

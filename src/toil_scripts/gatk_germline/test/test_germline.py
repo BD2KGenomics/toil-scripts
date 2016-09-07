@@ -37,36 +37,40 @@ class GermlineTest(TestCase):
     def setUp(self):
         self.workdir = tempfile.mkdtemp()
         self.fastq_url = 's3://cgl-pipeline-inputs/germline/ci/NIST7035_NIST7086.aln21.ci.1.fq'
-        self.vcf_url = 's3://cgl-pipeline-inputs/germline/ci/NA12878.21.genotyped.aug30.vcf'
-        self.bam_sample = ['bam_test', 's3://cgl-pipeline-inputs/germline/ci/NIST7035_NIST7086.aln21.ci.bam']
         self.jobStore = os.getenv('TOIL_SCRIPTS_TEST_JOBSTORE', os.path.join(self.workdir, 'jobstore-%s' % uuid4()))
         self.toilOptions = shlex.split(os.environ.get('TOIL_SCRIPTS_TEST_TOIL_OPTIONS', ''))
         self.base_command = concat('toil-germline', 'run',
                                    self.toilOptions,
                                    self.jobStore)
 
-    def test_cli_sample_option(self):
+    def test_pipeline_with_vqsr(self):
         """
-        Runs a BAM sample using the command line interface
+        Tests entire pipeline with VQSR using BAM input.
+
+        Skips HaplotypeCaller step by swapping in a pre-cooked GVCF file.
         """
         expected_files = {'bam_test.processed.ci_test.bam',
                           'bam_test.ci_test.g.vcf',
                           'bam_test.genotyped.ci_test.vcf',
-                          'bam_test.hard_filter.ci_test.vcf',
+                          'bam_test.vqsr.ci_test.vcf',
                           'config-toil-germline.yaml'}
 
         inputs = self._get_default_inputs()
         inputs.run_bwa = True
         inputs.preprocess = True
+        inputs.run_vqsr = True
+        inputs.hc_output = 's3://cgl-pipeline-inputs/germline/ci/NA12878_21_Variants_CI_25.sep1VQSR.g.vcf'
+
+        bam_sample = ['bam_test', 's3://cgl-pipeline-inputs/germline/ci/NIST7035_NIST7086.aln21.ci.bam']
 
         self._run(self.base_command,
-                  '--sample', self.bam_sample,
+                  '--sample', bam_sample,
                   '--config', self._generate_config(inputs))
         self._assertOutput(expected_files)
 
-    def test_cli_manifest_option(self):
+    def test_joint_genotype(self):
         """
-        Tests using manifest containing FASTQ files and hard filters
+        Aligns paired FASTQ files, joint genotypes, and hard filters.
         """
         num_samples = int(os.environ.get('TOIL_SCRIPTS_TEST_NUM_SAMPLES', '3'))
         expected_files = {'joint_genotyped.genotyped.ci_test.vcf',
@@ -88,7 +92,7 @@ class GermlineTest(TestCase):
                   '--manifest', self._generate_manifest(num_samples))
         self._assertOutput(expected_files)
 
-    def test_cli_preprocess_only(self):
+    def test_preprocess_only(self):
         """
         Tests preprocess only option
         """
@@ -107,40 +111,6 @@ class GermlineTest(TestCase):
                   '--manifest', self._generate_manifest(num_samples),
                   '--preprocess-only')
         self._assertOutput(expected_files)
-
-    def test_joint_genotype_hard_filter(self):
-        pass
-
-    def test_vqsr(self):
-        """
-        Tests VQSR pipeline using a pre-cooked VCF
-        """
-        from multiprocessing import cpu_count
-
-        from toil.job import Job
-
-        from toil_scripts.gatk_germline.germline import download_shared_files
-        from toil_scripts.gatk_germline.vqsr import vqsr_pipeline
-        from toil_scripts.lib.urls import download_url_job
-
-        options = Job.Runner.getDefaultOptions(self.jobStore)
-        inputs = self._get_default_inputs()
-        inputs.run_vqsr = True
-        shared_files = Job.wrapJobFn(download_shared_files, inputs).encapsulate()
-
-        gvcf = shared_files.addChildJobFn(download_url_job,
-                                          self.vcf_url,
-                                          name='toil.g.vcf',
-                                          s3_key_path=None)
-
-        shared_files.addFollowOnJobFn(vqsr_pipeline,
-                                      'test',
-                                      gvcf.rv(),
-                                      shared_files.rv(),
-                                      cores=cpu_count())
-
-        Job.Runner.startToil(shared_files, options)
-        self._assertOutput({'test.vqsr.vcf'})
 
     def _run(self, *args):
         args = list(concat(*args))
@@ -184,6 +154,9 @@ class GermlineTest(TestCase):
                     joint-genotype: {joint_genotype}
                     preprocess-only:
                     run-oncotator: {run_oncotator}
+
+                    # Special parameters for testing
+                    hc-output: {hc_output}
                     """[1:]).format(**vars(inputs)))
         return path
 
@@ -241,5 +214,8 @@ class GermlineTest(TestCase):
         inputs.bwt = 's3://cgl-pipeline-inputs/germline/ci/bwa_index_b37_21.bwt'
         inputs.pac = 's3://cgl-pipeline-inputs/germline/ci/bwa_index_b37_21.pac'
         inputs.sa = 's3://cgl-pipeline-inputs/germline/ci/bwa_index_b37_21.sa'
+
+        # Special attributes for testing
+        inputs.hc_output = ''
         return inputs
 

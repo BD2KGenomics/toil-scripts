@@ -3,11 +3,14 @@
 
 ## Overview
 
-The Toil Germline pipeline accepts FASTQ and BAM files as input and 
-generates per sample variant callsets using GATK tools. This pipeline 
-can be configured to run GATK preprocessing, variant calling, 
-filtering, and functional annotation using Oncotator. Samples can also
-be processed individually or merged for joint genotyping and filtering.
+The Toil germline pipeline accepts FASTQ or BAM files as input and runs
+the GATK best practices pipeline for germline SNP and INDEL discovery. 
+This pipeline can be configured to run GATK preprocessing, variant 
+calling, and filtering. The pipeline also supports functional variant
+annotation using Oncotator. Samples can be analyzed individually 
+or merged for joint genotyping and filtering. False positives are 
+removed using GATK recommended "hard filters" or through variant
+quality score recalibration and filtering.
 
 #### General Dependencies
 
@@ -76,14 +79,8 @@ following information is required to run a FASTQ or BAM sample:
     BAM Manifest Information:
     - unique identifier
     - sample URL or local path
-    
-GATK requires that the input BAM file includes read group information. 
-Read groups are added during the alignment step. The read group 
-sample field must match the unique sample identifier in the manifest
-when using the joint genotyping feature.
 
 ## Tools
-
 | Tool         | Version | Description                      |
 |--------------|---------|----------------------------------|
 | Bwakit       | 0.7.12  | Maps sequencing reads            |
@@ -92,16 +89,16 @@ when using the joint genotyping feature.
 | GATK         | 3.5     | Identifies genomic variants      |
 | Oncotator    | 1.9     | Adds cancer relevant annotations |
 
-## GATK Recalibration Model Resources and Variant Annotations
+## GATK Recalibration Resources and Variant Annotations
 This pipeline is configured to run the [GATK Germline Best Practices 
 Pipeline](https://software.broadinstitute.org/gatk/best-practices/).
 Please see source code for specific tool parameters. We have followed 
-most of the [GATK recommendations](https://software.broadinstitute.org/gatk/guide/article?id=2805).
-for training sets and variant annotations. One annotation we do not 
+[GATK recommendations](https://software.broadinstitute.org/gatk/guide/article?id=2805).
+for training resources and variant annotations. One annotation we do not 
 use is Coverage because this annotation is not recommended for WES data.
 
 ## GATK Variant Annotations
-The following annotations are automatically added to each variant call:
+The following annotations are automatically added to variant calls:
 - QualByDepth
 - FischerStrand
 - StrandOddsRatio
@@ -113,18 +110,19 @@ The following annotations are automatically added to each variant call:
 ## Joint Genotyping
 [Joint genotyping](https://software.broadinstitute.org/gatk/guide/article?id=3893)
 provides the benefits of joint calling without the exponential increase 
-in runtimes. If the joint-genotype parameter is set to True in the 
-config, then the pipeline will merge the entire cohorts genomic VCF 
-files into a single GVCF. All downstream steps will use the merged GVCF.
+in run times. If the joint-genotype config parameter is set to True, 
+then the pipeline will merge the genomic VCFs across the entire cohort. 
+All downstream steps will use the merged GVCF file. The GATK 
+documentation recommends between 30 and 200 samples per batch. Larger 
+batches increase the disk and memory requirements for the run.
 
 ## VQSR
-
 Variant Quality Score Recalibration is applied whenever the config
 parameter run-vqsr is set to True. [VQSR](https://software.broadinstitute.org/gatk/guide/tooldocs/org_broadinstitute_gatk_tools_walkers_variantrecalibration_VariantRecalibrator.php)
-is a filtering method that uses machine learning to remove false i
-ositives. For this reason, VQSR requires many samples to train on in 
-order to create an accurate statistical model. We use the following VQSR 
-parameters:
+is a filtering method that uses a machine learning approach to remove 
+false positive calls. For this reason, VQSR requires many samples to 
+train on in order to create an accurate statistical model. We use the 
+following VQSR parameters:
 
 ### SNP Recalibration Parameters
 ```
@@ -176,10 +174,8 @@ java -jar GenomeAnalysisTK.jar \
 ```
 
 ## Hard Filters
-If run-vqsr is False, then GATK recommends using the following 
-[hard filters](http://gatkforums.broadinstitute.org/wdl/discussion/2806/howto-apply-hard-filters-to-a-call-set),
-to remove false positives. This technique is less sensitive, but should
-be used if running a small cohort of samples. 
+By default, the pipeline will filter variant calls using the GATK 
+recommended [hard filters](http://gatkforums.broadinstitute.org/wdl/discussion/2806/howto-apply-hard-filters-to-a-call-set). 
 
 SNP Filter:
     "QD < 2.0 || FS > 60.0 || MQ < 40.0 || MQRankSum < -12.5 || ReadPosRankSum < -8.0"
@@ -187,9 +183,113 @@ SNP Filter:
 INDEL Filter:
     "QD < 2.0 || FS > 200.0 || ReadPosRankSum < -20.0"
     
+## Config
+```
+##############################################################################################################
+# GATK Germline Pipeline configuration file
+# Variant databases can be obtained through the GATK resource bundle:
+# https://software.broadinstitute.org/gatk/guide/article?id=1213
+# http://gatkforums.broadinstitute.org/gatk/discussion/1259/what-vqsr-training-sets-arguments-should-i-use-for-my-specific-project
+##############################################################################################################
+# This configuration file is formatted in YAML. Simply write the value (at least one space) after the colon.
+# Edit the values in this configuration file and then rerun the pipeline
+# Comments (beginning with #) do not need to be removed. Optional parameters may be left blank.
+##############################################################################################################
+# Required: Number of cores per job
+cores:
+
+# Required: Java heap size (human readable bytes format i.e. 10G)
+xmx:
+
+# Required: Approximate input file size (human readable bytes format)
+file-size:
+
+# Required: S3 URL or local path to output directory
+output-dir:
+
+# Required: Input BAM file is sorted (Default: False)
+sorted:
+
+# Required: URL or local path to reference genome FASTA file
+genome-fasta:
+
+# Optional: URL or local path to reference genome index (Default: None)
+genome-fai:
+
+# Optional: URL or local path to reference genome sequence dictionary (Default: None)
+genome-dict:
+
+# Optional: URL or local path to 1000 Genomes INDELs resource file (Default: None)
+phase:
+
+# Optional: URL or local path to Mills INDELs resource file (Default: None)
+mills:
+
+# Optional: URL or local path to dbSNP resource file (Default: None)
+dbsnp:
+
+# Optional: URL or local path HapMap resource file (Default: None)
+hapmap:
+
+# Optional: URL or local path Omni resource file (Default: None)
+omni:
+
+# Optional: Align FASTQs or Realign BAM file (Default: False)
+run-bwa:
+
+# Optional. Trim adapters (Default: False)
+trim:
+
+# Optional: URL or local path to BWA index file prefix.amb (Default: None)
+amb:
+
+# Optional: URL or local path to BWA index file prefix.ann (Default: None)
+ann:
+
+# Optional: URL or local path to BWA index file prefix.bwt (Default: None)
+bwt:
+
+# Optional: URL or local path to BWA index file prefix.pac (Default: None)
+pac:
+
+# Optional: URL or local path to BWA index file prefix.sa (Default: None)
+sa:
+
+# Optional: URL or local path to alternate contigs (Default: None)
+# Necessary for ALT-aware alignment
+alt:
+
+# Optional: Run GATK Preprocessing (Default: False)
+preprocess:
+
+# Optional: Stops after GATK Preprocessing (Default: False)
+preprocess-only:
+
+# Optional: Run GATK VQSR (Default: False)
+run-vqsr:
+
+# Optional: Merges all samples into a single GVCF for genotyping and filtering (Default: False)
+joint-genotype:
+
+# Optional: Run Oncotator (Default: False)
+run-oncotator:
+
+# Optional: URL or local path to Oncotator database (Default: None)
+# Necessary for Oncotator
+oncotator-db:
+
+# Optional: Suffix added to output filename (i.e. .toil)
+suffix:
+
+# Optional: Path to key file for SSE-C Encryption (Default: None)
+ssec:
+
+# Optional: Allow seq dict incompatibility (Default: False)
+unsafe-mode:
+```
+    
 
 ## Example Config
-
 ```
 genome-fasta: s3://cgl-pipeline-inputs/hg19/ucsc.hg19.fasta
 genome-fai: s3://cgl-pipeline-inputs/hg19/ucsc.hg19.fasta.fai

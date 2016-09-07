@@ -1,6 +1,6 @@
 #!/usr/bin/env python2.7
 """
-Pipeline takes a FASTQ or BAM file and generates a filtered VCF file using GATK 3.5
+Runs GATK best practices pipeline for germline SNP and INDEL discovery.
 
 BWA Alignment
 0: Download FASTQ(s) or BAM
@@ -16,7 +16,7 @@ GATK Preprocessing
 
 GATK Variant Discovery
 8: Call variants
-9: Merge variant calls
+9: Merge variant calls (Optional)
 10: Genotype variants
 
 GATK Hard Filtering
@@ -27,10 +27,10 @@ GATK Hard Filtering
 15: Merge SNP and Indel VCFs
 
 GATK VQSR and Filtering (Optional)
-16: Recalibrate SNPs
-17: Recalibrate Indels
-18: Apply SNP recalibration
-19: Apply Indel recalibration
+11: Recalibrate SNPs
+12: Recalibrate Indels
+13: Apply SNP recalibration
+14: Apply Indel recalibration
 """
 import argparse
 from collections import namedtuple
@@ -70,7 +70,7 @@ class GermlineSample(namedtuple('GermlineSample', 'uuid url paired_url rg_line')
     Namedtuple subclass for Toil Germline samples. Stores essential sample information.
 
     Attributes
-    uuid: unique sample identifier that matches sample name in read group
+    uuid: unique sample identifier
     url: URL/PATH to FASTQ or BAM file
     paired_url: URL/PATH to paired FASTQ file
     rg_line: Read group information (i.e. @RG\tID:foo\tSM:bar)
@@ -202,9 +202,9 @@ def joint_genotype_and_filter(job, gvcfs, config):
     st = os.statvfs(work_dir)
     free_disk = st.f_bavail * st.f_frsize
 
-    require(int(1.5 * sum(gvcf.size for gvcf in gvcfs.values())) < free_disk,
+    require(int(2 * sum(gvcf.size for gvcf in gvcfs.values())) < free_disk,
             'There is not enough disk to joint '
-            'genotype and filter samples:\n{}'.format('\n'.join(gvcfs.keys())))
+            'genotype samples:\n{}'.format('\n'.join(gvcfs.keys())))
 
     merged_disk = PromisedRequirement(lambda lst: int(1.5 * sum(x.size for x in lst)),
                                       gvcfs.values())
@@ -472,6 +472,8 @@ def prepare_bam(job, uuid, url, config, paired_url=None, rg_line=None):
         sorted_bam = get_bam
 
     else:
+        # Estimate disk requirement as three times input BAM size to accommodate intermediate
+        # files in addition to the final sorted BAM.
         sorted_bam_disk = PromisedRequirement(lambda bam: 3 * bam.size, get_bam.rv())
         sorted_bam = get_bam.addChildJobFn(run_samtools_sort,
                                            get_bam.rv(),
@@ -522,7 +524,7 @@ def prepare_bam(job, uuid, url, config, paired_url=None, rg_line=None):
 
 def setup_and_run_bwa_kit(job, uuid, url, rg_line, config, paired_url=None):
     """
-    Downloads and aligns FASTQs or realigns BAM using BWA.
+    Downloads and aligns FASTQs or realigns BAM using toil-lib's BWA function.
 
     :param JobFunctionWrappingJob job: passed automatically by Toil
     :param str url: FASTQ or BAM sample URL. BAM alignment URL must have .bam extension.
@@ -631,17 +633,19 @@ def gatk_haplotype_caller(job, bam_id, bai_id, config, emit_threshold=10.0, call
     if config.unsafe_mode:
         command = ['-U', 'ALLOW_SEQ_DICT_INCOMPATIBILITY'] + command
 
+    # Add annotations to command
     for annotation in config.annotations:
-        if annotation is not None:
-            command.extend(['-A', annotation])
+        command.extend(['-A', annotation])
 
-    outputs = {'output.g.vcf': None}
+    # Uses docker_call mock mode to replace output with hc_output file
+    outputs = {'output.g.vcf': getattr(config, 'hc_output', None)}
     docker_call(work_dir=work_dir,
                 env={'JAVA_OPTS': '-Djava.io.tmpdir=/data/ -Xmx{}'.format(job.memory)},
                 parameters=command,
                 tool='quay.io/ucsc_cgl/gatk:3.5--dba6dae49156168a909c43330350c6161dc7ecc2',
                 inputs=inputs.keys(),
-                outputs=outputs)
+                outputs=outputs,
+                mock=True if outputs['output.g.vcf'] else False)
     return job.fileStore.writeGlobalFile(os.path.join(work_dir, 'output.g.vcf'))
 
 

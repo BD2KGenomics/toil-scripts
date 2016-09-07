@@ -16,10 +16,10 @@ def generate_config():
         # Required: Number of cores per job
         cores:
 
-        # Required: Java heap size (human readable format)
+        # Required: Java heap size (human readable bytes format i.e. 10G)
         xmx:
 
-        # Required: Approximate input file size (human readable format)
+        # Required: Approximate input file size (human readable bytes format)
         file-size:
 
         # Required: S3 URL or local path to output directory
@@ -80,7 +80,7 @@ def generate_config():
         # Optional: Run GATK Preprocessing (Default: False)
         preprocess:
 
-        # Optional: Only runs GATK Preprocessing steps (Default: False)
+        # Optional: Stops after GATK Preprocessing (Default: False)
         preprocess-only:
 
         # Optional: Run GATK VQSR (Default: False)
@@ -93,13 +93,11 @@ def generate_config():
         run-oncotator:
 
         # Optional: URL or local path to Oncotator database (Default: None)
+        # Necessary for Oncotator
         oncotator-db:
 
         # Optional: Suffix added to output filename (i.e. .toil)
         suffix:
-
-        # Optional: Path to CSV file containing Synapse username and password (Default: None)
-        synapse_credentials:
 
         # Optional: Path to key file for SSE-C Encryption (Default: None)
         ssec:
