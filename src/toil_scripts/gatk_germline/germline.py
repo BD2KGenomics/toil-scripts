@@ -86,6 +86,18 @@ def run_gatk_germline_pipeline(job, samples, config):
     :param list[GermlineSample] samples: List of GermlineSample namedtuples
     :param Namespace config: Configuration options for pipeline
     """
+    # Get available disk space before any jobs have been run
+    work_dir = job.fileStore.getLocalTempDir()
+    st = os.statvfs(work_dir)
+    config.available_disk = st.f_bavail * st.f_frsize
+
+    # Check that there is a reasonable number of samples for joint genotyping
+    num_samples = len(samples)
+    if config.joint_genotype and not 200 > num_samples > 30:
+        job.fileStore.logToMaster('WARNING: GATK recommends batches between '
+                                  '30 and 200 samples for joint genotyping. '
+                                  'The current cohort has %d samples.' % num_samples)
+
     # Download shared files and start germline pipeline
     shared_files = Job.wrapJobFn(download_shared_files, config).encapsulate()
     job.addChild(shared_files)
@@ -117,10 +129,10 @@ def gatk_germline_pipeline(job, samples, config):
     0: Generate and preprocess BAM
         - Uploads processed BAM to output directory
     1: Call Variants using HaplotypeCaller
-        - Uploads GVCF to output directory
+        - Uploads GVCF
     2: Genotype VCF or Joint Genotype
         - Uploads genotyped VCF
-    3: Filter Variants using either hard filter or VQSR
+    3: Filter Variants using either "hard filters" or VQSR
         - Uploads filtered VCF
 
     :param JobFunctionWrappingJob job: passed automatically by Toil
@@ -196,17 +208,14 @@ def joint_genotype_and_filter(job, gvcfs, config):
     :returns: genotype and filter return value
     :rtype: PromisedReturnValue
     """
-    work_dir = job.fileStore.getLocalTempDir()
 
-    # Get available disk space
-    st = os.statvfs(work_dir)
-    free_disk = st.f_bavail * st.f_frsize
-
-    require(int(2 * sum(gvcf.size for gvcf in gvcfs.values())) < free_disk,
-            'There is not enough disk to joint '
+    # Check that there is plenty of disk space for merging cohort GVCFs
+    require(int(2 * sum(gvcf.size for gvcf in gvcfs.values())) < config.available_disk,
+            'There is not enough disk space to joint '
             'genotype samples:\n{}'.format('\n'.join(gvcfs.keys())))
 
-    merged_disk = PromisedRequirement(lambda lst: int(1.5 * sum(x.size for x in lst)),
+    job.fileStore.logToMaster('Merging cohort into a single joint GVCF')
+    merged_disk = PromisedRequirement(lambda lst: int(2 * sum(x.size for x in lst)),
                                       gvcfs.values())
     merged_gvcfs = job.addChildJobFn(gatk_combine_gvcfs,
                                      gvcfs,
@@ -231,7 +240,7 @@ def genotype_and_filter(job, uuid, gvcf, config):
     :return: Genotyped and filtered VCF FileStoreID
     :rtype: str
     """
-    job.fileStore.logToMaster('Genotyping: %s' % uuid)
+    job.fileStore.logToMaster('Genotyping and filtering: %s' % uuid)
     # Estimate disk requirement as 50% more than the sum of the VCF file sizes plus 5G for
     # reference data.
     genotype_gvcf_disk = PromisedRequirement(lambda x: int(1.5 * x.size + human2bytes('5G')),
@@ -254,16 +263,16 @@ def genotype_and_filter(job, uuid, gvcf, config):
 
     if config.run_vqsr:
         if not config.joint_genotype:
-            job.fileStore.logToMaster('WARNING: Running VQSR without joint genotyping!')
+            job.fileStore.logToMaster('WARNING: Running VQSR without joint genotyping.')
         joint_genotype_vcf = genotype_gvcf.addFollowOnJobFn(vqsr_pipeline,
-                                                   uuid,
-                                                   genotype_gvcf.rv(),
-                                                   config)
+                                                            uuid,
+                                                            genotype_gvcf.rv(),
+                                                            config)
     else:
         joint_genotype_vcf = genotype_gvcf.addFollowOnJobFn(hard_filter_pipeline,
-                                                   uuid,
-                                                   genotype_gvcf.rv(),
-                                                   config)
+                                                            uuid,
+                                                            genotype_gvcf.rv(),
+                                                            config)
     return joint_genotype_vcf.rv()
 
 
@@ -275,7 +284,7 @@ def annotate_vcfs(job, vcfs, config):
     :param dict vcfs: Dictionary of UUIDs and VCF FileStoreIDs
     :param Namespace config: Input parameters and shared FileStoreIDs
     """
-    job.fileStore.logToMaster('Annotating VCFs')
+    job.fileStore.logToMaster('Running Oncotator on VCFs')
     for uuid, vcf_id in vcfs.iteritems():
         # Estimate disk space as twice the input VCF size plus the database size
         onco_disk = PromisedRequirement(lambda vcf, db: 2 * vcf.size + db.size,
@@ -285,7 +294,7 @@ def annotate_vcfs(job, vcfs, config):
                                           disk=onco_disk, cores=config.cores, memory=config.xmx)
 
         output_dir = os.path.join(config.output_dir, uuid)
-        filename = '{}.annotated{}.vcf'.format(uuid, config.suffix)
+        filename = '{}.oncotator{}.vcf'.format(uuid, config.suffix)
         annotated_vcf.addChildJobFn(output_file_job,
                                     filename,
                                     annotated_vcf.rv(),
