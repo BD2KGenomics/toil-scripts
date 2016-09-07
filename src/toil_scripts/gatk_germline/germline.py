@@ -36,7 +36,6 @@ import argparse
 from collections import namedtuple
 from copy import deepcopy
 import logging
-from multiprocessing import cpu_count
 import os
 import re
 from urlparse import urlparse
@@ -86,14 +85,14 @@ def run_gatk_germline_pipeline(job, samples, config):
     :param list[GermlineSample] samples: List of GermlineSample namedtuples
     :param Namespace config: Configuration options for pipeline
     """
-    # Get available disk space before any jobs have been run
+    # Determine the available disk space on a worker node before any jobs have been run
     work_dir = job.fileStore.getLocalTempDir()
     st = os.statvfs(work_dir)
     config.available_disk = st.f_bavail * st.f_frsize
 
     # Check that there is a reasonable number of samples for joint genotyping
     num_samples = len(samples)
-    if config.joint_genotype and not 200 > num_samples > 30:
+    if config.joint_genotype and not 30 < num_samples < 200:
         job.fileStore.logToMaster('WARNING: GATK recommends batches between '
                                   '30 and 200 samples for joint genotyping. '
                                   'The current cohort has %d samples.' % num_samples)
@@ -185,7 +184,6 @@ def gatk_germline_pipeline(job, samples, config):
         filtered_vcfs = group_bam_jobs.addFollowOnJobFn(joint_genotype_and_filter,
                                                         gvcfs,
                                                         config,
-                                                        cores=cpu_count()  # Reserve entire node
                                                         ).rv()
 
     else:
@@ -208,14 +206,18 @@ def joint_genotype_and_filter(job, gvcfs, config):
     :returns: genotype and filter return value
     :rtype: PromisedReturnValue
     """
-
-    # Check that there is plenty of disk space for merging cohort GVCFs
-    require(int(2 * sum(gvcf.size for gvcf in gvcfs.values())) < config.available_disk,
+    # Check that there is plenty of disk space for merging cohort GVCFs.
+    # Estimate the disk requirement as twice the size of the cohort plus 10G of buffer space.
+    cohort_size = sum(gvcf.size for gvcf in gvcfs.values())
+    require(int(2 * cohort_size + human2bytes('10G')) < config.available_disk,
             'There is not enough disk space to joint '
             'genotype samples:\n{}'.format('\n'.join(gvcfs.keys())))
 
     job.fileStore.logToMaster('Merging cohort into a single joint GVCF')
-    merged_disk = PromisedRequirement(lambda lst: int(2 * sum(x.size for x in lst)),
+    # Request enough disk space for twice the sum of all GVCFs in the cohort plus 5G for
+    # reference data.
+    merged_disk = PromisedRequirement(lambda lst: int(2 * sum(x.size for x in lst) +
+                                                      human2bytes('5G')),
                                       gvcfs.values())
     merged_gvcfs = job.addChildJobFn(gatk_combine_gvcfs,
                                      gvcfs,
@@ -241,9 +243,8 @@ def genotype_and_filter(job, uuid, gvcf, config):
     :rtype: str
     """
     job.fileStore.logToMaster('Genotyping and filtering: %s' % uuid)
-    # Estimate disk requirement as 50% more than the sum of the VCF file sizes plus 5G for
-    # reference data.
-    genotype_gvcf_disk = PromisedRequirement(lambda x: int(1.5 * x.size + human2bytes('5G')),
+    # Estimate required disk space as twice the input GVCF plus 5G for reference data
+    genotype_gvcf_disk = PromisedRequirement(lambda x: int(2 * x.size + human2bytes('5G')),
                                                            gvcf)
     genotype_gvcf = job.addChildJobFn(gatk_genotype_gvcfs,
                                       {uuid: gvcf},
@@ -286,8 +287,9 @@ def annotate_vcfs(job, vcfs, config):
     """
     job.fileStore.logToMaster('Running Oncotator on VCFs')
     for uuid, vcf_id in vcfs.iteritems():
-        # Estimate disk space as twice the input VCF size plus the database size
-        onco_disk = PromisedRequirement(lambda vcf, db: 2 * vcf.size + db.size,
+        # Estimate disk space as 3x the input VCF size plus the database size. The
+        # annotated VCF will be larger than the the original VCF.
+        onco_disk = PromisedRequirement(lambda vcf, db: 3 * vcf.size + db.size,
                                         vcf_id,
                                         config.oncotator_db)
         annotated_vcf = job.addChildJobFn(run_oncotator, vcf_id, config,
@@ -346,25 +348,6 @@ def parse_manifest(path_to_manifest):
                     'Invalid URL passed for {}'.format(url))
             samples.append(GermlineSample(uuid, url, url2, rg_line))
     return samples
-
-
-def convert_space_resource(value, default):
-    """
-    Converts resource requirement from human readable bytes to raw integer value.
-
-    :param str|int|None value: Space resource value
-    :param str default: Human readable parameter size
-    :return: bytes
-    :rtype: int
-    """
-    if value is None:
-        return human2bytes(default)
-    elif isinstance(value, str) and re.match('\d+\s*[MKG]', value.upper()):
-        return human2bytes(value)
-    elif isinstance(value, int):
-        return value
-    else:
-        raise ValueError('Could not convert resource requirement: %s' % value)
 
 
 def download_shared_files(job, config):
@@ -791,16 +774,10 @@ def main():
                     'Missing parameters for VQSR:\n{}'
                     .format(', '.join(vqsr_fields - input_fields)))
 
-        logging.info('Configuring resource parameters')
         # Set resource parameters
-        inputs['xmx'] = convert_space_resource(inputs['xmx'], '10G')
-        logging.info('Setting Java memory allocation to %d bytes.' % inputs['xmx'])
-
-        inputs['file_size'] = convert_space_resource(inputs['file_size'], '10G')
-        logging.info('Setting input file size to %d bytes' % inputs['file_size'])
-
-        inputs['cores'] = inputs.get('cores', 8)
-        logging.info('Allocating %d cores per job.' % inputs['cores'])
+        inputs['xmx'] = human2bytes(inputs['xmx'])
+        inputs['file_size'] = human2bytes(inputs['file_size'])
+        inputs['cores'] = int(inputs['cores'])
 
         # GATK recommended annotations:
         # https://software.broadinstitute.org/gatk/documentation/article?id=2805
