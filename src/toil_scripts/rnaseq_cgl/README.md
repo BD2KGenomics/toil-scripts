@@ -91,7 +91,7 @@ All samples and inputs must be submitted as URLs with support for the following 
 `http://`, `file://`, `s3://`, `ftp://`.
 
 Samples consisting of tarballs with fastq files inside _must_ follow the file name convention of ending in an 
-R1/R2 or \_1/\_2 followed by one of the 4 extensions: `{ .fastq.gz, .fastq, .fq.gz, .fq }`.
+R1/R2 or \_1/\_2 followed by `.fastq.gz`, `.fastq`, `.fq.gz` or `.fq.`.
 
 ## General Usage
 

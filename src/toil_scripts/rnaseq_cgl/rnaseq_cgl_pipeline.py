@@ -204,15 +204,18 @@ def process_sample(job, config, input_tar=None, input_r1=None, input_r2=None, gz
     if config.paired:
         r1, r2 = [], []
         # Pattern convention: Look for R1/R2 or _1/_2 at the end of files named .fastq.gz, .fastq, .fq.gz, or .fq
-        pattern = '(?:^|[._-])R?([12])(\\.fastq(\\.gz)?|\\.fq(\\.gz)?)$'
+        pattern = re.compile('(?:^|[._-])R?([12])(\\.fastq(\\.gz)?|\\.fq(\\.gz)?)$')
         for fastq in sorted(fastqs):
-            match = re.search(pattern, os.path.basename(fastq))
+            match = pattern.search(os.path.basename(fastq))
             if not match:
-                raise UserError('Fastq file fails to meet required convention. See documentation: {}'.format(fastq))
+                raise UserError('FASTQ file name fails to meet required convention for paired reads '
+                                '(see documentation). ' + fastq)
             elif match.group(1) == '1':
                 r1.append(fastq)
             elif match.group(1) == '2':
                 r2.append(fastq)
+            else:
+                assert False
         require(len(r1) == len(r2), 'Check fastq names, uneven number of pairs found.\nr1: {}\nr2: {}'.format(r1, r2))
         # Concatenate fastqs
         command = 'zcat' if r1[0].endswith('.gz') and r2[0].endswith('.gz') else 'cat'
