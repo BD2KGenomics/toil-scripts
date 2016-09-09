@@ -36,7 +36,6 @@ import argparse
 from collections import namedtuple
 from copy import deepcopy
 import logging
-from math import ceil
 import os
 import re
 from urlparse import urlparse

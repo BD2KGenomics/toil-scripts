@@ -17,59 +17,59 @@ def gatk_genotype_gvcfs(job, gvcf_ids, config, emit_threshold=10.0, call_thresho
     :return: VCF FileStoreID
     :rtype: str
     """
-    job.fileStore.logToMaster('Running GATK GenotypeGVCF')
-    work_dir = job.fileStore.getLocalTempDir()
+    job.fileStore.logToMaster('Running GATK GenotypeGVCFs')
+
     inputs = {'genome.fa': config.genome_fasta,
               'genome.fa.fai': config.genome_fai,
               'genome.dict': config.genome_dict}
     inputs.update(gvcf_ids)
+
+    work_dir = job.fileStore.getLocalTempDir()
     for name, file_store_id in inputs.iteritems():
         job.fileStore.readGlobalFile(file_store_id, os.path.join(work_dir, name))
 
     command = ['-T', 'GenotypeGVCFs',
-               '-nt', str(job.cores),
                '-R', '/data/genome.fa',
                '--out', 'genotyped.vcf',
-               # Fix file locking bug on Azure
-               '--disable_auto_index_creation_and_locking_when_reading_rods',
                '-stand_emit_conf', str(emit_threshold),
                '-stand_call_conf', str(call_threshold)]
 
-    # Compute annotations
+    # Compute annotations from config
     for annotation in config.annotations:
         command.extend(['-A', annotation])
 
-    # Genotype across cohort GVCFs
+    # Include all GVCFs for joint genotyping
     for uuid in gvcf_ids.keys():
         command.extend(['--variant', os.path.join('/data', uuid)])
 
     if config.unsafe_mode:
         command.extend(['-U', 'ALLOW_SEQ_DICT_INCOMPATIBILITY'])
 
-    outputs = {'genotyped.vcf': None}
     docker_call(work_dir=work_dir,
                 env={'JAVA_OPTS': '-Djava.io.tmpdir=/data/ -Xmx{}'.format(job.memory)},
                 parameters=command,
                 tool='quay.io/ucsc_cgl/gatk:3.5--dba6dae49156168a909c43330350c6161dc7ecc2',
                 inputs=inputs.keys(),
-                outputs=outputs)
+                outputs={'genotyped.vcf': None})
     return job.fileStore.writeGlobalFile(os.path.join(work_dir, 'genotyped.vcf'))
 
 
 def run_oncotator(job, vcf_id, config):
     """
-    Runs Oncotator on VCF file. This tool only uses HG19 annotations.
+    Uses Oncotator to add cancer relevant variant annotations to a VCF file.
 
     :param JobFunctionWrappingJob job: passed automatically by Toil
     :param str vcf_id: VCF FileStoreID
-    :param Namespace config: Pipeline configuration and shared FileStoreIDs
+    :param Namespace config: Configuration parameters and shared FileStoreIDs
     :return: Annotated VCF FileStoreID
     :rtype: str
     """
     job.fileStore.logToMaster('Running Oncotator')
+
+    inputs = {'input.vcf': vcf_id,
+              'oncotator_db': config.oncotator_db}
+
     work_dir = job.fileStore.getLocalTempDir()
-    inputs = {'oncotator_db': config.oncotator_db,
-              'input.vcf': vcf_id}
     for name, file_store_id in inputs.iteritems():
         job.fileStore.readGlobalFile(file_store_id, os.path.join(work_dir, name))
 
@@ -78,7 +78,7 @@ def run_oncotator(job, vcf_id, config):
                '--db-dir', os.path.basename(inputs['oncotator_db']),
                'input.vcf',
                'annotated.vcf',
-               'hg19']
+               'hg19']  # Oncotator annotations are based on hg19
 
     outputs = {'annotated.vcf': None}
     docker_call(work_dir=work_dir,
