@@ -215,7 +215,7 @@ def process_sample(job, config, input_tar=None, input_r1=None, input_r2=None, gz
             elif match.group(1) == '2':
                 r2.append(fastq)
             else:
-                assert False
+                assert False, match.group(1)
         require(len(r1) == len(r2), 'Check fastq names, uneven number of pairs found.\nr1: {}\nr2: {}'.format(r1, r2))
         # Concatenate fastqs
         command = 'zcat' if r1[0].endswith('.gz') and r2[0].endswith('.gz') else 'cat'
