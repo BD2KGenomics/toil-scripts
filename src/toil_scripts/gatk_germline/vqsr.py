@@ -2,7 +2,7 @@
 from __future__ import print_function
 import os
 
-from toil.job import PromisedRequirement
+from toil.job import PromisedRequirement as PrR
 from bd2k.util.humanize import human2bytes
 
 from toil_scripts.gatk_germline.common import output_file_job
@@ -12,8 +12,7 @@ from toil_scripts.tools.variant_filters import gatk_variant_recalibrator, \
 
 def vqsr_pipeline(job, uuid, vcf_id, config):
     """
-    Runs GATK Variant Quality Score Recalibration. Writes VQSR VCF to an output directory defined
-    in the config dictionary. Multiple GVCFs are joint genotyped and recalibrated into a single VCF.
+    Runs GATK Variant Quality Score Recalibration.
 
     0: Start                        0 --> 1 --> 3 --> 4 --> 5
     1: Recalibrate SNPs                   |      |
@@ -23,34 +22,57 @@ def vqsr_pipeline(job, uuid, vcf_id, config):
     5: Write VCF to output directory
 
     :param JobFunctionWrappingJob job: Toil Job instance
+    :param str uuid: unique sample identifier
     :param str vcf_id: VCF FileStoreID
     :param Namespace config: Input parameters
     :return: SNP and INDEL VQSR VCF FileStoreID
     :rtype: str
     """
-    # Estimate disk resource as twice the input VCF plus 10G for genome data and SNP databases
-    snp_recal_disk = PromisedRequirement(lambda x: 2 * x.size + human2bytes('10G'), vcf_id)
+    # Get the total size of the genome reference
+    genome_ref_size = config.genome_fasta.size + config.genome_fai.size + config.genome_dict.size
+
+    # The VariantRecalibator disk requirement depends on the input VCF, the resource files,
+    # the genome reference files, and the output recalibration table, tranche file, and plots.
+    # The sum of these output files are less than the input VCF.
+    snp_resources = ['hapmap', 'omni', 'dbsnp', 'phase']
+    snp_resource_size = sum(getattr(config, resource).size for resource in snp_resources)
+    snp_recal_disk = PrR(lambda in_vcf, ref_size, resource_size:
+                         2 * in_vcf.size + ref_size + resource_size,
+                         vcf_id,
+                         genome_ref_size,
+                         snp_resource_size)
     snp_recal = job.wrapJobFn(gatk_variant_recalibrator,
                               'SNP',
                               vcf_id,
                               config,
-                              disk=snp_recal_disk, cores=config.cores, memory=config.xmx)
+                              disk=snp_recal_disk,
+                              cores=config.cores,
+                              memory=config.xmx)
 
-    # Estimate disk resource as twice the input VCF plus 10G for genome data and INDEL databases
-    indel_recal_disk = PromisedRequirement(lambda x: 2 * x.size + human2bytes('10G'), vcf_id)
+    indel_resource_size = config.mills.size + config.dbsnp.size
+    indel_recal_disk = PrR(lambda in_vcf, ref_size, resource_size:
+                           2 * in_vcf.size + ref_size + resource_size,
+                           vcf_id,
+                           genome_ref_size,
+                           indel_resource_size)
     indel_recal = job.wrapJobFn(gatk_variant_recalibrator,
                                 'INDEL',
                                 vcf_id,
                                 config,
-                                disk=indel_recal_disk, cores=config.cores, memory=config.xmx)
+                                disk=indel_recal_disk,
+                                cores=config.cores,
+                                memory=config.xmx)
 
-    # Estimate disk resource as the twice the sum of the input VCF, the recalibration table
-    # and the tranche file plus 5G for reference genome data.
-    apply_snp_recal_disk = PromisedRequirement(
-        lambda x, y, z: 2 * (x.size + y.size + z.size) + human2bytes('5G'),
-        vcf_id,
-        snp_recal.rv(0),
-        snp_recal.rv(1))
+    # The ApplyRecalibration disk requirement depends on the input VCF size, the variant
+    # recalibration table, the tranche file, the genome reference file, and the output VCF.
+    # This step labels variants as filtered, so the output VCF file should be slightly larger
+    # than the input file. Estimate a 10% increase in the VCF file size.
+    apply_snp_recal_disk = PrR(lambda in_vcf, recal, tranche, ref_size:
+                               int(2.1 * in_vcf.size + recal.size + tranche.size + ref_size),
+                               vcf_id,
+                               snp_recal.rv(0),
+                               snp_recal.rv(1),
+                               genome_ref_size)
     apply_snp_recal = job.wrapJobFn(gatk_apply_variant_recalibration,
                                     'SNP',
                                     vcf_id,
@@ -60,9 +82,12 @@ def vqsr_pipeline(job, uuid, vcf_id, config):
                                     cores=config.cores,
                                     memory=config.xmx)
 
-    apply_indel_recal_disk = PromisedRequirement(
-        lambda x, y, z: 2 * (x.size + y.size + z.size) + human2bytes('5G'),
-        apply_snp_recal.rv(), indel_recal.rv(0), indel_recal.rv(1))
+    apply_indel_recal_disk = PrR(lambda in_vcf, recal, tranche, ref_size:
+                                 int(2.1 * in_vcf.size + recal.size + tranche.size + ref_size),
+                                 vcf_id,
+                                 indel_recal.rv(0),
+                                 indel_recal.rv(1),
+                                 genome_ref_size)
     apply_indel_recal = job.wrapJobFn(gatk_apply_variant_recalibration,
                                       'INDEL',
                                       apply_snp_recal.rv(),
@@ -86,7 +111,8 @@ def vqsr_pipeline(job, uuid, vcf_id, config):
                                 vqsr_name,
                                 apply_indel_recal.rv(),
                                 output_dir,
-                                s3_key_path=config.ssec)
+                                s3_key_path=config.ssec,
+                                disk=PrR(lambda x: x.size, apply_indel_recal.rv()))
     apply_indel_recal.addChild(output_vqsr)
     return apply_indel_recal.rv()
 

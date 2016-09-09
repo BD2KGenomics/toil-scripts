@@ -9,9 +9,9 @@ def gatk_select_variants(job, mode, vcf_id, config):
     Isolate variant types using GATK SelectVariants
 
     :param JobFunctionWrappingJob job: passed automatically by Toil
-    :param mode str: variant type (i.e. SNP or INDEL)
-    :param vcf_id str: VCF FileStoreID
-    :param config Namespace: Configuration and shared FileStoreIDs
+    :param str mode: variant type (i.e. SNP or INDEL)
+    :param str vcf_id: VCF FileStoreID
+    :param Namespace config: Configuration and shared FileStoreIDs
     :return: VCF FileStoreID
     :rtype: str
     """
@@ -52,9 +52,9 @@ def gatk_variant_filtration(job, mode, vcf_id, config):
     QD < 2.0 || FS > 200.0 || ReadPosRankSum < -20.0
 
     :param job: Toil Job instance
-    :param mode str: variant type
-    :param vcf_id str: VCF FileStoreID
-    :param config Namespace: Configuration and shared FileStoreIDs
+    :param str mode: variant type
+    :param str vcf_id: VCF FileStoreID
+    :param Namespace config: Configuration parameters and shared FileStoreIDs
     :return: Filtered VCF FileStoreID
     :rtype: str
     """
@@ -107,7 +107,7 @@ def gatk_variant_filtration(job, mode, vcf_id, config):
 def gatk_variant_recalibrator(job, mode, vcf_id, config):
     """
     Variant quality score recalibration for SNP or INDEL variants. VQSR must be run twice because
-    SNP and INDEL VQSR use distinct models.
+    the SNP and INDEL VQSR models are different.
 
     :param JobFunctionWrappingJob job: Job instance
     :param str mode: Determines variant recalibration mode (SNP or INDEL)

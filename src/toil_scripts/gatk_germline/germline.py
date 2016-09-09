@@ -36,6 +36,7 @@ import argparse
 from collections import namedtuple
 from copy import deepcopy
 import logging
+from math import ceil
 import os
 import re
 from urlparse import urlparse
@@ -142,6 +143,9 @@ def gatk_germline_pipeline(job, samples, config):
     """
     require(len(samples) > 0, 'No samples were provided!')
 
+    # Get total size of genome reference files. This is used for configuring disk size.
+    genome_ref_size = config.genome_fasta.size + config.genome_fai.size + config.genome_dict.size
+
     # 0: Generate processed BAM and BAI files for each sample
     # group preprocessing and variant calling steps in empty Job instance
     group_bam_jobs = Job()
@@ -156,8 +160,13 @@ def gatk_germline_pipeline(job, samples, config):
                                                rg_line=sample.rg_line)
 
         # 1: Generate per sample gvcfs {uuid: gvcf_id}
-        # Estimate disk resource as twice the input bam plus 5Gs of reference data
-        hc_disk = PromisedRequirement(lambda bam: 2 * bam.size + human2bytes('5G'), get_bam.rv(0))
+        # The HaplotypeCaller disk requirement depends on the input bam, bai, the genome reference
+        # files, and the output GVCF file. The output GVCF is smaller than the input BAM file.
+        hc_disk = PromisedRequirement(lambda bam, bai, ref_size:
+                                      2 * bam.size + bai.size + ref_size,
+                                      get_bam.rv(0),
+                                      get_bam.rv(1),
+                                      genome_ref_size)
         get_gvcf = get_bam.addFollowOnJobFn(gatk_haplotype_caller,
                                             get_bam.rv(0),
                                             get_bam.rv(1),
@@ -165,15 +174,17 @@ def gatk_germline_pipeline(job, samples, config):
                                             cores=config.cores,
                                             disk=hc_disk,
                                             memory=config.xmx)
+        # Store cohort GVCFs in dictionary
         gvcfs[sample.uuid] = get_gvcf.rv()
 
-        # Upload gvcf before genotyping
+        # Upload individual sample GVCF before genotyping
         vqsr_name = '{}{}.g.vcf'.format(sample.uuid, config.suffix)
         get_gvcf.addChildJobFn(output_file_job,
                                vqsr_name,
                                get_gvcf.rv(),
                                os.path.join(config.output_dir, sample.uuid),
-                               s3_key_path=config.ssec)
+                               s3_key_path=config.ssec,
+                               disk=PromisedRequirement(lambda x: x.size, get_gvcf.rv()))
 
     # VQSR requires many variants in order to train a decent model. GATK recommends a minimum of
     # 30 exomes or one large WGS sample:
@@ -183,9 +194,9 @@ def gatk_germline_pipeline(job, samples, config):
     if config.joint_genotype:
         filtered_vcfs = group_bam_jobs.addFollowOnJobFn(joint_genotype_and_filter,
                                                         gvcfs,
-                                                        config,
-                                                        ).rv()
+                                                        config).rv()
 
+    # If not joint genotyping, then iterate over cohort and genotype and filter individually.
     else:
         for uuid, gvcf_id in gvcfs.iteritems():
             filtered_vcfs[uuid] = group_bam_jobs.addFollowOnJobFn(genotype_and_filter,
@@ -203,22 +214,26 @@ def joint_genotype_and_filter(job, gvcfs, config):
 
     :param JobFunctionWrappingJob job: passed automatically by Toil
     :param dict gvcfs: Dictionary of GVCFs {UUID: FileStoreID}
+    :param Namespace config: Input parameters and reference FileStoreIDs
     :returns: genotype and filter return value
     :rtype: PromisedReturnValue
     """
-    # Check that there is plenty of disk space for merging cohort GVCFs.
-    # Estimate the disk requirement as twice the size of the cohort plus 10G of buffer space.
+    # Get the total size of genome reference files
+    genome_ref_size = config.genome_fasta.size + config.genome_fai.size + config.genome_dict.size
+
+    # Check that there is plenty of disk space for merging cohort GVCFs before issuing job.
+    # Estimate the disk requirement as 2.5x the total GVCF size
     cohort_size = sum(gvcf.size for gvcf in gvcfs.values())
-    require(int(2 * cohort_size + human2bytes('10G')) < config.available_disk,
+    require(int(2.5 * cohort_size + genome_ref_size) < config.available_disk,
             'There is not enough disk space to joint '
             'genotype samples:\n{}'.format('\n'.join(gvcfs.keys())))
 
     job.fileStore.logToMaster('Merging cohort into a single joint GVCF')
-    # Request enough disk space for twice the sum of all GVCFs in the cohort plus 5G for
-    # reference data.
-    merged_disk = PromisedRequirement(lambda lst: int(2 * sum(x.size for x in lst) +
-                                                      human2bytes('5G')),
-                                      gvcfs.values())
+    # Request enough disk space for 2.5x the sum of all the GVCFs plus genome references.
+    merged_disk = PromisedRequirement(lambda lst, ref_size:
+                                      int(2.5 * sum(x.size for x in lst) + ref_size),
+                                      gvcfs.values(),
+                                      genome_ref_size)
     merged_gvcfs = job.addChildJobFn(gatk_combine_gvcfs,
                                      gvcfs,
                                      config,
@@ -233,8 +248,10 @@ def joint_genotype_and_filter(job, gvcfs, config):
 
 def genotype_and_filter(job, uuid, gvcf, config):
     """
-    Genotypes and filters a single VCF file using VQSR or hard filters
-
+    Genotypes and filters a GVCF file.
+    0: Genotype GVCF
+    1: Upload GVCF
+    2: VQSR or Hard filter pipeline
     :param JobFunctionWrappingJob job: passed automatically by Toil
     :param str uuid: sample unique identifier
     :param str gvcf: GVCF FileStoreIDs
@@ -242,10 +259,15 @@ def genotype_and_filter(job, uuid, gvcf, config):
     :return: Genotyped and filtered VCF FileStoreID
     :rtype: str
     """
-    job.fileStore.logToMaster('Genotyping and filtering: %s' % uuid)
-    # Estimate required disk space as twice the input GVCF plus 5G for reference data
-    genotype_gvcf_disk = PromisedRequirement(lambda x: int(2 * x.size + human2bytes('5G')),
-                                                           gvcf)
+    # Get the total size of the genome reference
+    genome_ref_size = config.genome_fasta.size + config.genome_fai.size + config.genome_dict.size
+
+    # GenotypeGVCF disk requirement depends on the input GVCF, the genome reference files, and
+    # the output VCF file. The output VCF is smaller than the input GVCF.
+    genotype_gvcf_disk = PromisedRequirement(lambda gvcf_id, ref_size:
+                                             2 * gvcf_id.size + ref_size,
+                                             gvcf,
+                                             genome_ref_size)
     genotype_gvcf = job.addChildJobFn(gatk_genotype_gvcfs,
                                       {uuid: gvcf},
                                       config,
@@ -254,13 +276,12 @@ def genotype_and_filter(job, uuid, gvcf, config):
                                       memory=config.xmx)
 
     genotyped_filename = '%s.genotyped%s.vcf' % (uuid, config.suffix)
-    genotyped_gvcf_disk = PromisedRequirement(lambda x: x.size, genotype_gvcf.rv())
     genotype_gvcf.addChildJobFn(output_file_job,
                                 genotyped_filename,
                                 genotype_gvcf.rv(),
                                 os.path.join(config.output_dir, uuid),
                                 s3_key_path=config.ssec,
-                                disk=genotyped_gvcf_disk)
+                                disk=PromisedRequirement(lambda x: x.size, genotype_gvcf.rv()))
 
     if config.run_vqsr:
         if not config.joint_genotype:
@@ -287,13 +308,15 @@ def annotate_vcfs(job, vcfs, config):
     """
     job.fileStore.logToMaster('Running Oncotator on VCFs')
     for uuid, vcf_id in vcfs.iteritems():
-        # Estimate disk space as 3x the input VCF size plus the database size. The
-        # annotated VCF will be larger than the the original VCF.
+        # The Oncotator disk requirement depends on the input VCF, the Oncotator database
+        # and the output VCF. The annotated VCF will be significantly larger than the input VCF.
         onco_disk = PromisedRequirement(lambda vcf, db: 3 * vcf.size + db.size,
                                         vcf_id,
                                         config.oncotator_db)
         annotated_vcf = job.addChildJobFn(run_oncotator, vcf_id, config,
-                                          disk=onco_disk, cores=config.cores, memory=config.xmx)
+                                          disk=onco_disk,
+                                          cores=config.cores,
+                                          memory=config.xmx)
 
         output_dir = os.path.join(config.output_dir, uuid)
         filename = '{}.oncotator{}.vcf'.format(uuid, config.suffix)
@@ -301,7 +324,8 @@ def annotate_vcfs(job, vcfs, config):
                                     filename,
                                     annotated_vcf.rv(),
                                     output_dir,
-                                    s3_key_path=config.ssec)
+                                    s3_key_path=config.ssec,
+                                    disk=PromisedRequirement(lambda x: x.size, annotated_vcf.rv()))
 
 
 #####################################
@@ -438,7 +462,7 @@ def prepare_bam(job, uuid, url, config, paired_url=None, rg_line=None):
     # 0: Align FASQ or realign BAM
     if config.run_bwa:
         job.fileStore.logToMaster("Aligning Sample: %s" % uuid)
-        get_bam = job.wrapJobFn(setup_and_run_bwa_kit,
+        get_bam = job.wrapJobFn(setup_and_run_bwakit,
                                 uuid,
                                 url,
                                 rg_line,
@@ -464,8 +488,8 @@ def prepare_bam(job, uuid, url, config, paired_url=None, rg_line=None):
         sorted_bam = get_bam
 
     else:
-        # Estimate disk requirement as three times input BAM size to accommodate intermediate
-        # files in addition to the final sorted BAM.
+        # The samtools sort disk requirement depends on the input bam, the tmp files, and the
+        # sorted output bam
         sorted_bam_disk = PromisedRequirement(lambda bam: 3 * bam.size, get_bam.rv())
         sorted_bam = get_bam.addChildJobFn(run_samtools_sort,
                                            get_bam.rv(),
@@ -473,6 +497,7 @@ def prepare_bam(job, uuid, url, config, paired_url=None, rg_line=None):
                                            disk=sorted_bam_disk)
 
     # 2: Index BAM
+    # The samtools index disk requirement depends on the input bam and the output bam index
     index_bam_disk = PromisedRequirement(lambda bam: bam.size, sorted_bam.rv())
     index_bam = job.wrapJobFn(run_samtools_index, sorted_bam.rv(), disk=index_bam_disk)
 
@@ -489,7 +514,8 @@ def prepare_bam(job, uuid, url, config, paired_url=None, rg_line=None):
                                    config.phase,
                                    config.mills,
                                    config.dbsnp,
-                                   memory=config.xmx, cores=config.cores).encapsulate()
+                                   memory=config.xmx,
+                                   cores=config.cores).encapsulate()
         sorted_bam.addChild(preprocess)
         index_bam.addChild(preprocess)
 
@@ -514,11 +540,12 @@ def prepare_bam(job, uuid, url, config, paired_url=None, rg_line=None):
     return output_bam_promise, output_bai_promise
 
 
-def setup_and_run_bwa_kit(job, uuid, url, rg_line, config, paired_url=None):
+def setup_and_run_bwakit(job, uuid, url, rg_line, config, paired_url=None):
     """
     Downloads and aligns FASTQs or realigns BAM using toil-lib's BWA function.
 
     :param JobFunctionWrappingJob job: passed automatically by Toil
+    :param str uuid: Sample unique identifier
     :param str url: FASTQ or BAM sample URL. BAM alignment URL must have .bam extension.
     :param Namespace config: Input parameters and shared FileStoreIDs
     :param str|None paired_url: URL to paired FASTQ
@@ -571,10 +598,15 @@ def setup_and_run_bwa_kit(job, uuid, url, rg_line, config, paired_url=None):
         samples.append(input2.rv())
         bwa_config.r2 = input2.rv()
 
-    # Disk requirement depends on whether there are paired reads, so take the sum of all
-    # elements in the samples list and scale it by a factor of 3. Then, add 8G for index data
-    bwakit_disk = PromisedRequirement(lambda lst: 3 * sum(x.size for x in lst) + human2bytes('8G'),
-                                      samples)
+    # The bwakit disk requirement depends on the size of the input files and the index
+    bwa_index_size = sum([getattr(config, index_file).size
+                          for index_file in ['amb', 'ann', 'bwt', 'pac', 'sa', 'alt']
+                          if getattr(config, index_file, None) is not None])
+    # Take the sum of the input files and scale it by a factor of 4
+    bwakit_disk = PromisedRequirement(lambda lst, index_size:
+                                      int(4 * sum(x.size for x in lst) + index_size),
+                                      samples,
+                                      bwa_index_size)
     return job.addFollowOnJobFn(run_bwakit,
                                 bwa_config,
                                 sort=False,         # BAM files are sorted later in the pipeline

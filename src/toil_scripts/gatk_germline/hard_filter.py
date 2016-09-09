@@ -30,66 +30,85 @@ def hard_filter_pipeline(job, uuid, vcf_id, config):
     """
     job.fileStore.logToMaster('Running Hard Filter on {}'.format(uuid))
 
-    # Estimate all disk resources as twice the input VCF size plus 5G for reference genome data.
-    select_snps_disk = PromisedRequirement(lambda vcf: 2 * vcf.size + human2bytes('5G'),
-                                           vcf_id)
+    # Get the total size of the genome reference
+    genome_ref_size = config.genome_fasta.size + config.genome_fai.size + config.genome_dict.size
+
+    # The SelectVariants disk requirement depends on the input VCF, the genome reference files,
+    # and the output VCF. The output VCF is smaller than the input VCF. The disk requirement
+    # is identical for SNPs and INDELs.
+    select_variants_disk = PromisedRequirement(lambda vcf, ref_size: 2 * vcf.size + ref_size,
+                                               vcf_id,
+                                               genome_ref_size)
     select_snps = job.wrapJobFn(gatk_select_variants,
                                 'SNP',
                                 vcf_id,
                                 config,
-                                memory=config.xmx, disk=select_snps_disk)
+                                memory=config.xmx,
+                                disk=select_variants_disk)
 
-    snp_filter_disk = PromisedRequirement(lambda vcf: 2 * vcf.size + human2bytes('5G'),
-                                          select_snps.rv())
+    # The VariantFiltration disk requirement depends on the input VCF, the genome reference files,
+    # and the output VCF. The filtered VCF is smaller than the input VCF.
+    snp_filter_disk = PromisedRequirement(lambda vcf, ref_size: 2 * vcf.size + ref_size,
+                                          select_snps.rv(),
+                                          genome_ref_size)
     snp_filter = job.wrapJobFn(gatk_variant_filtration,
                                'SNP',
                                select_snps.rv(),
                                config,
-                               memory=config.xmx, disk=snp_filter_disk)
+                               memory=config.xmx,
+                               disk=snp_filter_disk)
 
-    select_indels_disk = PromisedRequirement(lambda vcf: 2 * vcf.size + human2bytes('5G'),
-                                             vcf_id)
     select_indels = job.wrapJobFn(gatk_select_variants,
                                   'INDEL',
                                   vcf_id,
                                   config,
-                                  memory=config.xmx, disk=select_indels_disk)
+                                  memory=config.xmx,
+                                  disk=select_variants_disk)
 
-    indel_filter_disk = PromisedRequirement(lambda vcf: 2 * vcf.size + human2bytes('5G'),
-                                            select_indels.rv())
+    indel_filter_disk = PromisedRequirement(lambda vcf, ref_size: 2 * vcf.size + ref_size,
+                                            select_indels.rv(),
+                                            genome_ref_size)
     indel_filter = job.wrapJobFn(gatk_variant_filtration,
                                  'INDEL',
                                  select_indels.rv(),
                                  config,
-                                 memory=config.xmx, disk=indel_filter_disk)
+                                 memory=config.xmx,
+                                 disk=indel_filter_disk)
 
-    combine_variants_disk = PromisedRequirement(
-        lambda vcf1, vcf2: 2 * (vcf1.size + vcf2.size) + human2bytes('5G'),
-        indel_filter.rv(), snp_filter.rv())
-    merge_variants = job.wrapJobFn(gatk_combine_variants,
-                                   {'SNPs': snp_filter.rv(), 'INDELs': indel_filter.rv()},
-                                   config,
-                                   merge_option='UNSORTED',
-                                   memory=config.xmx, disk=combine_variants_disk)
+    # The CombineVariants disk requirement depends on the SNP and INDEL input VCFs and the
+    # genome reference files. The combined VCF is approximately the same size as the input files.
+    combine_vcfs_disk = PromisedRequirement(lambda vcf1, vcf2, ref_size:
+                                            2 * (vcf1.size + vcf2.size) + ref_size,
+                                            indel_filter.rv(),
+                                            snp_filter.rv(),
+                                            genome_ref_size)
+    combine_vcfs = job.wrapJobFn(gatk_combine_variants,
+                                 {'SNPs': snp_filter.rv(), 'INDELs': indel_filter.rv()},
+                                 config,
+                                 merge_option='UNSORTED',  # Merges variants from a single sample
+                                 memory=config.xmx,
+                                 disk=combine_vcfs_disk)
 
     job.addChild(select_snps)
     job.addChild(select_indels)
 
     select_snps.addChild(snp_filter)
-    snp_filter.addChild(merge_variants)
+    snp_filter.addChild(combine_vcfs)
 
     select_indels.addChild(indel_filter)
-    indel_filter.addChild(merge_variants)
+    indel_filter.addChild(combine_vcfs)
 
     # Output the hard filtered VCF
     output_dir = os.path.join(config.output_dir, uuid)
     output_filename = '%s.hard_filter%s.vcf' % (uuid, config.suffix)
     output_vcf = job.wrapJobFn(output_file_job,
                                output_filename,
-                               merge_variants.rv(),
-                               output_dir, s3_key_path=config.ssec)
-    merge_variants.addChild(output_vcf)
-    return merge_variants.rv()
+                               combine_vcfs.rv(),
+                               output_dir,
+                               s3_key_path=config.ssec,
+                               disk=PromisedRequirement(lambda x: x.size, combine_vcfs.rv()))
+    combine_vcfs.addChild(output_vcf)
+    return combine_vcfs.rv()
 
 def main():
     """

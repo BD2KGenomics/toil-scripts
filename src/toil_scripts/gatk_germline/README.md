@@ -67,8 +67,8 @@ Run a single sample locally
         UUID https://sample-depot.com/sample.bam`
         
 ## Acceptable Inputs
-Sample information should be placed in the Toil manifest file. The 
-following information is required to run a FASTQ or BAM sample:
+The Toil germline pipeline accepts FASTQ and BAM file formats. Sample
+information should be placed in the Toil germline manifest file. 
 
     FASTQ Manifest Information:
     - unique identifier
@@ -79,6 +79,19 @@ following information is required to run a FASTQ or BAM sample:
     BAM Manifest Information:
     - unique identifier
     - sample URL or local path
+    
+GATK tools require several [read group](http://gatkforums.broadinstitute.org/wdl/discussion/6472/read-groups)
+fields. For this reason, FASTQ manifest entries must include a valid 
+GATK read group line. Input BAM files must already contain read group 
+information.
+
+Example manifest entry:
+UUID    file:///path/to/sample.1.fq   file:///path/to/sample.2.fq   @RG\tID:foo\tSM:bar
+
+## Pipeline outputs
+Results are uploaded to the output directory defined in the config file. 
+The output-dir can be an S3 URL or local path. Sample specific results 
+are placed in a subdirectory named after the sample's unique identifier.
 
 ## Tools
 | Tool         | Version | Description                      |
@@ -97,7 +110,6 @@ Please see source code for specific tool parameters. We have followed
 for training resources and variant annotations. One annotation we do not 
 use is Coverage because this annotation is not recommended for WES data.
 
-## GATK Variant Annotations
 The following annotations are automatically added to variant calls:
 - QualByDepth
 - FischerStrand
@@ -119,7 +131,7 @@ batches increase the disk and memory requirements for the run.
 ## VQSR
 Variant Quality Score Recalibration is applied whenever the config
 parameter run-vqsr is set to True. [VQSR](https://software.broadinstitute.org/gatk/guide/tooldocs/org_broadinstitute_gatk_tools_walkers_variantrecalibration_VariantRecalibrator.php)
-is a filtering method that uses a machine learning approach to remove 
+is a filtering method that uses machine learning algorithms to remove 
 false positive calls. For this reason, VQSR requires many samples to 
 train on in order to create an accurate statistical model. We use the 
 following VQSR parameters:
@@ -174,8 +186,8 @@ java -jar GenomeAnalysisTK.jar \
 ```
 
 ## Hard Filters
-By default, the pipeline will filter variant calls using the GATK 
-recommended [hard filters](http://gatkforums.broadinstitute.org/wdl/discussion/2806/howto-apply-hard-filters-to-a-call-set). 
+If the pipeline is not configured to run VQSR, then GATK recommended ["hard filters"](http://gatkforums.broadinstitute.org/wdl/discussion/2806/howto-apply-hard-filters-to-a-call-set)
+are used to remove false positives. We use the following JEXL filters:
 
 SNP Filter:
     "QD < 2.0 || FS > 60.0 || MQ < 40.0 || MQRankSum < -12.5 || ReadPosRankSum < -8.0"
