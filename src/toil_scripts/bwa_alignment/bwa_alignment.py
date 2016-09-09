@@ -7,6 +7,7 @@ import textwrap
 from urlparse import urlparse
 
 import yaml
+from bd2k.util.files import mkdir_p
 from toil.job import Job
 from toil_lib import require, required_length
 from toil_lib.files import copy_file_job
@@ -91,6 +92,7 @@ def download_sample_and_align(job, sample, inputs, ids):
         bam_id.addChildJobFn(s3am_upload_job, file_id=bam_id.rv(), file_name=output_name, s3_dir=inputs.output_dir,
                              s3_key_path=inputs.ssec, cores=inputs.cores, disk=inputs.file_size)
     else:
+        mkdir_p(inputs.ouput_dir)
         bam_id.addChildJobFn(copy_file_job, name=output_name, file_id=bam_id.rv(), output_dir=inputs.output_dir,
                                     disk=inputs.file_size)
 
