@@ -90,6 +90,9 @@ Alternatively, many samples can be placed in a manifest file created by using th
 All samples and inputs must be submitted as URLs with support for the following schemas: 
 `http://`, `file://`, `s3://`, `ftp://`.
 
+Samples consisting of tarballs with fastq files inside _must_ follow the file name convention of ending in an 
+R1/R2 or \_1/\_2 followed by `.fastq.gz`, `.fastq`, `.fq.gz` or `.fq.`.
+
 ## General Usage
 
 Type `toil-rnaseq` to get basic help menu and instructions
