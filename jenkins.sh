@@ -9,7 +9,7 @@ ln -snf ${PWD}/s3am/bin/s3am bin/
 export PATH=$PATH:${PWD}/bin
 
 # Create Toil venv
-virtualenv venv
+virtualenv --no-download venv
 . venv/bin/activate
 pip install toil==3.3.0
 pip install bd2k-python-lib==1.14a1.dev29
