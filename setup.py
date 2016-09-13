@@ -32,8 +32,8 @@ def check_provided(distribution, min_version, max_version=None, optional=False):
     dist_missing = 'Cannot find an installed copy of the %s distribution, typically provided by Toil.' % distribution
     version_too_low = 'The installed copy of %s is out of date. It is typically provided by Toil.' % distribution
     version_too_high = 'The installed copy of %s is too new. It is typically provided by Toil.' % distribution
-    required_version = 'Setup requires version %s or higher' % min_version
-    required_version += '.' if max_version is None else ', up to but not including %s.' % max_version
+    required_version = 'Setup requires version %s or higher' % (min_version,)
+    required_version += '.' if max_version is None else ', up to but not including %s.' % (max_version,)
     install_toil = 'Installing Toil should fix this problem.'
     upgrade_toil = 'Upgrading Toil should fix this problem.'
     reinstall_dist = 'Uninstalling %s and reinstalling Toil should fix this problem.' % distribution
