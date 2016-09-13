@@ -126,8 +126,9 @@ def star_alignment(job, config, r1_id, r2_id):
     """
     job.fileStore.logToMaster('Queueing RSEM job for: ' + config.uuid)
     mem = '2G' if config.ci_test else '40G'
+    disk = '2G' if config.ci_test else '100G'
     star = job.addChildJobFn(run_star, r1_id, r2_id, star_index_url=config.star_index,
-                             wiggle=config.wiggle, cores=config.cores, memory=mem).rv()
+                             wiggle=config.wiggle, cores=config.cores, memory=mem, disk=disk).rv()
     return job.addFollowOnJobFn(rsem_quantification, config, star).rv()
 
 
