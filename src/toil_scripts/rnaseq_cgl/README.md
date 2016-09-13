@@ -233,4 +233,7 @@ Kallisto index was created using the transcriptome and annotation file with the 
 '--seed-length', '25',
 '--fragment-length-mean', '-1.0',
 '--bam', '/data/transcriptome.bam',
+
+## Dockerized Pipeline
+To run the dockerized rnaseq pipeline, please see  [this link](https://github.com/BD2KGenomics/cgl-docker-lib/blob/master/rnaseq-cgl-pipeline/README.md) in cgl-docker-lib.
 ```
