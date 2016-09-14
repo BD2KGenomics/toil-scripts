@@ -268,3 +268,8 @@ pindel-config.txt contains mean insert size for tumor and normal bam
 '--report_breakpoints', 'true',
 '-o', 'pindel'
 ```
+
+## Dockerized Pipeline
+To run the dockerized exome var pipeline, please see [this link](https://github.com/BD2KGenomics/cgl-docker-lib/tree/alex-dockerized-pipelines/exome-cgl-pipeline) in cgl-docker-lib.
+
+Note: this link points to a branch off of master. Once the branch has been merged, this link will be changed to a URL to master.

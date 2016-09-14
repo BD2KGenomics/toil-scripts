@@ -148,3 +148,8 @@ Run a variety of samples locally
 To run on a distributed AWS cluster, see [CGCloud](https://github.com/BD2KGenomics/cgcloud) for instance provisioning, 
 then run `toil-bwa run aws:us-west-2:example-jobstore-bucket --batchSystem=mesos --mesosMaster mesos-master:5050`
 to use the AWS job store and mesos batch system. 
+
+## Dockerized Pipeline
+To run the dockerized bwa alignment pipeline, please see [this link](https://github.com/BD2KGenomics/cgl-docker-lib/tree/alex-dockerized-pipelines/bwa-alignment-cgl-pipeline) in cgl-docker-lib.
+
+Note: this link points to a branch off of master. Once the branch has been merged, this link will be changed to a URL to master.
