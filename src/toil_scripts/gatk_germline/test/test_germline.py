@@ -1,3 +1,5 @@
+from __future__ import print_function
+
 import argparse
 import logging
 import os
@@ -128,7 +130,8 @@ class GermlineTest(TestCase):
         with open(path, 'w') as f:
             f.write(textwrap.dedent("""
                     genome-fasta: {genome_fasta}
-                    phase: {phase}
+                    g1k-snp: {g1k_snp}
+                    g1k-indel: {g1k_indel}
                     mills: {mills}
                     dbsnp: {dbsnp}
                     hapmap: {hapmap}
@@ -142,6 +145,8 @@ class GermlineTest(TestCase):
                     pac: {pac}
                     sa: {sa}
                     alt:
+                    snp-annotations: {snp_annotations}
+                    indel-annotations: {indel_annotations}
                     ssec:
                     file-size: 1G
                     cores: 2
@@ -204,7 +209,8 @@ class GermlineTest(TestCase):
         inputs.suffix = ''
         inputs.unsafe_mode = False
         inputs.genome_fasta = 's3://cgl-pipeline-inputs/germline/ci/b37_21.fa'
-        inputs.phase = 's3://cgl-pipeline-inputs/germline/ci/1000G_phase1.indels.b37.21.recode.vcf'
+        inputs.g1k_snp = 's3://cgl-pipeline-inputs/germline/ci/1000G_phase1.snps.high_confidence.b37.21.recode.vcf'
+        inputs.g1k_indel = 's3://cgl-pipeline-inputs/germline/ci/1000G_phase1.indels.b37.21.recode.vcf'
         inputs.mills = 's3://cgl-pipeline-inputs/germline/ci/Mills_and_1000G_gold_standard.indels.b37.21.recode.vcf'
         inputs.dbsnp = 's3://cgl-pipeline-inputs/germline/ci/dbsnp_138.b37.21.recode.vcf'
         inputs.hapmap = 's3://cgl-pipeline-inputs/germline/ci/hapmap_3.3.b37.21.recode.vcf'
@@ -214,7 +220,11 @@ class GermlineTest(TestCase):
         inputs.bwt = 's3://cgl-pipeline-inputs/germline/ci/bwa_index_b37_21.bwt'
         inputs.pac = 's3://cgl-pipeline-inputs/germline/ci/bwa_index_b37_21.pac'
         inputs.sa = 's3://cgl-pipeline-inputs/germline/ci/bwa_index_b37_21.sa'
-
+        inputs.snp_annotations = ['QualByDepth', 'FisherStrand', 'StrandOddsRatio',
+                                  'ReadPosRankSumTest', 'MappingQualityRankSumTest',
+                                  'RMSMappingQuality']
+        inputs.indel_annotations = ['QualByDepth', 'FisherStrand', 'StrandOddsRatio',
+                                    'ReadPosRankSumTest', 'MappingQualityRankSumTest']
         # Special attributes for testing
         inputs.hc_output = ''
         return inputs

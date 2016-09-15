@@ -58,7 +58,6 @@ from toil_scripts.tools.indexing import run_samtools_faidx
 from toil_scripts.tools.preprocessing import run_gatk_preprocessing, \
     run_picard_create_sequence_dictionary, run_samtools_index, run_samtools_sort
 from toil_scripts.tools.variant_annotation import gatk_genotype_gvcfs, run_oncotator
-from toil_scripts.tools.variant_filters import gatk_combine_gvcfs
 
 
 logging.basicConfig(level=logging.INFO)
@@ -66,13 +65,13 @@ logging.basicConfig(level=logging.INFO)
 
 class GermlineSample(namedtuple('GermlineSample', 'uuid url paired_url rg_line')):
     """
-    Namedtuple subclass for Toil Germline samples. Stores essential sample information.
+    Namedtuple subclass for Toil Germline samples. Stores germline sample information.
 
     Attributes
     uuid: unique sample identifier
     url: URL/PATH to FASTQ or BAM file
-    paired_url: URL/PATH to paired FASTQ file
-    rg_line: Read group information (i.e. @RG\tID:foo\tSM:bar)
+    paired_url: URL/PATH to paired FASTQ file, or None if BAM file
+    rg_line: Read group information (i.e. @RG\tID:foo\tSM:bar), or None if BAM file
     """
 
 
@@ -199,8 +198,7 @@ def gatk_germline_pipeline(job, samples, config):
     else:
         for uuid, gvcf_id in gvcfs.iteritems():
             filtered_vcfs[uuid] = group_bam_jobs.addFollowOnJobFn(genotype_and_filter,
-                                                                  uuid,
-                                                                  gvcf_id,
+                                                                  {uuid: gvcf_id},
                                                                   config).rv()
 
     job.addChild(group_bam_jobs)
@@ -209,53 +207,39 @@ def gatk_germline_pipeline(job, samples, config):
 
 def joint_genotype_and_filter(job, gvcfs, config):
     """
-    Merges cohort of GVCFs into one GVCF file and runs the genotype and filter pipeline.
+    Checks for enough disk space to joint genotype, then calls the genotype and filter pipeline function.
 
     :param JobFunctionWrappingJob job: passed automatically by Toil
-    :param dict gvcfs: Dictionary of GVCFs {UUID: FileStoreID}
+    :param dict gvcfs: Dictionary of GVCFs {Sample ID: FileStoreID}
     :param Namespace config: Input parameters and reference FileStoreIDs
-    :returns: genotype and filter return value
-    :rtype: PromisedReturnValue
+    :returns: FileStoreID for the joint genotyped and filtered VCF file
+    :rtype: str
     """
     # Get the total size of genome reference files
     genome_ref_size = config.genome_fasta.size + config.genome_fai.size + config.genome_dict.size
 
-    # Check that there is plenty of disk space for merging cohort GVCFs before issuing job.
     # Estimate the disk requirement as 2.5x the total GVCF size
     cohort_size = sum(gvcf.size for gvcf in gvcfs.values())
+
+    # Require at least 2.5x the sum of the individual GVCF files
     require(int(2.5 * cohort_size + genome_ref_size) < config.available_disk,
             'There is not enough disk space to joint '
             'genotype samples:\n{}'.format('\n'.join(gvcfs.keys())))
 
-    job.fileStore.logToMaster('Merging cohort into a single joint GVCF')
-    # Request enough disk space for 2.5x the sum of all the GVCFs plus genome references.
-    merged_disk = PromisedRequirement(lambda lst, ref_size:
-                                      int(2.5 * sum(x.size for x in lst) + ref_size),
-                                      gvcfs.values(),
-                                      genome_ref_size)
-    merged_gvcfs = job.addChildJobFn(gatk_combine_gvcfs,
-                                     gvcfs,
-                                     config,
-                                     disk=merged_disk,
-                                     memory=config.xmx)
+    job.fileStore.logToMaster('Merging cohort into a single joint GVCF file')
 
-    return merged_gvcfs.addChildJobFn(genotype_and_filter,
-                                      'joint_genotyped',
-                                      merged_gvcfs.rv(),
-                                      config).rv()
+    return job.addChildJobFn(genotype_and_filter, gvcfs, config).rv()
 
 
-def genotype_and_filter(job, uuid, gvcf, config):
+def genotype_and_filter(job, gvcfs, config):
     """
-    Genotypes and filters a GVCF file.
-    0: Genotype GVCF
-    1: Upload GVCF
-    2: VQSR or Hard filter pipeline
+    Genotypes one or more GVCF files and runs either the VQSR or hard filtering pipeline. Uploads the genotyped VCF file
+    to the config output directory.
+
     :param JobFunctionWrappingJob job: passed automatically by Toil
-    :param str uuid: sample unique identifier
-    :param str gvcf: GVCF FileStoreIDs
+    :param dict gvcfs: Dictionary of GVCFs {Sample ID: FileStoreID}
     :param Namespace config: Input parameters and shared FileStoreIDs
-    :return: Genotyped and filtered VCF FileStoreID
+    :return: FileStoreID for genotyped and filtered VCF file
     :rtype: str
     """
     # Get the total size of the genome reference
@@ -263,16 +247,27 @@ def genotype_and_filter(job, uuid, gvcf, config):
 
     # GenotypeGVCF disk requirement depends on the input GVCF, the genome reference files, and
     # the output VCF file. The output VCF is smaller than the input GVCF.
-    genotype_gvcf_disk = PromisedRequirement(lambda gvcf_id, ref_size:
-                                             2 * gvcf_id.size + ref_size,
-                                             gvcf,
+    genotype_gvcf_disk = PromisedRequirement(lambda gvcf_ids, ref_size:
+                                             2 * sum(gvcf_.size for gvcf_ in gvcf_ids) + ref_size,
+                                             gvcfs.values(),
                                              genome_ref_size)
+
     genotype_gvcf = job.addChildJobFn(gatk_genotype_gvcfs,
-                                      {uuid: gvcf},
-                                      config,
+                                      gvcfs,
+                                      config.genome_fasta,
+                                      config.genome_fai,
+                                      config.genome_dict,
+                                      annotations=config.annotations,
+                                      unsafe_mode=config.unsafe_mode,
                                       cores=config.cores,
                                       disk=genotype_gvcf_disk,
                                       memory=config.xmx)
+
+    # Determine if output GVCF has multiple samples
+    if len(gvcfs) == 1:
+        uuid = gvcfs.keys()[0]
+    else:
+        uuid = 'joint_genotyped'
 
     genotyped_filename = '%s.genotyped%s.vcf' % (uuid, config.suffix)
     genotype_gvcf.addChildJobFn(output_file_job,
@@ -312,7 +307,9 @@ def annotate_vcfs(job, vcfs, config):
         onco_disk = PromisedRequirement(lambda vcf, db: 3 * vcf.size + db.size,
                                         vcf_id,
                                         config.oncotator_db)
-        annotated_vcf = job.addChildJobFn(run_oncotator, vcf_id, config,
+        annotated_vcf = job.addChildJobFn(run_oncotator,
+                                          vcf_id,
+                                          config.oncotator_db,
                                           disk=onco_disk,
                                           cores=config.cores,
                                           memory=config.xmx)
@@ -391,9 +388,9 @@ def download_shared_files(job, config):
         shared_files |= {'amb', 'ann', 'bwt', 'pac', 'sa', 'alt'}
         nonessential_files.add('alt')
     if config.preprocess:
-        shared_files |= {'phase', 'mills', 'dbsnp'}
+        shared_files |= {'g1k_indel', 'mills', 'dbsnp'}
     if config.run_vqsr:
-        shared_files |= {'phase', 'mills', 'dbsnp', 'hapmap', 'omni'}
+        shared_files |= {'g1k_snp', 'mills', 'dbsnp', 'hapmap', 'omni'}
     if config.run_oncotator:
         shared_files.add('oncotator_db')
     for name in shared_files:
@@ -510,7 +507,7 @@ def prepare_bam(job, uuid, url, config, paired_url=None, rg_line=None):
                                    config.genome_fasta,
                                    config.genome_dict,
                                    config.genome_fai,
-                                   config.phase,
+                                   config.g1k_indel,
                                    config.mills,
                                    config.dbsnp,
                                    memory=config.xmx,
@@ -630,11 +627,13 @@ def gatk_haplotype_caller(job, bam_id, bai_id, config, emit_threshold=10.0, call
     :rtype: str
     """
     job.fileStore.logToMaster('GATK HaplotypeCaller')
-    work_dir = job.fileStore.getLocalTempDir()
+
     inputs = {'genome.fa': config.genome_fasta,
               'genome.fa.fai': config.genome_fai,
               'genome.dict': config.genome_dict,
               'input.bam': bam_id, 'input.bam.bai': bai_id}
+
+    work_dir = job.fileStore.getLocalTempDir()
     for name, file_store_id in inputs.iteritems():
         job.fileStore.readGlobalFile(file_store_id, os.path.join(work_dir, name))
 
@@ -773,6 +772,8 @@ def main():
                            'output_dir',
                            'run_bwa',
                            'sorted',
+                           'snp_annotations',
+                           'indel_annotations',
                            'preprocess',
                            'preprocess_only',
                            'run_vqsr',
@@ -800,7 +801,7 @@ def main():
             inputs['preprocess_only'] = options.preprocess_only
 
         if inputs['run_vqsr']:
-            vqsr_fields = {'phase', 'mills', 'dbsnp', 'hapmap', 'omni'}
+            vqsr_fields = {'g1k_snp', 'mills', 'dbsnp', 'hapmap', 'omni'}
             require(input_fields > vqsr_fields,
                     'Missing parameters for VQSR:\n{}'
                     .format(', '.join(vqsr_fields - input_fields)))
@@ -812,13 +813,7 @@ def main():
 
         # GATK recommended annotations:
         # https://software.broadinstitute.org/gatk/documentation/article?id=2805
-        inputs['annotations'] = ['QualByDepth',
-                                 'FisherStrand',
-                                 'StrandOddsRatio',
-                                 'ReadPosRankSumTest',
-                                 'MappingQualityRankSumTest',
-                                 'RMSMappingQuality',
-                                 'InbreedingCoeff']
+        inputs['annotations'] = set(inputs['snp_annotations'] + inputs['indel_annotations'])
 
         # It is a toil-scripts convention to store input parameters in a Namespace object
         config = argparse.Namespace(**inputs)

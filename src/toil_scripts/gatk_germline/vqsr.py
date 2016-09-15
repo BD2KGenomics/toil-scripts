@@ -2,8 +2,7 @@
 from __future__ import print_function
 import os
 
-from toil.job import PromisedRequirement as PrR
-from bd2k.util.humanize import human2bytes
+from toil.job import PromisedRequirement
 
 from toil_scripts.gatk_germline.common import output_file_job
 from toil_scripts.tools.variant_filters import gatk_variant_recalibrator, \
@@ -34,31 +33,45 @@ def vqsr_pipeline(job, uuid, vcf_id, config):
     # The VariantRecalibator disk requirement depends on the input VCF, the resource files,
     # the genome reference files, and the output recalibration table, tranche file, and plots.
     # The sum of these output files are less than the input VCF.
-    snp_resources = ['hapmap', 'omni', 'dbsnp', 'phase']
+    snp_resources = ['hapmap', 'omni', 'dbsnp', 'g1k_snp']
     snp_resource_size = sum(getattr(config, resource).size for resource in snp_resources)
-    snp_recal_disk = PrR(lambda in_vcf, ref_size, resource_size:
-                         2 * in_vcf.size + ref_size + resource_size,
-                         vcf_id,
-                         genome_ref_size,
-                         snp_resource_size)
+    snp_recal_disk = PromisedRequirement(lambda in_vcf, ref_size, resource_size:
+                                         2 * in_vcf.size + ref_size + resource_size,
+                                         vcf_id,
+                                         genome_ref_size,
+                                         snp_resource_size)
     snp_recal = job.wrapJobFn(gatk_variant_recalibrator,
                               'SNP',
                               vcf_id,
-                              config,
+                              config.genome_fasta,
+                              config.genome_fai,
+                              config.genome_dict,
+                              get_short_annotations(config.snp_annotations),
+                              hapmap=config.hapmap,
+                              omni=config.omni,
+                              phase=config.g1k_snp,
+                              dbsnp=config.dbsnp,
+                              unsafe_mode=config.unsafe_mode,
                               disk=snp_recal_disk,
                               cores=config.cores,
                               memory=config.xmx)
 
     indel_resource_size = config.mills.size + config.dbsnp.size
-    indel_recal_disk = PrR(lambda in_vcf, ref_size, resource_size:
-                           2 * in_vcf.size + ref_size + resource_size,
-                           vcf_id,
-                           genome_ref_size,
-                           indel_resource_size)
+    indel_recal_disk = PromisedRequirement(lambda in_vcf, ref_size, resource_size:
+                                           2 * in_vcf.size + ref_size + resource_size,
+                                           vcf_id,
+                                           genome_ref_size,
+                                           indel_resource_size)
     indel_recal = job.wrapJobFn(gatk_variant_recalibrator,
                                 'INDEL',
                                 vcf_id,
-                                config,
+                                config.genome_fasta,
+                                config.genome_fai,
+                                config.genome_dict,
+                                get_short_annotations(config.indel_annotations),
+                                dbsnp=config.dbsnp,
+                                mills=config.mills,
+                                unsafe_mode=config.unsafe_mode,
                                 disk=indel_recal_disk,
                                 cores=config.cores,
                                 memory=config.xmx)
@@ -67,32 +80,38 @@ def vqsr_pipeline(job, uuid, vcf_id, config):
     # recalibration table, the tranche file, the genome reference file, and the output VCF.
     # This step labels variants as filtered, so the output VCF file should be slightly larger
     # than the input file. Estimate a 10% increase in the VCF file size.
-    apply_snp_recal_disk = PrR(lambda in_vcf, recal, tranche, ref_size:
-                               int(2.1 * in_vcf.size + recal.size + tranche.size + ref_size),
-                               vcf_id,
-                               snp_recal.rv(0),
-                               snp_recal.rv(1),
-                               genome_ref_size)
+    apply_snp_recal_disk = PromisedRequirement(lambda in_vcf, recal, tranche, ref_size:
+                                               int(2.1 * in_vcf.size + recal.size + tranche.size + ref_size),
+                                               vcf_id,
+                                               snp_recal.rv(0),
+                                               snp_recal.rv(1),
+                                               genome_ref_size)
     apply_snp_recal = job.wrapJobFn(gatk_apply_variant_recalibration,
                                     'SNP',
                                     vcf_id,
                                     snp_recal.rv(0), snp_recal.rv(1),
-                                    config,
+                                    config.genome_fasta,
+                                    config.genome_fai,
+                                    config.genome_dict,
+                                    unsafe_mode=config.unsafe_mode,
                                     disk=apply_snp_recal_disk,
                                     cores=config.cores,
                                     memory=config.xmx)
 
-    apply_indel_recal_disk = PrR(lambda in_vcf, recal, tranche, ref_size:
-                                 int(2.1 * in_vcf.size + recal.size + tranche.size + ref_size),
-                                 vcf_id,
-                                 indel_recal.rv(0),
-                                 indel_recal.rv(1),
-                                 genome_ref_size)
+    apply_indel_recal_disk = PromisedRequirement(lambda in_vcf, recal, tranche, ref_size:
+                                                 int(2.1 * in_vcf.size + recal.size + tranche.size + ref_size),
+                                                 vcf_id,
+                                                 indel_recal.rv(0),
+                                                 indel_recal.rv(1),
+                                                 genome_ref_size)
     apply_indel_recal = job.wrapJobFn(gatk_apply_variant_recalibration,
                                       'INDEL',
                                       apply_snp_recal.rv(),
                                       indel_recal.rv(0), indel_recal.rv(1),
-                                      config,
+                                      config.genome_fasta,
+                                      config.genome_fai,
+                                      config.genome_dict,
+                                      unsafe_mode=config.unsafe_mode,
                                       disk=apply_indel_recal_disk,
                                       cores=config.cores,
                                       memory=config.xmx)
@@ -112,14 +131,37 @@ def vqsr_pipeline(job, uuid, vcf_id, config):
                                 apply_indel_recal.rv(),
                                 output_dir,
                                 s3_key_path=config.ssec,
-                                disk=PrR(lambda x: x.size, apply_indel_recal.rv()))
+                                disk=PromisedRequirement(lambda x: x.size, apply_indel_recal.rv()))
     apply_indel_recal.addChild(output_vqsr)
     return apply_indel_recal.rv()
 
 
+def get_short_annotations(annotations):
+    """
+    Converts full GATK annotation name to the shortened version
+    :param annotations:
+    :return:
+    """
+    # Annotations need to match VCF header
+    short_name = {'QualByDepth': 'QD',
+                  'FisherStrand': 'FS',
+                  'StrandOddsRatio': 'SOR',
+                  'ReadPosRankSumTest': 'ReadPosRankSum',
+                  'MappingQualityRankSumTest': 'MQRankSum',
+                  'RMSMappingQuality': 'MQ',
+                  'InbreedingCoeff': 'ID'}
+
+    short_annotations = []
+    for annotation in annotations:
+        if annotation in short_name:
+            annotation = short_name[annotation]
+        short_annotations.append(annotation)
+    return short_annotations
+
+
 def main():
     """
-    Runs GATK VQSR for a cohort of GVCFs
+    Runs GATK VQSR on a VCF file
     """
     import argparse
     from multiprocessing import cpu_count
@@ -183,6 +225,7 @@ def main():
                                   cores=cpu_count())
 
     Job.Runner.startToil(shared_files, options)
+
 
 if __name__ == '__main__':
     main()

@@ -28,6 +28,23 @@ def generate_config():
         # Required: Input BAM file is sorted (Default: False)
         sorted:
 
+        # Required: GATK SNP variant annotations
+        snp-annotations:
+            - QualByDepth
+            - FisherStrand
+            - StrandOddsRatio
+            - ReadPosRankSum
+            - MappingQualityRankSumTest
+            - RMSMappingQuality
+
+        # Required: GATK INDEL variant annotations
+        indel-annotations:
+            - QualByDepth
+            - FisherStrand
+            - StrandOddsRatio
+            - ReadPosRankSum
+            - MappingQualityRankSumTest
+
         # Required: URL or local path to reference genome FASTA file
         genome-fasta:
 
@@ -37,20 +54,23 @@ def generate_config():
         # Optional: URL or local path to reference genome sequence dictionary (Default: None)
         genome-dict:
 
-        # Optional: URL or local path to 1000 Genomes INDELs resource file (Default: None)
-        phase:
+        # Optional: URL or local path to 1000G SNP resource file (Default: None)
+        g1k_snp:
 
-        # Optional: URL or local path to Mills INDELs resource file (Default: None)
+        # Optional: URL or local path to 1000G INDEL resource file (Default: None)
+        g1k_indel:
+
+        # Optional: URL or local path HapMap SNP resource file (Default: None)
+        hapmap:
+
+        # Optional: URL or local path Omni SNP resource file (Default: None)
+        omni:
+
+        # Optional: URL or local path to Mills INDEL resource file (Default: None)
         mills:
 
         # Optional: URL or local path to dbSNP resource file (Default: None)
         dbsnp:
-
-        # Optional: URL or local path HapMap resource file (Default: None)
-        hapmap:
-
-        # Optional: URL or local path Omni resource file (Default: None)
-        omni:
 
         # Optional: Align FASTQs or Realign BAM file (Default: False)
         run-bwa:
@@ -85,6 +105,7 @@ def generate_config():
 
         # Optional: Run GATK VQSR (Default: False)
         run-vqsr:
+
 
         # Optional: Merges all samples into a single GVCF for genotyping and filtering (Default: False)
         joint-genotype:

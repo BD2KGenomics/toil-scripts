@@ -72,13 +72,13 @@ information should be placed in the Toil germline manifest file.
 
     FASTQ Manifest Information:
     - unique identifier
-    - URL or local path
+    - URL or local path with .fq file extension
     - Paired FASTQ URL/PATH
     - Read group line
     
     BAM Manifest Information:
     - unique identifier
-    - sample URL or local path
+    - sample URL or local path with .bam file extension
     
 GATK tools require several [read group](http://gatkforums.broadinstitute.org/wdl/discussion/6472/read-groups)
 fields. For this reason, FASTQ manifest entries must include a valid 
@@ -186,8 +186,11 @@ java -jar GenomeAnalysisTK.jar \
 ```
 
 ## Hard Filters
-If the pipeline is not configured to run VQSR, then GATK recommended ["hard filters"](http://gatkforums.broadinstitute.org/wdl/discussion/2806/howto-apply-hard-filters-to-a-call-set)
-are used to remove false positives. We use the following JEXL filters:
+If the pipeline is not configured to run VQSR, then GATK recommended 
+["hard filters"](http://gatkforums.broadinstitute.org/wdl/discussion/2806/howto-apply-hard-filters-to-a-call-set)
+are used instead. This method uses GATK variant annotation features 
+to remove false variant calls. [Here](https://software.broadinstitute.org/gatk/guide/article?id=6925)
+is a description of filter threshold values.
 
 SNP Filter:
     "QD < 2.0 || FS > 60.0 || MQ < 40.0 || MQRankSum < -12.5 || ReadPosRankSum < -8.0"
@@ -231,20 +234,23 @@ genome-fai:
 # Optional: URL or local path to reference genome sequence dictionary (Default: None)
 genome-dict:
 
-# Optional: URL or local path to 1000 Genomes INDELs resource file (Default: None)
-phase:
+# Optional: URL or local path to 1000G SNP resource file (Default: None)
+g1k_snp:
 
-# Optional: URL or local path to Mills INDELs resource file (Default: None)
-mills:
-
-# Optional: URL or local path to dbSNP resource file (Default: None)
-dbsnp:
+# Optional: URL or local path to 1000G INDEL resource file (Default: None)
+g1k_indel:
 
 # Optional: URL or local path HapMap resource file (Default: None)
 hapmap:
 
 # Optional: URL or local path Omni resource file (Default: None)
 omni:
+
+# Optional: URL or local path to Mills resource file (Default: None)
+mills:
+
+# Optional: URL or local path to dbSNP resource file (Default: None)
+dbsnp:
 
 # Optional: Align FASTQs or Realign BAM file (Default: False)
 run-bwa:
@@ -306,7 +312,8 @@ unsafe-mode:
 genome-fasta: s3://cgl-pipeline-inputs/hg19/ucsc.hg19.fasta
 genome-fai: s3://cgl-pipeline-inputs/hg19/ucsc.hg19.fasta.fai
 genome-dict: s3://cgl-pipeline-inputs/hg19/ucsc.hg19.dict
-phase: s3://cgl-pipeline-inputs/hg19/1000G_phase1.indels.hg19.sites.vcf
+g1k_indel: s3://cgl-pipeline-inputs/hg19/1000G_phase1.indels.hg19.sites.vcf
+g1k_snp: s3://cgl-pipeline-inputs/hg19/1000G_phase1.snps.high_confidence.hg19.sites.vcf
 mills: s3://cgl-pipeline-inputs/hg19/Mills_and_1000G_gold_standard.indels.hg19.sites.vcf
 dbsnp: s3://cgl-pipeline-inputs/hg19/dbsnp_138.hg19.excluding_sites_after_129.vcf
 hapmap: s3://cgl-pipeline-inputs/hg19/hapmap_3.3.hg19.sites.vcf

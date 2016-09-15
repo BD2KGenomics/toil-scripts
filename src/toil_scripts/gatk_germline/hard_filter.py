@@ -1,7 +1,6 @@
 #!/usr/bin/env python2.7
 import os
 
-from bd2k.util.humanize import human2bytes
 from toil.job import PromisedRequirement
 
 from toil_scripts.gatk_germline.common import output_file_job
@@ -42,7 +41,9 @@ def hard_filter_pipeline(job, uuid, vcf_id, config):
     select_snps = job.wrapJobFn(gatk_select_variants,
                                 'SNP',
                                 vcf_id,
-                                config,
+                                config.genome_fasta,
+                                config.genome_fai,
+                                config.genome_dict,
                                 memory=config.xmx,
                                 disk=select_variants_disk)
 
@@ -51,27 +52,44 @@ def hard_filter_pipeline(job, uuid, vcf_id, config):
     snp_filter_disk = PromisedRequirement(lambda vcf, ref_size: 2 * vcf.size + ref_size,
                                           select_snps.rv(),
                                           genome_ref_size)
+    # GATK hard filters:
+    # https://software.broadinstitute.org/gatk/documentation/article?id=2806
+    snp_filter_name = 'GERMLINE_SNP_FILTER'   # documents filter in header
+    snp_filter_expression = '"QD < 2.0 || FS > 60.0 || MQ < 40.0 || MQRankSum < -12.5 || ReadPosRankSum < -8.0"'
+
     snp_filter = job.wrapJobFn(gatk_variant_filtration,
-                               'SNP',
                                select_snps.rv(),
-                               config,
+                               snp_filter_name,
+                               snp_filter_expression,
+                               config.genome_fasta,
+                               config.genome_fai,
+                               config.genome_dict,
                                memory=config.xmx,
                                disk=snp_filter_disk)
 
     select_indels = job.wrapJobFn(gatk_select_variants,
                                   'INDEL',
                                   vcf_id,
-                                  config,
+                                  config.genome_fasta,
+                                  config.genome_fai,
+                                  config.genome_dict,
                                   memory=config.xmx,
                                   disk=select_variants_disk)
+
 
     indel_filter_disk = PromisedRequirement(lambda vcf, ref_size: 2 * vcf.size + ref_size,
                                             select_indels.rv(),
                                             genome_ref_size)
+
+    indel_filter_name = 'GERMLINE_INDEL_FILTER'
+    indel_filter_expression = '"QD < 2.0 || FS > 200.0 || ReadPosRankSum < -20.0"'
     indel_filter = job.wrapJobFn(gatk_variant_filtration,
-                                 'INDEL',
                                  select_indels.rv(),
-                                 config,
+                                 indel_filter_name,
+                                 indel_filter_expression,
+                                 config.genome_fasta,
+                                 config.genome_fai,
+                                 config.genome_dict,
                                  memory=config.xmx,
                                  disk=indel_filter_disk)
 
@@ -84,7 +102,9 @@ def hard_filter_pipeline(job, uuid, vcf_id, config):
                                             genome_ref_size)
     combine_vcfs = job.wrapJobFn(gatk_combine_variants,
                                  {'SNPs': snp_filter.rv(), 'INDELs': indel_filter.rv()},
-                                 config,
+                                 config.genome_fasta,
+                                 config.genome_fai,
+                                 config.genome_dict,
                                  merge_option='UNSORTED',  # Merges variants from a single sample
                                  memory=config.xmx,
                                  disk=combine_vcfs_disk)
@@ -112,11 +132,12 @@ def hard_filter_pipeline(job, uuid, vcf_id, config):
 
 def main():
     """
-    Simple command line interface to run hard filtering on a single sample.
+    Runs GATK hard filters on a VCF file
     """
     import argparse
 
     from toil.job import Job
+    import yaml
 
     from toil_scripts.gatk_germline.germline import download_shared_files
     from toil_scripts.lib.urls import download_url_job
@@ -130,10 +151,10 @@ def main():
                         type=str,
                         help='Space delimited sample UUID and GVCF file in the format: uuid url')
 
-    parser.add_argument('--genome-fasta',
+    parser.add_argument('--config',
                         required=True,
                         type=str,
-                        help='Path or URL to genome fasta file')
+                        help='Path or URL to Toil germline config file')
 
     parser.add_argument('--output-dir',
                         default=None,
@@ -141,32 +162,33 @@ def main():
 
     Job.Runner.addToilOptions(parser)
     options = parser.parse_args()
-    options.cores = 8
-    options.xmx = '10G'
-    options.run_bwa = False
-    options.preprocess = False
-    options.run_vqsr = False
-    options.run_oncotator = False
-    options.ssec = None
-    options.suffix = ''
-    options.unsafe_mode = False
-    options.annotations = ['QualByDepth',
-                           'FisherStrand',
-                           'StrandOddsRatio',
-                           'ReadPosRankSumTest',
-                           'MappingQualityRankSumTest',
-                           'RMSMappingQuality',
-                           'InbreedingCoeff']
+
+    # Parse inputs
+    inputs = {x.replace('-', '_'): y for x, y in
+              yaml.load(open(options.config).read()).iteritems()}
+
+    inputs = argparse.Namespace(**inputs)
+
+    inputs.run_bwa = False
+    inputs.preprocess = False
+    inputs.run_vqsr = False
+    inputs.run_oncotator = False
+    inputs.annotations = ['QualByDepth',
+                          'FisherStrand',
+                          'StrandOddsRatio',
+                          'ReadPosRankSumTest',
+                          'MappingQualityRankSumTest',
+                          'RMSMappingQuality',
+                          'InbreedingCoeff']
+
+    shared_files = Job.wrapJobFn(download_shared_files, inputs).encapsulate()
 
     uuid, url = options.sample
-
-    shared_files = Job.wrapJobFn(download_shared_files, options).encapsulate()
     download_sample = shared_files.addFollowOnJobFn(download_url_job,
                                                     url,
-                                                    name='toil.g.vcf',
-                                                    synapse_login=None,
+                                                    name='toil.vcf',
                                                     s3_key_path=None,
-                                                    disk='25G')
+                                                    disk=inputs.file_size)
 
     download_sample.addFollowOnJobFn(hard_filter_pipeline,
                                      uuid,
