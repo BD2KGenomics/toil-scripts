@@ -4,13 +4,13 @@
 ## Overview
 
 The Toil germline pipeline accepts FASTQ or BAM files as input and runs
-the GATK best practices pipeline for germline SNP and INDEL discovery. 
-This pipeline can be configured to run GATK preprocessing, variant 
-calling, and filtering. The pipeline also supports functional variant
-annotation using Oncotator. Samples can be analyzed individually 
-or merged for joint genotyping and filtering. False positives are 
-removed using GATK recommended "hard filters" or through variant
-quality score recalibration and filtering.
+the [GATK best practices pipeline](https://software.broadinstitute.org/gatk/best-practices/).
+for SNP and INDEL discovery. This pipeline can be configured to run 
+BWA alignment, GATK preprocessing, variant calling, and filtering. 
+The pipeline also supports functional variant annotation using Oncotator. 
+Samples can be analyzed individually or merged for joint genotyping and 
+filtering. False positives are removed using GATK recommended "hard 
+filters" or through variant quality score recalibration and filtering.
 
 #### General Dependencies
 
@@ -102,15 +102,13 @@ are placed in a subdirectory named after the sample's unique identifier.
 | GATK         | 3.5     | Identifies genomic variants      |
 | Oncotator    | 1.9     | Adds cancer relevant annotations |
 
-## GATK Recalibration Resources and Variant Annotations
-This pipeline is configured to run the [GATK Germline Best Practices 
-Pipeline](https://software.broadinstitute.org/gatk/best-practices/).
-Please see source code for specific tool parameters. We have followed 
-[GATK recommendations](https://software.broadinstitute.org/gatk/guide/article?id=2805).
-for training resources and variant annotations. One annotation we do not 
-use is Coverage because this annotation is not recommended for WES data.
+## GATK Variant Annotations
+Variant annotations are added during the variant discovery and 
+genotyping steps. They help describe the context of the variant call 
+and are used during filtering to identify which variants are likely 
+false positives.
 
-The following annotations are automatically added to variant calls:
+Recommended annotations:
 - QualByDepth
 - FischerStrand
 - StrandOddsRatio
@@ -133,8 +131,9 @@ Variant Quality Score Recalibration is applied whenever the config
 parameter run-vqsr is set to True. [VQSR](https://software.broadinstitute.org/gatk/guide/tooldocs/org_broadinstitute_gatk_tools_walkers_variantrecalibration_VariantRecalibrator.php)
 is a filtering method that uses machine learning algorithms to remove 
 false positive calls. For this reason, VQSR requires many samples to 
-train on in order to create an accurate statistical model. We use the 
-following VQSR parameters:
+train on in order to create an accurate statistical model. We have 
+followed [GATK recommendations](https://software.broadinstitute.org/gatk/guide/article?id=2805).
+for training resources and variant annotations. 
 
 ### SNP Recalibration Parameters
 ```
@@ -142,16 +141,11 @@ java -jar GenomeAnalysisTK.jar \
 -T VariantRecalibrator \
 -R genome.fa \
 -input input.vcf \
--an QualByDepth \
--an FisherStrand \
--an StrandOddsRatio \
--an ReadPosRankSum \
--an MQRankSum \
--an RMSMappingQuality \
 -tranche 100.0 \
 -tranche 99.9 \
 -tranche 99.0 \
 -tranche 90.0 \
+-an {snp-filter-annotations}
 -resource:hapmap,known=false,training=true,truth=true,prior=15.0 hapmap.vcf \
 -resource:omni,known=false,training=true,truth=true,prior=12.0 omni.vcf \
 -resource:1000G,known=false,training=true,truth=false,prior=10.0 1000G.vcf \
@@ -168,10 +162,7 @@ java -jar GenomeAnalysisTK.jar \
 java -jar GenomeAnalysisTK.jar \
 -T VariantRecalibrator \
 -R genome.fa \
--an QualByDepth \
--an FisherStrand \
--an StrandOddsRatio \
--an MQRankSum \
+-an {indel-filter-annotations}
 -tranche 100.0 \
 -tranche 99.9 \
 -tranche 99.0 \
@@ -186,16 +177,15 @@ java -jar GenomeAnalysisTK.jar \
 ```
 
 ## Hard Filters
-If the pipeline is not configured to run VQSR, then GATK recommended 
-["hard filters"](http://gatkforums.broadinstitute.org/wdl/discussion/2806/howto-apply-hard-filters-to-a-call-set)
-are used instead. This method uses GATK variant annotation features 
-to remove false variant calls. [Here](https://software.broadinstitute.org/gatk/guide/article?id=6925)
-is a description of filter threshold values.
+When not using VQSR, GATK recommended ["hard filters"](http://gatkforums.broadinstitute.org/wdl/discussion/2806/howto-apply-hard-filters-to-a-call-set)
+are used instead. This method uses simple thresholds based on GATK 
+variant annotation values to remove false variant calls. You can find an 
+explanation of filter threshold values [here](https://software.broadinstitute.org/gatk/guide/article?id=6925).
 
-SNP Filter:
+Recommended SNP Filter:
     "QD < 2.0 || FS > 60.0 || MQ < 40.0 || MQRankSum < -12.5 || ReadPosRankSum < -8.0"
     
-INDEL Filter:
+Recommended INDEL Filter:
     "QD < 2.0 || FS > 200.0 || ReadPosRankSum < -20.0"
     
 ## Config
@@ -234,47 +224,46 @@ genome-fai:
 # Optional: URL or local path to reference genome sequence dictionary (Default: None)
 genome-dict:
 
-# Optional: URL or local path to 1000G SNP resource file (Default: None)
+# Required for VQSR: URL or local path to 1000G SNP resource file (Default: None)
 g1k_snp:
 
-# Optional: URL or local path to 1000G INDEL resource file (Default: None)
+# Required for preprocessing: URL or local path to 1000G INDEL resource file (Default: None)
 g1k_indel:
 
-# Optional: URL or local path HapMap resource file (Default: None)
+# Required for VQSR: URL or local path HapMap resource file (Default: None)
 hapmap:
 
-# Optional: URL or local path Omni resource file (Default: None)
+# Required for VQSR: URL or local path Omni resource file (Default: None)
 omni:
 
-# Optional: URL or local path to Mills resource file (Default: None)
+# Required for VQSR: URL or local path to Mills resource file (Default: None)
 mills:
 
-# Optional: URL or local path to dbSNP resource file (Default: None)
+# Required for VQSR: URL or local path to dbSNP resource file (Default: None)
 dbsnp:
 
-# Optional: Align FASTQs or Realign BAM file (Default: False)
+# Required for FASTQ samples: Align FASTQs or Realign BAM file (Default: False)
 run-bwa:
 
 # Optional. Trim adapters (Default: False)
 trim:
 
-# Optional: URL or local path to BWA index file prefix.amb (Default: None)
+# Required for BWA alignment: URL or local path to BWA index file prefix.amb (Default: None)
 amb:
 
-# Optional: URL or local path to BWA index file prefix.ann (Default: None)
+# Required for BWA alignment: URL or local path to BWA index file prefix.ann (Default: None)
 ann:
 
-# Optional: URL or local path to BWA index file prefix.bwt (Default: None)
+# Required for BWA alignment: URL or local path to BWA index file prefix.bwt (Default: None)
 bwt:
 
-# Optional: URL or local path to BWA index file prefix.pac (Default: None)
+# Required for BWA alignment: URL or local path to BWA index file prefix.pac (Default: None)
 pac:
 
-# Optional: URL or local path to BWA index file prefix.sa (Default: None)
+# Required for BWA alignment: URL or local path to BWA index file prefix.sa (Default: None)
 sa:
 
-# Optional: URL or local path to alternate contigs (Default: None)
-# Necessary for ALT-aware alignment
+# Required for ALT-aware alignment: URL or local path to alternate contigs (Default: None)
 alt:
 
 # Optional: Run GATK Preprocessing (Default: False)
@@ -282,6 +271,18 @@ preprocess:
 
 # Optional: Stops after GATK Preprocessing (Default: False)
 preprocess-only:
+
+# Required for hard filtering: Name of SNP filter for VCF header
+snp_filter_name:
+
+# Required for hard filtering: SNP JEXL filter expression
+snp_filter_expression:
+
+# Required for hard filtering: Name of INDEL filter for VCF header
+indel_filter_name:
+
+# Required for hard filtering: INDEL JEXL filter expression
+indel_filter_expression:
 
 # Optional: Run GATK VQSR (Default: False)
 run-vqsr:
@@ -292,8 +293,7 @@ joint-genotype:
 # Optional: Run Oncotator (Default: False)
 run-oncotator:
 
-# Optional: URL or local path to Oncotator database (Default: None)
-# Necessary for Oncotator
+# Required for Oncotator: URL or local path to Oncotator database (Default: None)
 oncotator-db:
 
 # Optional: Suffix added to output filename (i.e. .toil)
@@ -325,8 +325,25 @@ ann: s3://cgl-pipeline-inputs/alignment/hg19.fa.ann
 bwt: s3://cgl-pipeline-inputs/alignment/hg19.fa.bwt
 pac: s3://cgl-pipeline-inputs/alignment/hg19.fa.pac
 sa: s3://cgl-pipeline-inputs/alignment/hg19.fa.sa
-run-vqsr: True
 joint-genotype: True
+snp-filter-annotations:
+ - QualByDepth
+ - FisherStrand
+ - StrandOddsRatio
+ - ReadPosRankSum
+ - MappingQualityRankSumTest
+ - RMSMappingQuality
+indel-filter-annotations:
+ - QualByDepth
+ - FisherStrand
+ - StrandOddsRatio
+ - ReadPosRankSum
+ - MappingQualityRankSumTest
+run-vqsr: False
+snp_filter_name: GERMLINE_SNP_FILTER
+snp_filter_expression: "QD < 2.0 || FS > 60.0 || MQ < 40.0 || MQRankSum < -12.5 || ReadPosRankSum < -8.0"
+indel_filter_name: GERMLINE_INDEL_FILTER
+indel_filter_expression: "QD < 2.0 || FS > 200.0 || ReadPosRankSum < -20.0"
 file-size: 200G
 xmx: 30G
 suffix: .toil

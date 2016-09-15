@@ -10,28 +10,38 @@ BWA Alignment
 
 GATK Preprocessing
 4: Mark duplicates
-5: Indel Realignment
-6: Base Quality Score Recalibration
-7: Apply Recalibration
+5: Indel realignment
+6: Base quality score recalibration
+7: Apply recalibration
 
 GATK Variant Discovery
-8: Call variants
-9: Merge variant calls (Optional)
+8:  Call variants
+9:  Merge variant calls
 10: Genotype variants
 
-GATK Hard Filtering
+GATK Hard Filtering or VQSR
 11: Isolate SNPs
 12: Isolate Indels
 13: Apply SNP filter
 14: Apply Indel filter
 15: Merge SNP and Indel VCFs
 
-GATK VQSR and Filtering (Optional)
 11: Recalibrate SNPs
 12: Recalibrate Indels
 13: Apply SNP recalibration
 14: Apply Indel recalibration
+
+===================================================================
+
+Dependencies
+Python 2.7
+curl            - apt-get install curl
+virtualenv      - apt-get install python-virtualenv
+pip             - apt-get install python-pip
+toil            - pip install toil
+docker          - http://docs.docker.com/engine/installation/
 """
+from __future__ import print_function
 import argparse
 from collections import namedtuple
 from copy import deepcopy
@@ -43,21 +53,21 @@ from urlparse import urlparse
 from bd2k.util.humanize import human2bytes
 from bd2k.util.processes import which
 from toil.job import Job, PromisedRequirement
+from toil_lib import require
+from toil_lib.programs import docker_call
+from toil_lib.urls import download_url_job
+from toil_scripts.rnaseq_cgl.rnaseq_cgl_pipeline import generate_file
+from toil_lib.tools.aligners import run_bwakit
+from toil_lib.tools.indexing import run_samtools_faidx
+from toil_lib.tools.preprocessing import run_gatk_preprocessing, \
+    run_picard_create_sequence_dictionary, run_samtools_index, run_samtools_sort
+from toil_lib.tools.variant_annotation import gatk_genotype_gvcfs, run_oncotator
 import yaml
 
 from toil_scripts.gatk_germline.common import output_file_job
 from toil_scripts.gatk_germline.germline_config import generate_config, generate_manifest
 from toil_scripts.gatk_germline.hard_filter import hard_filter_pipeline
 from toil_scripts.gatk_germline.vqsr import vqsr_pipeline
-from toil_scripts.lib import require
-from toil_scripts.lib.programs import docker_call
-from toil_scripts.lib.urls import download_url_job
-from toil_scripts.rnaseq_cgl.rnaseq_cgl_pipeline import generate_file
-from toil_scripts.tools.aligners import run_bwakit
-from toil_scripts.tools.indexing import run_samtools_faidx
-from toil_scripts.tools.preprocessing import run_gatk_preprocessing, \
-    run_picard_create_sequence_dictionary, run_samtools_index, run_samtools_sort
-from toil_scripts.tools.variant_annotation import gatk_genotype_gvcfs, run_oncotator
 
 
 logging.basicConfig(level=logging.INFO)
@@ -65,7 +75,7 @@ logging.basicConfig(level=logging.INFO)
 
 class GermlineSample(namedtuple('GermlineSample', 'uuid url paired_url rg_line')):
     """
-    Namedtuple subclass for Toil Germline samples. Stores germline sample information.
+    Namedtuple subclass for Toil Germline samples.
 
     Attributes
     uuid: unique sample identifier
@@ -77,14 +87,18 @@ class GermlineSample(namedtuple('GermlineSample', 'uuid url paired_url rg_line')
 
 def run_gatk_germline_pipeline(job, samples, config):
     """
-    Downloads shared files and runs the GATK Best Practices Germline pipeline for a list of samples.
-    See `toil_scripts.gatk_germline.germline_config.py` file for necessary parameters.
+    Downloads shared files and calls the GATK best practices germline pipeline for a cohort of samples
 
     :param JobFunctionWrappingJob job: passed automatically by Toil
     :param list[GermlineSample] samples: List of GermlineSample namedtuples
     :param Namespace config: Configuration options for pipeline
+        Requires the following config attributes:
+        config.preprocess_only      If True, then stops pipeline after preprocessing steps
+        config.joint_genotype       If True, then joint genotypes cohort
+        config.run_oncotator        If True, then adds Oncotator to pipeline
+        Additional parameters are needed for downstream steps. Refer to pipeline README for more information.
     """
-    # Determine the available disk space on a worker node before any jobs have been run
+    # Determine the available disk space on a worker node before any jobs have been run.
     work_dir = job.fileStore.getLocalTempDir()
     st = os.statvfs(work_dir)
     config.available_disk = st.f_bavail * st.f_frsize
@@ -92,22 +106,21 @@ def run_gatk_germline_pipeline(job, samples, config):
     # Check that there is a reasonable number of samples for joint genotyping
     num_samples = len(samples)
     if config.joint_genotype and not 30 < num_samples < 200:
-        job.fileStore.logToMaster('WARNING: GATK recommends batches between '
-                                  '30 and 200 samples for joint genotyping. '
+        job.fileStore.logToMaster('WARNING: GATK recommends batches of '
+                                  '30 to 200 samples for joint genotyping. '
                                   'The current cohort has %d samples.' % num_samples)
 
-    # Download shared files and start germline pipeline
     shared_files = Job.wrapJobFn(download_shared_files, config).encapsulate()
     job.addChild(shared_files)
 
     if config.preprocess_only:
-        for germline_sample in samples:
+        for sample in samples:
             shared_files.addChildJobFn(prepare_bam,
-                                       germline_sample.uuid,
-                                       germline_sample.url,
+                                       sample.uuid,
+                                       sample.url,
                                        shared_files.rv(),
-                                       paired_url=germline_sample.paired_url,
-                                       rg_line=germline_sample.rg_line)
+                                       paired_url=sample.paired_url,
+                                       rg_line=sample.rg_line)
     else:
         run_pipeline = Job.wrapJobFn(gatk_germline_pipeline,
                                      samples,
@@ -121,21 +134,32 @@ def run_gatk_germline_pipeline(job, samples, config):
 
 def gatk_germline_pipeline(job, samples, config):
     """
-    Configures and runs the GATK Best Practices Germline pipeline.
+    Runs the GATK best practices pipeline for germline SNP and INDEL discovery.
 
     Steps in Pipeline
     0: Generate and preprocess BAM
         - Uploads processed BAM to output directory
     1: Call Variants using HaplotypeCaller
         - Uploads GVCF
-    2: Genotype VCF or Joint Genotype
-        - Uploads genotyped VCF
+    2: Genotype VCF
+        - Uploads VCF
     3: Filter Variants using either "hard filters" or VQSR
         - Uploads filtered VCF
 
     :param JobFunctionWrappingJob job: passed automatically by Toil
-    :param list samples: List of tuples (uuid, url, paired_url, rg_line)
+    :param list[GermlineSample] samples: List of GermlineSample namedtuples
     :param Namespace config: Input parameters and reference FileStoreIDs
+        Requires the following config attributes:
+        config.genome_fasta         FilesStoreID for reference genome fasta file
+        config.genome_fai           FilesStoreID for reference genome fasta index file
+        config.genome_dict          FilesStoreID for reference genome sequence dictionary file
+        config.cores                Number of cores for each job
+        config.xmx                  Java heap size in bytes
+        config.suffix               Suffix added to output filename
+        config.output_dir           URL or local path to output directory
+        config.ssec                 Path to key file for SSE-C encryption
+        config.joint_genotype       If True, then joint genotype and filter cohort
+        config.hc_output            URL or local path to HaplotypeCaller output for testing
     :return: Dictionary of filtered VCF FileStoreIDs
     :rtype: dict
     """
@@ -165,17 +189,20 @@ def gatk_germline_pipeline(job, samples, config):
                                       get_bam.rv(0),
                                       get_bam.rv(1),
                                       genome_ref_size)
+
         get_gvcf = get_bam.addFollowOnJobFn(gatk_haplotype_caller,
                                             get_bam.rv(0),
                                             get_bam.rv(1),
-                                            config,
+                                            config.genome_fasta, config.genome_fai, config.genome_dict,
+                                            annotations=config.annotations,
                                             cores=config.cores,
                                             disk=hc_disk,
-                                            memory=config.xmx)
+                                            memory=config.xmx,
+                                            hc_output=config.hc_output)
         # Store cohort GVCFs in dictionary
         gvcfs[sample.uuid] = get_gvcf.rv()
 
-        # Upload individual sample GVCF before genotyping
+        # Upload individual sample GVCF before genotyping to a sample specific output directory
         vqsr_name = '{}{}.g.vcf'.format(sample.uuid, config.suffix)
         get_gvcf.addChildJobFn(output_file_job,
                                vqsr_name,
@@ -190,6 +217,7 @@ def gatk_germline_pipeline(job, samples, config):
 
     filtered_vcfs = {}
     if config.joint_genotype:
+        # Need to configure joint genotype in a separate function to resolve promises
         filtered_vcfs = group_bam_jobs.addFollowOnJobFn(joint_genotype_and_filter,
                                                         gvcfs,
                                                         config).rv()
@@ -207,26 +235,29 @@ def gatk_germline_pipeline(job, samples, config):
 
 def joint_genotype_and_filter(job, gvcfs, config):
     """
-    Checks for enough disk space to joint genotype, then calls the genotype and filter pipeline function.
+    Checks for enough disk space for joint genotyping, then calls the genotype and filter pipeline function.
 
     :param JobFunctionWrappingJob job: passed automatically by Toil
     :param dict gvcfs: Dictionary of GVCFs {Sample ID: FileStoreID}
     :param Namespace config: Input parameters and reference FileStoreIDs
+        Requires the following config attributes:
+        config.genome_fasta         FilesStoreID for reference genome fasta file
+        config.genome_fai           FilesStoreID for reference genome fasta index file
+        config.genome_dict          FilesStoreID for reference genome sequence dictionary file
+        config.available_disk       Total available disk space
     :returns: FileStoreID for the joint genotyped and filtered VCF file
     :rtype: str
     """
     # Get the total size of genome reference files
     genome_ref_size = config.genome_fasta.size + config.genome_fai.size + config.genome_dict.size
 
-    # Estimate the disk requirement as 2.5x the total GVCF size
-    cohort_size = sum(gvcf.size for gvcf in gvcfs.values())
-
     # Require at least 2.5x the sum of the individual GVCF files
+    cohort_size = sum(gvcf.size for gvcf in gvcfs.values())
     require(int(2.5 * cohort_size + genome_ref_size) < config.available_disk,
             'There is not enough disk space to joint '
             'genotype samples:\n{}'.format('\n'.join(gvcfs.keys())))
 
-    job.fileStore.logToMaster('Merging cohort into a single joint GVCF file')
+    job.fileStore.logToMaster('Merging cohort into a single GVCF file')
 
     return job.addChildJobFn(genotype_and_filter, gvcfs, config).rv()
 
@@ -239,6 +270,16 @@ def genotype_and_filter(job, gvcfs, config):
     :param JobFunctionWrappingJob job: passed automatically by Toil
     :param dict gvcfs: Dictionary of GVCFs {Sample ID: FileStoreID}
     :param Namespace config: Input parameters and shared FileStoreIDs
+        Requires the following config attributes:
+        config.genome_fasta         FilesStoreID for reference genome fasta file
+        config.genome_fai           FilesStoreID for reference genome fasta index file
+        config.genome_dict          FilesStoreID for reference genome sequence dictionary file
+        config.suffix               Suffix added to output filename
+        config.output_dir           URL or local path to output directory
+        config.ssec                 Path to key file for SSE-C encryption
+        config.cores                Number of cores for each job
+        config.xmx                  Java heap size in bytes
+        config.unsafe_mode          If True, then run GATK tools in UNSAFE mode
     :return: FileStoreID for genotyped and filtered VCF file
     :rtype: str
     """
@@ -297,16 +338,24 @@ def annotate_vcfs(job, vcfs, config):
     Runs Oncotator for a group of VCF files. Each sample is annotated individually.
 
     :param JobFunctionWrappingJob job: passed automatically by Toil
-    :param dict vcfs: Dictionary of UUIDs and VCF FileStoreIDs
+    :param dict vcfs: Dictionary of VCF FileStoreIDs {Sample identifier: FileStoreID}
     :param Namespace config: Input parameters and shared FileStoreIDs
+        Requires the following config attributes:
+        config.oncotator_db         FileStoreID to Oncotator database
+        config.suffix               Suffix added to output filename
+        config.output_dir           URL or local path to output directory
+        config.ssec                 Path to key file for SSE-C encryption
+        config.cores                Number of cores for each job
+        config.xmx                  Java heap size in bytes
     """
-    job.fileStore.logToMaster('Running Oncotator on VCFs')
+    job.fileStore.logToMaster('Running Oncotator on the following samples:\n%s' % '\n'.join(vcfs.keys()))
     for uuid, vcf_id in vcfs.iteritems():
         # The Oncotator disk requirement depends on the input VCF, the Oncotator database
         # and the output VCF. The annotated VCF will be significantly larger than the input VCF.
         onco_disk = PromisedRequirement(lambda vcf, db: 3 * vcf.size + db.size,
                                         vcf_id,
                                         config.oncotator_db)
+
         annotated_vcf = job.addChildJobFn(run_oncotator,
                                           vcf_id,
                                           config.oncotator_db,
@@ -338,7 +387,7 @@ def parse_manifest(path_to_manifest):
     :rtype: list[GermlineSample]
     """
     bam_re = r"^(?P<uuid>\S+)\s(?P<url>\S+[bsc][r]?am)"
-    fq_re = r"^(?P<uuid>\S+)\s(?P<url>\S+)\s(?P<url2>\S+)?\s?(?P<rg_line>@RG\S+)"
+    fq_re = r"^(?P<uuid>\S+)\s(?P<url>\S+)\s(?P<paired_url>\S+)?\s?(?P<rg_line>@RG\S+)"
     samples = []
     with open(path_to_manifest, 'r') as f:
         for line in f.readlines():
@@ -350,29 +399,28 @@ def parse_manifest(path_to_manifest):
             if bam_match:
                 uuid = bam_match.group('uuid')
                 url = bam_match.group('url')
-                url2 = None
+                paired_url = None
                 rg_line = None
                 require('.bam' in url.lower(),
                         'Expected .bam extension:\n{}:\t{}'.format(uuid, url))
             elif fastq_match:
                 uuid = fastq_match.group('uuid')
                 url = fastq_match.group('url')
-                url2 = fastq_match.group('url2')
+                paired_url = fastq_match.group('paired_url')
                 rg_line = fastq_match.group('rg_line')
                 require('.fq' in url.lower() or '.fastq' in url.lower(),
                         'Expected .fq extension:\n{}:\t{}'.format(uuid, url))
             else:
-                msg = 'Could not parse entry in manifest: %s\n%s' % (f.name, line)
-                raise ValueError(msg)
-            require(urlparse(url).scheme or url.startswith('syn'),
-                    'Invalid URL passed for {}'.format(url))
-            samples.append(GermlineSample(uuid, url, url2, rg_line))
+                raise ValueError('Could not parse entry in manifest: %s\n%s' % (f.name, line))
+            # Checks that URL has a scheme
+            require(urlparse(url).scheme, 'Invalid URL passed for {}'.format(url))
+            samples.append(GermlineSample(uuid, url, paired_url, rg_line))
     return samples
 
 
 def download_shared_files(job, config):
     """
-    Downloads reference files shared by all samples in the Toil Germline pipeline
+    Downloads shared reference files for Toil Germline pipeline
 
     :param JobFunctionWrappingJob job: passed automatically by Toil
     :param Namespace config: Pipeline configuration options
@@ -412,12 +460,11 @@ def download_shared_files(job, config):
 
 def reference_preprocessing(job, config):
     """
-    Creates a genome.fa.fai and genome.dict file for reference genome.fa
-    if one is not already present in the config dictionary
+    Creates a genome fasta index and sequence dictionary file if not already present in the pipeline config.
 
     :param JobFunctionWrappingJob job: passed automatically by Toil
     :param Namespace config: Pipeline configuration options and shared files.
-                             Requires genome_fasta attribute
+                             Requires FileStoreID for genome fasta file as config.genome_fasta
     :return: Updated config with reference index files
     :rtype: Namespace
     """
@@ -437,27 +484,38 @@ def reference_preprocessing(job, config):
 
 def prepare_bam(job, uuid, url, config, paired_url=None, rg_line=None):
     """
-    Prepares BAM file for GATK Germline pipeline.
+    Prepares BAM file for Toil germline pipeline.
 
     Steps in pipeline
-    0: Align FASTQ or Download BAM
+    0: Download and align BAM or FASTQ sample
     1: Sort BAM
     2: Index BAM
-    3: GATK Preprocessing (Optional)
+    3: Run GATK preprocessing pipeline (Optional)
         - Uploads preprocessed BAM to output directory
 
     :param JobFunctionWrappingJob job: passed automatically by Toil
     :param str uuid: Unique identifier for the sample
-    :param str url: URL to BAM file or FASTQs
+    :param str url: URL or local path to BAM file or FASTQs
     :param Namespace config: Configuration options for pipeline
-    :param str|None paired_url: URL to paired FASTQ file
-    :param str|None rg_line: RG line for BWA alignment (i.e. @RG\tID:foo\tSM:bar). Default is None.
+        Requires the following config attributes:
+        config.genome_fasta         FilesStoreID for reference genome fasta file
+        config.genome_fai           FilesStoreID for reference genome fasta index file
+        config.genome_dict          FilesStoreID for reference genome sequence dictionary file
+        config.g1k_indel            FileStoreID for 1000G INDEL resource file
+        config.mills                FileStoreID for Mills resource file
+        config.dbsnp                FileStoreID for dbSNP resource file
+        config.suffix               Suffix added to output filename
+        config.output_dir           URL or local path to output directory
+        config.ssec                 Path to key file for SSE-C encryption
+        config.cores                Number of cores for each job
+        config.xmx                  Java heap size in bytes
+    :param str|None paired_url: URL or local path to paired FASTQ file, default is None
+    :param str|None rg_line: RG line for BWA alignment (i.e. @RG\tID:foo\tSM:bar), default is None
     :return: BAM and BAI FileStoreIDs
     :rtype: tuple
     """
-    # 0: Align FASQ or realign BAM
+    # 0: Align FASTQ or realign BAM
     if config.run_bwa:
-        job.fileStore.logToMaster("Aligning Sample: %s" % uuid)
         get_bam = job.wrapJobFn(setup_and_run_bwakit,
                                 uuid,
                                 url,
@@ -485,7 +543,7 @@ def prepare_bam(job, uuid, url, config, paired_url=None, rg_line=None):
 
     else:
         # The samtools sort disk requirement depends on the input bam, the tmp files, and the
-        # sorted output bam
+        # sorted output bam.
         sorted_bam_disk = PromisedRequirement(lambda bam: 3 * bam.size, get_bam.rv())
         sorted_bam = get_bam.addChildJobFn(run_samtools_sort,
                                            get_bam.rv(),
@@ -521,7 +579,7 @@ def prepare_bam(job, uuid, url, config, paired_url=None, rg_line=None):
 
         # Save processed BAM
         output_dir = os.path.join(config.output_dir, uuid)
-        filename = '{}.processed{}.bam'.format(uuid, config.suffix)
+        filename = '{}.preprocessed{}.bam'.format(uuid, config.suffix)
         output_bam = job.wrapJobFn(output_file_job,
                                    filename,
                                    preprocess.rv(0),
@@ -538,12 +596,23 @@ def prepare_bam(job, uuid, url, config, paired_url=None, rg_line=None):
 
 def setup_and_run_bwakit(job, uuid, url, rg_line, config, paired_url=None):
     """
-    Downloads and aligns FASTQs or realigns BAM using toil-lib's BWA function.
+    Downloads and runs bwakit for BAM or FASTQ files
 
     :param JobFunctionWrappingJob job: passed automatically by Toil
-    :param str uuid: Sample unique identifier
-    :param str url: FASTQ or BAM sample URL. BAM alignment URL must have .bam extension.
+    :param str uuid: Unique sample identifier
+    :param str url: FASTQ or BAM file URL. BAM alignment URL must have .bam extension.
     :param Namespace config: Input parameters and shared FileStoreIDs
+        Requires the following config attributes:
+        config.genome_fasta         FilesStoreID for reference genome fasta file
+        config.genome_fai           FilesStoreID for reference genome fasta index file
+        config.cores                Number of cores for each job
+        config.trim                 If True, trim adapters using bwakit
+        config.amb                  FileStoreID for BWA index file prefix.amb
+        config.ann                  FileStoreID for BWA index file prefix.ann
+        config.bwt                  FileStoreID for BWA index file prefix.bwt
+        config.pac                  FileStoreID for BWA index file prefix.pac
+        config.sa                   FileStoreID for BWA index file prefix.sa
+        config.alt                  FileStoreID for alternate contigs file or None
     :param str|None paired_url: URL to paired FASTQ
     :param str|None rg_line: Read group line (i.e. @RG\tID:foo\tSM:bar)
     :return: BAM FileStoreID
@@ -573,13 +642,15 @@ def setup_and_run_bwakit(job, uuid, url, rg_line, config, paired_url=None):
                                name='file1',
                                s3_key_path=config.ssec,
                                disk=config.file_size)
+
     samples.append(input1.rv())
+
     if '.bam' in url.lower():
         bwa_config.bam = input1.rv()
     else:
         bwa_config.r1 = input1.rv()
 
-    # Uses first url to deduce paired FASTQ URL, if url looks like a paired file.
+    # Uses first URL to deduce paired FASTQ URL, if url looks like a paired file.
     if paired_url is None and '1.fq' in url:
         paired_url = url.replace('1.fq', '2.fq')
         job.fileStore.logToMaster(
@@ -598,11 +669,13 @@ def setup_and_run_bwakit(job, uuid, url, rg_line, config, paired_url=None):
     bwa_index_size = sum([getattr(config, index_file).size
                           for index_file in ['amb', 'ann', 'bwt', 'pac', 'sa', 'alt']
                           if getattr(config, index_file, None) is not None])
+
     # Take the sum of the input files and scale it by a factor of 4
     bwakit_disk = PromisedRequirement(lambda lst, index_size:
                                       int(4 * sum(x.size for x in lst) + index_size),
                                       samples,
                                       bwa_index_size)
+
     return job.addFollowOnJobFn(run_bwakit,
                                 bwa_config,
                                 sort=False,         # BAM files are sorted later in the pipeline
@@ -611,27 +684,37 @@ def setup_and_run_bwakit(job, uuid, url, rg_line, config, paired_url=None):
                                 disk=bwakit_disk).rv()
 
 
-def gatk_haplotype_caller(job, bam_id, bai_id, config, emit_threshold=10.0, call_threshold=30.0):
+def gatk_haplotype_caller(job,
+                          bam, bai,
+                          ref, fai, ref_dict,
+                          annotations=None,
+                          emit_threshold=10.0, call_threshold=30.0,
+                          unsafe_mode=False,
+                          hc_output=None):
     """
     Uses GATK HaplotypeCaller to identify SNPs and INDELs. Outputs variants in a Genomic VCF file.
 
     :param JobFunctionWrappingJob job: passed automatically by Toil
-    :param str bam_id: BAM FileStoreID
-    :param str bai_id: BAI FileStoreID
-    :param Namespace config: pipeline configuration options and shared files
-    :param float emit_threshold: Minimum phred-scale confidence threshold for a variant to be emitted
-                               Default: 10
-    :param float call_threshold: Minimum phred-scale confidence threshold for a variant to be called
-                               Default: 30
-    :return: GVCF FileStoreID
+    :param str bam: FileStoreID for BAM file
+    :param str bai: FileStoreID for BAM index file
+    :param str ref: FileStoreID for reference genome fasta file
+    :param str ref_dict: FileStoreID for reference sequence dictionary file
+    :param str fai: FileStoreID for reference fasta index file
+    :param list[str] annotations: List of GATK variant annotations, default is None
+    :param float emit_threshold: Minimum phred-scale confidence threshold for a variant to be emitted, default is 10.0
+    :param float call_threshold: Minimum phred-scale confidence threshold for a variant to be called, default is 30.0
+    :param bool unsafe_mode: If True, runs gatk UNSAFE mode: "-U ALLOW_SEQ_DICT_INCOMPATIBILITY"
+    :param str hc_output: URL or local path to pre-cooked VCF file, default is None
+    :return: FileStoreID for GVCF file
     :rtype: str
     """
-    job.fileStore.logToMaster('GATK HaplotypeCaller')
+    job.fileStore.logToMaster('Running GATK HaplotypeCaller')
 
-    inputs = {'genome.fa': config.genome_fasta,
-              'genome.fa.fai': config.genome_fai,
-              'genome.dict': config.genome_dict,
-              'input.bam': bam_id, 'input.bam.bai': bai_id}
+    inputs = {'genome.fa': ref,
+              'genome.fa.fai': fai,
+              'genome.dict': ref_dict,
+              'input.bam': bam,
+              'input.bam.bai': bai}
 
     work_dir = job.fileStore.getLocalTempDir()
     for name, file_store_id in inputs.iteritems():
@@ -651,16 +734,15 @@ def gatk_haplotype_caller(job, bam_id, bai_id, config, emit_threshold=10.0, call
                '--genotyping_mode', 'Discovery',
                '--emitRefConfidence', 'GVCF']
 
-    # Workaround for Adam/GATK pipeline
-    if config.unsafe_mode:
+    if unsafe_mode:
         command = ['-U', 'ALLOW_SEQ_DICT_INCOMPATIBILITY'] + command
 
-    # Add annotations to command
-    for annotation in config.annotations:
-        command.extend(['-A', annotation])
+    if annotations:
+        for annotation in annotations:
+            command.extend(['-A', annotation])
 
     # Uses docker_call mock mode to replace output with hc_output file
-    outputs = {'output.g.vcf': getattr(config, 'hc_output', None)}
+    outputs = {'output.g.vcf': hc_output}
     docker_call(work_dir=work_dir,
                 env={'JAVA_OPTS': '-Djava.io.tmpdir=/data/ -Xmx{}'.format(job.memory)},
                 parameters=command,
@@ -673,29 +755,11 @@ def gatk_haplotype_caller(job, bam_id, bai_id, config, emit_threshold=10.0, call
 
 def main():
     """
-    GATK Germline Pipeline with variant recalibration and annotation.
-
-    Steps in Pipeline:
-        1: Download Shared Files
-        2: Prepare References
-        3: Download Sample
-        4: Align FASTQ (Optional)
-        5: Call SNPs & INDELs
-        6: Filter Variants
-        7: Genotype and Annotate Variants
-
-    ===================================================================
-    :Dependencies:
-    Python 2.7
-    curl            - apt-get install curl
-    virtualenv      - apt-get install python-virtualenv
-    pip             - apt-get install python-pip
-    toil            - pip install toil
-    docker          - http://docs.docker.com/engine/installation/
+    GATK germline pipeline with variant filtering and annotation.
     """
     # Define Parser object and add to jobTree
-    parser = argparse.ArgumentParser(description=main.__doc__,
-                                     formatter_class=argparse.RawTextHelpFormatter)
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawTextHelpFormatter)
+
     # Generate subparsers
     subparsers = parser.add_subparsers(dest='command')
     subparsers.add_parser('generate-config',
@@ -715,13 +779,12 @@ def main():
     parser_run.add_argument('--manifest',
                             type=str,
                             help='Path to the (filled in) manifest file, generated with '
-                                 '"generate-manifest". '
-                                 '\nDefault value: "%(default)s".')
+                                 '"generate-manifest".\nDefault value: "%(default)s".')
     parser_run.add_argument('--sample',
                             default=None,
                             nargs=2,
                             type=str,
-                            help='Space delimited sample UUID and BAM file in the format: uuid url')
+                            help='Input sample identifier and BAM file URL or local path')
     parser_run.add_argument('--output-dir',
                             default=None,
                             help='Path/URL to output directory')
@@ -731,6 +794,7 @@ def main():
     parser_run.add_argument('--preprocess-only',
                             action='store_true',
                             help='Only runs preprocessing steps')
+
     Job.Runner.addToilOptions(parser_run)
     options = parser.parse_args()
 
@@ -739,15 +803,13 @@ def main():
         generate_file(os.path.join(cwd, 'config-toil-germline.yaml'), generate_config)
     if options.command == 'generate-manifest' or options.command == 'generate':
         generate_file(os.path.join(cwd, 'manifest-toil-germline.tsv'), generate_manifest)
-    # Pipeline execution
     elif options.command == 'run':
         # Program checks
         for program in ['curl', 'docker']:
             require(next(which(program)),
                     program + ' must be installed on every node.'.format(program))
 
-        require(os.path.exists(options.config), '{} not found. Please run '
-                                                '"generate-config"'.format(options.config))
+        require(os.path.exists(options.config), '{} not found. Please run "generate-config"'.format(options.config))
 
         # Read sample manifest
         samples = []
@@ -772,8 +834,8 @@ def main():
                            'output_dir',
                            'run_bwa',
                            'sorted',
-                           'snp_annotations',
-                           'indel_annotations',
+                           'snp_filter_annotations',
+                           'indel_filter_annotations',
                            'preprocess',
                            'preprocess_only',
                            'run_vqsr',
@@ -801,19 +863,33 @@ def main():
             inputs['preprocess_only'] = options.preprocess_only
 
         if inputs['run_vqsr']:
+            # Check that essential VQSR parameters are present
             vqsr_fields = {'g1k_snp', 'mills', 'dbsnp', 'hapmap', 'omni'}
             require(input_fields > vqsr_fields,
-                    'Missing parameters for VQSR:\n{}'
-                    .format(', '.join(vqsr_fields - input_fields)))
+                    'Missing parameters for VQSR:\n{}'.format(', '.join(vqsr_fields - input_fields)))
+
+        # Check that hard filtering parameters are present. If only running preprocessing steps, then we do
+        # not need filtering information.
+        elif not inputs['preprocess_only']:
+            hard_filter_fields = {'snp_filter_name', 'snp_filter_expression',
+                                  'indel_filter_name', 'indel_filter_expression'}
+            require(input_fields > hard_filter_fields,
+                    'Missing parameters for hard filtering:\n{}'.format(', '.join(hard_filter_fields - input_fields)))
+
+            # Check for falsey hard filtering parameters
+            for hard_filter_field in hard_filter_fields:
+                require(inputs[hard_filter_field], 'Missing %s value for hard filtering, '
+                                                   'got %s.' % (hard_filter_field, inputs[hard_filter_field]))
 
         # Set resource parameters
         inputs['xmx'] = human2bytes(inputs['xmx'])
         inputs['file_size'] = human2bytes(inputs['file_size'])
         inputs['cores'] = int(inputs['cores'])
 
-        # GATK recommended annotations:
-        # https://software.broadinstitute.org/gatk/documentation/article?id=2805
-        inputs['annotations'] = set(inputs['snp_annotations'] + inputs['indel_annotations'])
+        inputs['annotations'] = set(inputs['snp_filter_annotations'] + inputs['indel_filter_annotations'])
+
+        # HaplotypeCaller test data for testing
+        inputs['hc_output'] = inputs.get('hc_output', None)
 
         # It is a toil-scripts convention to store input parameters in a Namespace object
         config = argparse.Namespace(**inputs)

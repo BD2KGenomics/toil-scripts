@@ -205,7 +205,7 @@ def static_dag(job, uuid, rg_line, inputs):
     adam_call_inputs.suffix = '.adam'
     adam_call_inputs.preprocess = False
     adam_call_inputs.run_vqsr = False
-    adam_call_inputs.joint = False
+    adam_call_inputs.joint_genotype = False
     adam_call_inputs.output_dir = 's3://{s3_bucket}/analysis{dir_suffix}'.format(**args)
 
     # get head GATK haplotype caller job function for the result of ADAM preprocessing and encapsulate it
@@ -220,7 +220,7 @@ def static_dag(job, uuid, rg_line, inputs):
     gatk_call_inputs.sorted = True
     gatk_call_inputs.preprocess = False
     gatk_call_inputs.run_vqsr = False
-    gatk_call_inputs.joint = False
+    gatk_call_inputs.joint_genotype = False
     gatk_call_inputs.output_dir = 's3://{s3_bucket}/analysis{dir_suffix}'.format(**args)
 
     # get head GATK haplotype caller job function for the result of GATK preprocessing and encapsulate it

@@ -3,9 +3,8 @@ import os
 from urlparse import urlparse
 
 from bd2k.util.files import mkdir_p
-
-from toil_scripts.lib.files import copy_files
-from toil_scripts.lib.urls import s3am_upload
+from toil_lib.files import copy_files
+from toil_lib.urls import s3am_upload
 
 
 def output_file_job(job, filename, file_id, output_dir, s3_key_path=None):

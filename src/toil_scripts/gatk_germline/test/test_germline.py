@@ -51,7 +51,7 @@ class GermlineTest(TestCase):
 
         Skips HaplotypeCaller step by swapping in a pre-cooked GVCF file.
         """
-        expected_files = {'bam_test.processed.ci_test.bam',
+        expected_files = {'bam_test.preprocessed.ci_test.bam',
                           'bam_test.ci_test.g.vcf',
                           'bam_test.genotyped.ci_test.vcf',
                           'bam_test.vqsr.ci_test.vcf',
@@ -81,13 +81,17 @@ class GermlineTest(TestCase):
                           'manifest-toil-germline.tsv'}
 
         for i in range(1, num_samples+1):
-            expected_files |= {'fastq_test_%s.processed.ci_test.bam' % i,
+            expected_files |= {'fastq_test_%s.preprocessed.ci_test.bam' % i,
                                'fastq_test_%s.ci_test.g.vcf' % i}
 
         inputs = self._get_default_inputs()
         inputs.run_bwa = True
         inputs.preprocess = True
         inputs.joint_genotype = True
+        inputs.snp_filter_name = 'GERMLINE_SNP_FILTER'
+        inputs.snp_filter_expression = '"QD < 2.0 || FS > 60.0 || MQ < 40.0 || MQRankSum < -12.5 || ReadPosRankSum < -8.0"'
+        inputs.indel_filter_name = 'GERMLINE_INDEL_FILTER'
+        inputs.indel_filter_expression = '"QD < 2.0 || FS > 200.0 || ReadPosRankSum < -20.0"'
 
         self._run(self.base_command,
                   '--config', self._generate_config(inputs),
@@ -101,7 +105,7 @@ class GermlineTest(TestCase):
         num_samples = int(os.environ.get('TOIL_SCRIPTS_TEST_NUM_SAMPLES', '3'))
         expected_files = {'config-toil-germline.yaml', 'manifest-toil-germline.tsv'}
         for i in range(1, num_samples+1):
-            expected_files.add('fastq_test_%s.processed.ci_test.bam' % i)
+            expected_files.add('fastq_test_%s.preprocessed.ci_test.bam' % i)
 
         inputs = self._get_default_inputs()
         inputs.run_bwa = True
@@ -145,8 +149,12 @@ class GermlineTest(TestCase):
                     pac: {pac}
                     sa: {sa}
                     alt:
-                    snp-annotations: {snp_annotations}
-                    indel-annotations: {indel_annotations}
+                    snp-filter-annotations: {snp_filter_annotations}
+                    indel-filter-annotations: {indel_filter_annotations}
+                    snp-filter-name: {snp_filter_name}
+                    snp-filter-expression: {snp_filter_expression}
+                    indel-filter-name: {indel_filter_name}
+                    indel-filter-expression: {indel_filter_expression}
                     ssec:
                     file-size: 1G
                     cores: 2
@@ -208,6 +216,10 @@ class GermlineTest(TestCase):
         inputs.output_dir = self.workdir
         inputs.suffix = ''
         inputs.unsafe_mode = False
+        inputs.snp_filter_name = ''
+        inputs.snp_filter_expression = ''
+        inputs.indel_filter_name = ''
+        inputs.indel_filter_expression = ''
         inputs.genome_fasta = 's3://cgl-pipeline-inputs/germline/ci/b37_21.fa'
         inputs.g1k_snp = 's3://cgl-pipeline-inputs/germline/ci/1000G_phase1.snps.high_confidence.b37.21.recode.vcf'
         inputs.g1k_indel = 's3://cgl-pipeline-inputs/germline/ci/1000G_phase1.indels.b37.21.recode.vcf'
@@ -220,11 +232,17 @@ class GermlineTest(TestCase):
         inputs.bwt = 's3://cgl-pipeline-inputs/germline/ci/bwa_index_b37_21.bwt'
         inputs.pac = 's3://cgl-pipeline-inputs/germline/ci/bwa_index_b37_21.pac'
         inputs.sa = 's3://cgl-pipeline-inputs/germline/ci/bwa_index_b37_21.sa'
-        inputs.snp_annotations = ['QualByDepth', 'FisherStrand', 'StrandOddsRatio',
-                                  'ReadPosRankSumTest', 'MappingQualityRankSumTest',
-                                  'RMSMappingQuality']
-        inputs.indel_annotations = ['QualByDepth', 'FisherStrand', 'StrandOddsRatio',
-                                    'ReadPosRankSumTest', 'MappingQualityRankSumTest']
+        inputs.snp_filter_annotations = ['QualByDepth',
+                                         'FisherStrand',
+                                         'StrandOddsRatio',
+                                         'ReadPosRankSumTest',
+                                         'MappingQualityRankSumTest',
+                                         'RMSMappingQuality']
+        inputs.indel_filter_annotations = ['QualByDepth',
+                                           'FisherStrand',
+                                           'StrandOddsRatio',
+                                           'ReadPosRankSumTest',
+                                           'MappingQualityRankSumTest']
         # Special attributes for testing
         inputs.hc_output = ''
         return inputs

@@ -3,10 +3,10 @@ from __future__ import print_function
 import os
 
 from toil.job import PromisedRequirement
+from toil_lib.tools.variant_manipulation import gatk_variant_recalibrator, \
+    gatk_apply_variant_recalibration
 
 from toil_scripts.gatk_germline.common import output_file_job
-from toil_scripts.tools.variant_filters import gatk_variant_recalibrator, \
-    gatk_apply_variant_recalibration
 
 
 def vqsr_pipeline(job, uuid, vcf_id, config):
@@ -20,10 +20,32 @@ def vqsr_pipeline(job, uuid, vcf_id, config):
     4: Apply INDEL Recalibration
     5: Write VCF to output directory
 
-    :param JobFunctionWrappingJob job: Toil Job instance
+    :param JobFunctionWrappingJob job: passed automatically by Toil
     :param str uuid: unique sample identifier
     :param str vcf_id: VCF FileStoreID
-    :param Namespace config: Input parameters
+    :param Namespace config: Pipeline configuration options and shared files
+        Requires the following config attributes:
+        config.genome_fasta             FilesStoreID for reference genome fasta file
+        config.genome_fai               FilesStoreID for reference genome fasta index file
+        config.genome_dict              FilesStoreID for reference genome sequence dictionary file
+        config.cores                    Number of cores for each job
+        config.xmx                      Java heap size in bytes
+        config.suffix                   Suffix for output filename
+        config.output_dir               URL or local path to output directory
+        config.ssec                     Path to key file for SSE-C encryption
+
+        SNP VQSR attributes:
+        config.snp_filter_annotations   List of GATK variant annotations
+        config.hapmap                   FileStoreID for HapMap resource file
+        config.omni                     FileStoreID for Omni resource file
+        config.dbsnp                    FileStoreID for dbSNP resource file
+        config.g1k_snp                  FileStoreID for 1000G SNP resource file
+
+        INDEL VQSR attributes:
+        config.indel_filter_annotations List of GATK variant annotations
+        config.dbsnp                    FileStoreID for dbSNP resource file
+        config.mills                    FileStoreID for Mills resource file
+
     :return: SNP and INDEL VQSR VCF FileStoreID
     :rtype: str
     """
@@ -40,13 +62,14 @@ def vqsr_pipeline(job, uuid, vcf_id, config):
                                          vcf_id,
                                          genome_ref_size,
                                          snp_resource_size)
+
     snp_recal = job.wrapJobFn(gatk_variant_recalibrator,
                               'SNP',
                               vcf_id,
                               config.genome_fasta,
                               config.genome_fai,
                               config.genome_dict,
-                              get_short_annotations(config.snp_annotations),
+                              get_short_annotations(config.snp_filter_annotations),
                               hapmap=config.hapmap,
                               omni=config.omni,
                               phase=config.g1k_snp,
@@ -62,13 +85,14 @@ def vqsr_pipeline(job, uuid, vcf_id, config):
                                            vcf_id,
                                            genome_ref_size,
                                            indel_resource_size)
+
     indel_recal = job.wrapJobFn(gatk_variant_recalibrator,
                                 'INDEL',
                                 vcf_id,
                                 config.genome_fasta,
                                 config.genome_fai,
                                 config.genome_dict,
-                                get_short_annotations(config.indel_annotations),
+                                get_short_annotations(config.indel_filter_annotations),
                                 dbsnp=config.dbsnp,
                                 mills=config.mills,
                                 unsafe_mode=config.unsafe_mode,
@@ -86,6 +110,7 @@ def vqsr_pipeline(job, uuid, vcf_id, config):
                                                snp_recal.rv(0),
                                                snp_recal.rv(1),
                                                genome_ref_size)
+
     apply_snp_recal = job.wrapJobFn(gatk_apply_variant_recalibration,
                                     'SNP',
                                     vcf_id,
@@ -104,6 +129,7 @@ def vqsr_pipeline(job, uuid, vcf_id, config):
                                                  indel_recal.rv(0),
                                                  indel_recal.rv(1),
                                                  genome_ref_size)
+
     apply_indel_recal = job.wrapJobFn(gatk_apply_variant_recalibration,
                                       'INDEL',
                                       apply_snp_recal.rv(),
@@ -122,7 +148,7 @@ def vqsr_pipeline(job, uuid, vcf_id, config):
     indel_recal.addChild(apply_indel_recal)
     apply_snp_recal.addChild(apply_indel_recal)
 
-    # Output input VCF and recalibrated VCF
+    # Output recalibrated VCF
     output_dir = config.output_dir
     output_dir = os.path.join(output_dir, uuid)
     vqsr_name = '%s.vqsr%s.vcf' % (uuid, config.suffix)
@@ -157,75 +183,3 @@ def get_short_annotations(annotations):
             annotation = short_name[annotation]
         short_annotations.append(annotation)
     return short_annotations
-
-
-def main():
-    """
-    Runs GATK VQSR on a VCF file
-    """
-    import argparse
-    from multiprocessing import cpu_count
-
-    from toil.job import Job
-    import yaml
-
-    from toil_scripts.gatk_germline.germline import download_shared_files
-    from toil_scripts.lib.urls import download_url_job
-
-    parser = argparse.ArgumentParser(description=main.__doc__,
-                                     formatter_class=argparse.RawTextHelpFormatter)
-
-    parser.add_argument('--sample',
-                        default=None,
-                        nargs=2,
-                        type=str,
-                        help='Space delimited sample UUID and VCF file in the format: uuid url')
-
-    parser.add_argument('--config',
-                        required=True,
-                        type=str,
-                        help='Path or URL to Toil germline config file')
-
-    parser.add_argument('--output-dir',
-                        default=None,
-                        help='Path/URL to output directory')
-
-    Job.Runner.addToilOptions(parser)
-    options = parser.parse_args()
-
-    # Parse inputs
-    inputs = {x.replace('-', '_'): y for x, y in
-              yaml.load(open(options.config).read()).iteritems()}
-
-    inputs = argparse.Namespace(**inputs)
-
-    inputs.run_bwa = False
-    inputs.preprocess = False
-    inputs.run_oncotator = False
-    inputs.annotations = ['QualByDepth',
-                          'FisherStrand',
-                          'StrandOddsRatio',
-                          'ReadPosRankSumTest',
-                          'MappingQualityRankSumTest',
-                          'RMSMappingQuality',
-                          'InbreedingCoeff']
-
-    shared_files = Job.wrapJobFn(download_shared_files, inputs).encapsulate()
-
-    uuid, url = options.sample
-    gvcf = shared_files.addChildJobFn(download_url_job,
-                                      url,
-                                      name='toil.g.vcf',
-                                      s3_key_path=None)
-
-    shared_files.addFollowOnJobFn(vqsr_pipeline,
-                                  uuid,
-                                  gvcf.rv(),
-                                  shared_files.rv(),
-                                  cores=cpu_count())
-
-    Job.Runner.startToil(shared_files, options)
-
-
-if __name__ == '__main__':
-    main()

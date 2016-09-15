@@ -28,23 +28,6 @@ def generate_config():
         # Required: Input BAM file is sorted (Default: False)
         sorted:
 
-        # Required: GATK SNP variant annotations
-        snp-annotations:
-            - QualByDepth
-            - FisherStrand
-            - StrandOddsRatio
-            - ReadPosRankSum
-            - MappingQualityRankSumTest
-            - RMSMappingQuality
-
-        # Required: GATK INDEL variant annotations
-        indel-annotations:
-            - QualByDepth
-            - FisherStrand
-            - StrandOddsRatio
-            - ReadPosRankSum
-            - MappingQualityRankSumTest
-
         # Required: URL or local path to reference genome FASTA file
         genome-fasta:
 
@@ -54,47 +37,46 @@ def generate_config():
         # Optional: URL or local path to reference genome sequence dictionary (Default: None)
         genome-dict:
 
-        # Optional: URL or local path to 1000G SNP resource file (Default: None)
+        # Required for VQSR: URL or local path to 1000G SNP resource file (Default: None)
         g1k_snp:
 
-        # Optional: URL or local path to 1000G INDEL resource file (Default: None)
+        # Required for preprocessing: URL or local path to 1000G INDEL resource file (Default: None)
         g1k_indel:
 
-        # Optional: URL or local path HapMap SNP resource file (Default: None)
+        # Required for VQSR: URL or local path HapMap resource file (Default: None)
         hapmap:
 
-        # Optional: URL or local path Omni SNP resource file (Default: None)
+        # Required for VQSR: URL or local path Omni resource file (Default: None)
         omni:
 
-        # Optional: URL or local path to Mills INDEL resource file (Default: None)
+        # Required for VQSR: URL or local path to Mills resource file (Default: None)
         mills:
 
-        # Optional: URL or local path to dbSNP resource file (Default: None)
+        # Required for VQSR: URL or local path to dbSNP resource file (Default: None)
         dbsnp:
 
-        # Optional: Align FASTQs or Realign BAM file (Default: False)
+        # Required for FASTQ samples: Align FASTQs or Realign BAM file (Default: False)
         run-bwa:
 
         # Optional. Trim adapters (Default: False)
         trim:
 
-        # Optional: URL or local path to BWA index file prefix.amb (Default: None)
+        # Required for BWA alignment: URL or local path to BWA index file prefix.amb (Default: None)
         amb:
 
-        # Optional: URL or local path to BWA index file prefix.ann (Default: None)
+        # Required for BWA alignment: URL or local path to BWA index file prefix.ann (Default: None)
         ann:
 
-        # Optional: URL or local path to BWA index file prefix.bwt (Default: None)
+        # Required for BWA alignment: URL or local path to BWA index file prefix.bwt (Default: None)
         bwt:
 
-        # Optional: URL or local path to BWA index file prefix.pac (Default: None)
+        # Required for BWA alignment: URL or local path to BWA index file prefix.pac (Default: None)
         pac:
 
-        # Optional: URL or local path to BWA index file prefix.sa (Default: None)
+        # Required for BWA alignment: URL or local path to BWA index file prefix.sa (Default: None)
         sa:
 
-        # Optional: URL or local path to alternate contigs (Default: None)
-        # Necessary for ALT-aware alignment
+        # Required for ALT-aware alignment: URL or local path to alternate contigs (Default: None)
         alt:
 
         # Optional: Run GATK Preprocessing (Default: False)
@@ -103,9 +85,26 @@ def generate_config():
         # Optional: Stops after GATK Preprocessing (Default: False)
         preprocess-only:
 
+        # Required: GATK annotations used to filter SNPs
+        snp-filter-annotations:
+
+        # Required: GATK annotations used to filter INDELS
+        indel-filter-annotations:
+
+        # Required for hard filtering: Name of SNP hard filter for VCF header
+        snp_filter_name:
+
+        # Required for hard filtering: SNP JEXL filter expression
+        snp_filter_expression:
+
+        # Required for hard filtering: Name of INDEL hard filter for VCF header
+        indel_filter_name:
+
+        # Required for hard filtering: INDEL JEXL filter expression
+        indel_filter_expression:
+
         # Optional: Run GATK VQSR (Default: False)
         run-vqsr:
-
 
         # Optional: Merges all samples into a single GVCF for genotyping and filtering (Default: False)
         joint-genotype:
@@ -113,8 +112,7 @@ def generate_config():
         # Optional: Run Oncotator (Default: False)
         run-oncotator:
 
-        # Optional: URL or local path to Oncotator database (Default: None)
-        # Necessary for Oncotator
+        # Required for Oncotator: URL or local path to Oncotator database (Default: None)
         oncotator-db:
 
         # Optional: Suffix added to output filename (i.e. .toil)
