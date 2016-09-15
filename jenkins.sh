@@ -2,7 +2,7 @@
 
 # Create s3am venv
 rm -rf s3am
-virtualenv s3am
+virtualenv --never-download s3am
 s3am/bin/pip install s3am==2.0a1.dev105
 # Expose binaries to the PATH
 mkdir bin
@@ -11,7 +11,7 @@ export PATH=$PATH:${PWD}/bin
 
 # Create Toil venv
 rm -rf venv
-virtualenv venv
+virtualenv --never-download venv
 . venv/bin/activate
 # Adding AWS extra to get boto as required by tests
 pip install toil[aws]==3.3.0
