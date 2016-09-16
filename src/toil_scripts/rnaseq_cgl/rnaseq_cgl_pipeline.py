@@ -12,6 +12,7 @@ from contextlib import closing
 from subprocess import PIPE
 from urlparse import urlparse
 
+import re
 import yaml
 from bd2k.util.files import mkdir_p
 from bd2k.util.processes import which
@@ -128,7 +129,7 @@ def star_alignment(job, config, r1_id, r2_id):
     disk = '2G' if config.ci_test else '100G'
     star = job.addChildJobFn(run_star, config.cores, r1_id, r2_id, star_index_url=config.star_index,
                              wiggle=config.wiggle, cores=config.cores, memory=mem, disk=disk).rv()
-    return job.addFollowOnJobFn(rsem_quantification, config, star).rv()
+    return job.addFollowOnJobFn(rsem_quantification, config, star, disk=disk).rv()
 
 
 def rsem_quantification(job, config, star_output):
@@ -203,12 +204,21 @@ def process_sample(job, config, input_tar=None, input_r1=None, input_r2=None, gz
     for root, subdir, files in os.walk(work_dir):
         fastqs.extend([os.path.join(root, x) for x in files])
     if config.paired:
-        r1 = sorted([x for x in fastqs if 'R1' in x])
-        r2 = sorted([x for x in fastqs if 'R2' in x])
-        if not r1 or not r2:
-            r1 = sorted([x for x in fastqs if '_1' in x])
-            r2 = sorted([x for x in fastqs if '_2' in x])
-        require(len(r1) == len(r2), 'Check fastq naming, uneven number of pairs found: r1: {}, r2: {}'.format(r1, r2))
+        r1, r2 = [], []
+        # Pattern convention: Look for R1/R2 or _1/_2 at the end of files named .fastq.gz, .fastq, .fq.gz, or .fq
+        pattern = re.compile('(?:^|[._-])R?([12])(\\.fastq(\\.gz)?|\\.fq(\\.gz)?)$')
+        for fastq in sorted(fastqs):
+            match = pattern.search(os.path.basename(fastq))
+            if not match:
+                raise UserError('FASTQ file name fails to meet required convention for paired reads '
+                                '(see documentation). ' + fastq)
+            elif match.group(1) == '1':
+                r1.append(fastq)
+            elif match.group(1) == '2':
+                r2.append(fastq)
+            else:
+                assert False, match.group(1)
+        require(len(r1) == len(r2), 'Check fastq names, uneven number of pairs found.\nr1: {}\nr2: {}'.format(r1, r2))
         # Concatenate fastqs
         command = 'zcat' if r1[0].endswith('.gz') and r2[0].endswith('.gz') else 'cat'
         with open(os.path.join(work_dir, 'R1.fastq'), 'w') as f1:
@@ -386,6 +396,9 @@ def generate_manifest():
         #
         #   If sample is being submitted as a fastq pair, provide two URLs separated by a comma.
         #   Samples must have the same extension - do not mix and match gzip and non-gzipped sample pairs.
+        #
+        #   Samples consisting of tarballs with fastq files inside must follow the file name convention of
+        #   ending in an R1/R2 or _1/_2 followed by one of the 4 extensions: .fastq.gz, .fastq, .fq.gz, .fq
         #
         #   Examples of several combinations are provided below. Lines beginning with # are ignored.
         #

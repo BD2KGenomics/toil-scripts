@@ -73,6 +73,9 @@ be downloaded after creating an account which takes about 1 minute and is free.
     * Get the STAR index (25 G)
         * `syn.get('syn5886182', downloadLocation='.')`
 
+Samples consisting of tarballs with fastq files inside _must_ follow the file name convention of ending in an 
+R1/R2 or \_1/\_2 followed by `.fastq.gz`, `.fastq`, `.fq.gz` or `.fq.`.
+
 ## General Usage
 
 Type `toil-rnaseq` to get basic help menu and instructions
