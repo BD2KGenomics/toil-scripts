@@ -73,7 +73,7 @@ kwargs = dict(
     author_email='cgl-toil@googlegroups.com',
     url="https://github.com/BD2KGenomics/toil-scripts",
     install_requires=[
-        'toil-lib==1.1.0a1.dev52',
+        'toil-lib==1.1.0a1.dev65',
         'pyyaml==3.11'],
     tests_require=[
         'pytest==2.8.3'],
@@ -82,7 +82,6 @@ kwargs = dict(
     entry_points={
         'console_scripts': [
             'toil-bwa = toil_scripts.bwa_alignment.bwa_alignment:main',
-            'toil-rnaseq = toil_scripts.rnaseq_cgl.rnaseq_cgl_pipeline:main',
             'toil-exome = toil_scripts.exome_variant_pipeline.exome_variant_pipeline:main']})
 
 

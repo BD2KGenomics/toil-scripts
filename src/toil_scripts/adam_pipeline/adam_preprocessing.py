@@ -44,7 +44,7 @@ from toil_lib.files import copy_files, move_files
 from toil_lib.programs import docker_call, mock_mode
 from toil_lib.tools.spark_tools import call_adam, call_conductor, MasterAddress, HDFS_MASTER_PORT, SPARK_MASTER_PORT
 
-from toil_scripts.rnaseq_cgl.rnaseq_cgl_pipeline import generate_file
+from toil_lib.files import generate_file
 
 log = logging.getLogger(__name__)
 

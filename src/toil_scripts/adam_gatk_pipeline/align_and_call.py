@@ -130,7 +130,7 @@ from toil_scripts.adam_pipeline.adam_preprocessing import * #static_adam_preproc
 from toil_scripts.bwa_alignment.bwa_alignment import * #download_shared_files
 from toil_scripts.gatk_germline.germline import * #batch_start
 from toil_scripts.gatk_processing.gatk_preprocessing import * #download_gatk_files
-from toil_scripts.rnaseq_cgl.rnaseq_cgl_pipeline import generate_file
+from toil_lib.files import generate_file
 
 
 def sample_loop(job, uuid_list, inputs):
