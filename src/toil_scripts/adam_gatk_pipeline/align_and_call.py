@@ -128,8 +128,7 @@ from toil_lib.programs import mock_mode
 # import job steps from other toil pipelines
 from toil_scripts.adam_pipeline.adam_preprocessing import * #static_adam_preprocessing_dag
 from toil_scripts.bwa_alignment.bwa_alignment import * #download_shared_files
-from toil_scripts.gatk_germline.germline import * #batch_start
-from toil_scripts.gatk_processing.gatk_preprocessing import * #download_gatk_files
+from toil_scripts.gatk_germline.germline import * #run_gatk_germline_pipeline
 from toil_lib.files import generate_file
 
 
@@ -187,6 +186,7 @@ def static_dag(job, uuid, rg_line, inputs):
                                     's3://{s3_bucket}/analysis{dir_suffix}/{uuid}'.format(**args),
                                     suffix='.adam').encapsulate()
 
+    # Configure options for Toil Germline pipeline. This function call only runs the preprocessing steps.
     gatk_preprocessing_inputs = copy.deepcopy(inputs)
     gatk_preprocessing_inputs.suffix = '.gatk'
     gatk_preprocessing_inputs.preprocess = True
@@ -201,8 +201,10 @@ def static_dag(job, uuid, rg_line, inputs):
                                                    None),
                                     gatk_preprocessing_inputs).encapsulate()
 
+    # Configure options for Toil Germline pipeline for preprocessed ADAM BAM file.
     adam_call_inputs = inputs
     adam_call_inputs.suffix = '.adam'
+    adam_call_inputs.sorted = True
     adam_call_inputs.preprocess = False
     adam_call_inputs.run_vqsr = False
     adam_call_inputs.joint_genotype = False
@@ -216,6 +218,7 @@ def static_dag(job, uuid, rg_line, inputs):
                                                   None),
                                    adam_call_inputs).encapsulate()
 
+    # Configure options for Toil Germline pipeline for preprocessed GATK BAM file.
     gatk_call_inputs = copy.deepcopy(inputs)
     gatk_call_inputs.sorted = True
     gatk_call_inputs.preprocess = False

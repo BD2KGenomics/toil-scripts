@@ -54,14 +54,14 @@ from bd2k.util.humanize import human2bytes
 from bd2k.util.processes import which
 from toil.job import Job, PromisedRequirement
 from toil_lib import require
-from toil_lib.programs import docker_call
-from toil_lib.urls import download_url_job
 from toil_lib.files import generate_file
+from toil_lib.programs import docker_call
 from toil_lib.tools.aligners import run_bwakit
 from toil_lib.tools.indexing import run_samtools_faidx
 from toil_lib.tools.preprocessing import run_gatk_preprocessing, \
     run_picard_create_sequence_dictionary, run_samtools_index, run_samtools_sort
 from toil_lib.tools.variant_annotation import gatk_genotype_gvcfs, run_oncotator
+from toil_lib.urls import download_url_job
 import yaml
 
 from toil_scripts.gatk_germline.common import output_file_job
@@ -626,12 +626,14 @@ def setup_and_run_bwakit(job, uuid, url, rg_line, config, paired_url=None):
     bwa_config.ref = config.genome_fasta
     bwa_config.fai = config.genome_fai
 
+    # Determine if sample is a FASTQ or BAM file using the file extension
     basename, ext = os.path.splitext(url)
     ext = ext.lower()
     if ext == '.gz':
         _, ext = os.path.splitext(basename)
         ext = ext.lower()
 
+    # The pipeline currently supports FASTQ and BAM files
     require(ext in ['.fq', '.fastq', '.bam'],
             'Please use .fq or .bam file extensions:\n%s' % url)
 
@@ -645,17 +647,19 @@ def setup_and_run_bwakit(job, uuid, url, rg_line, config, paired_url=None):
 
     samples.append(input1.rv())
 
-    if '.bam' in url.lower():
+    # If the extension is for a BAM  file, then configure bwakit to realign the BAM file.
+    if ext == '.bam':
         bwa_config.bam = input1.rv()
     else:
         bwa_config.r1 = input1.rv()
 
-    # Uses first URL to deduce paired FASTQ URL, if url looks like a paired file.
+    # Use first URL to deduce paired FASTQ URL, if url looks like a paired file.
     if paired_url is None and '1.fq' in url:
         paired_url = url.replace('1.fq', '2.fq')
         job.fileStore.logToMaster(
             'Trying to find paired reads using FASTQ URL:\n%s\n%s' % (url, paired_url))
 
+    # Download the paired FASTQ URL
     if paired_url:
         input2 = job.addChildJobFn(download_url_job,
                                    paired_url,
@@ -666,11 +670,11 @@ def setup_and_run_bwakit(job, uuid, url, rg_line, config, paired_url=None):
         bwa_config.r2 = input2.rv()
 
     # The bwakit disk requirement depends on the size of the input files and the index
+    # Take the sum of the input files and scale it by a factor of 4
     bwa_index_size = sum([getattr(config, index_file).size
                           for index_file in ['amb', 'ann', 'bwt', 'pac', 'sa', 'alt']
                           if getattr(config, index_file, None) is not None])
 
-    # Take the sum of the input files and scale it by a factor of 4
     bwakit_disk = PromisedRequirement(lambda lst, index_size:
                                       int(4 * sum(x.size for x in lst) + index_size),
                                       samples,
