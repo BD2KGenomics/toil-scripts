@@ -56,7 +56,7 @@ from toil.job import Job, PromisedRequirement
 from toil_lib import require
 from toil_lib.programs import docker_call
 from toil_lib.urls import download_url_job
-from toil_scripts.rnaseq_cgl.rnaseq_cgl_pipeline import generate_file
+from toil_lib.files import generate_file
 from toil_lib.tools.aligners import run_bwakit
 from toil_lib.tools.indexing import run_samtools_faidx
 from toil_lib.tools.preprocessing import run_gatk_preprocessing, \
