@@ -39,6 +39,7 @@ class GermlineTest(TestCase):
     def setUp(self):
         self.workdir = tempfile.mkdtemp()
         self.fastq_url = 's3://cgl-pipeline-inputs/germline/ci/NIST7035_NIST7086.aln21.ci.1.fq'
+        self.paired_url = 's3://cgl-pipeline-inputs/germline/ci/NIST7035_NIST7086.aln21.ci.2.fq'
         self.jobStore = os.getenv('TOIL_SCRIPTS_TEST_JOBSTORE', os.path.join(self.workdir, 'jobstore-%s' % uuid4()))
         self.toilOptions = shlex.split(os.environ.get('TOIL_SCRIPTS_TEST_TOIL_OPTIONS', ''))
         self.base_command = concat('toil-germline', 'run',
@@ -185,6 +186,7 @@ class GermlineTest(TestCase):
         with open(path, 'w') as f:
             f.write('\n'.join('\t'.join(['fastq_test_%s' % i,
                                          self.fastq_url,
+                                         self.paired_url,
                                          '@RG\\tID:foo\\tSM:bar\\tPL:ILLUMINA'])
                               for i in range(1, num_samples + 1)))
         return path

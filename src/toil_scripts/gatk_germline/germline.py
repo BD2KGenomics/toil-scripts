@@ -65,7 +65,7 @@ from toil_lib.urls import download_url_job
 import yaml
 
 from toil_scripts.gatk_germline.common import output_file_job
-from toil_scripts.gatk_germline.germline_config import generate_config, generate_manifest
+from toil_scripts.gatk_germline.germline_config_manifest import generate_config, generate_manifest
 from toil_scripts.gatk_germline.hard_filter import hard_filter_pipeline
 from toil_scripts.gatk_germline.vqsr import vqsr_pipeline
 
@@ -373,9 +373,7 @@ def annotate_vcfs(job, vcfs, config):
                                     disk=PromisedRequirement(lambda x: x.size, annotated_vcf.rv()))
 
 
-#####################################
-#  Pipeline convenience functions   #
-#####################################
+# Pipeline convenience functions
 
 
 def parse_manifest(path_to_manifest):
@@ -622,7 +620,7 @@ def setup_and_run_bwakit(job, uuid, url, rg_line, config, paired_url=None):
     bwa_config.uuid = uuid
     bwa_config.rg_line = rg_line
 
-    # bwa_alignment uses different naming convention,
+    # bwa_alignment uses a different naming convention
     bwa_config.ref = config.genome_fasta
     bwa_config.fai = config.genome_fai
 
@@ -652,12 +650,6 @@ def setup_and_run_bwakit(job, uuid, url, rg_line, config, paired_url=None):
         bwa_config.bam = input1.rv()
     else:
         bwa_config.r1 = input1.rv()
-
-    # Use first URL to deduce paired FASTQ URL, if url looks like a paired file.
-    if paired_url is None and '1.fq' in url:
-        paired_url = url.replace('1.fq', '2.fq')
-        job.fileStore.logToMaster(
-            'Trying to find paired reads using FASTQ URL:\n%s\n%s' % (url, paired_url))
 
     # Download the paired FASTQ URL
     if paired_url:
