@@ -128,8 +128,7 @@ from toil_lib.programs import mock_mode
 # import job steps from other toil pipelines
 from toil_scripts.adam_pipeline.adam_preprocessing import * #static_adam_preprocessing_dag
 from toil_scripts.bwa_alignment.bwa_alignment import * #download_shared_files
-from toil_scripts.gatk_germline.germline import * #batch_start
-from toil_scripts.gatk_processing.gatk_preprocessing import * #download_gatk_files
+from toil_scripts.gatk_germline.germline import * #run_gatk_germline_pipeline
 from toil_lib.files import generate_file
 
 
@@ -187,31 +186,52 @@ def static_dag(job, uuid, rg_line, inputs):
                                     's3://{s3_bucket}/analysis{dir_suffix}/{uuid}'.format(**args),
                                     suffix='.adam').encapsulate()
 
-    # get head GATK preprocessing job function and encapsulate it
-    gatk_preprocess = job.wrapJobFn(download_gatk_files,
-                                    inputs,
-                                    [uuid,'s3://{s3_bucket}/alignment{dir_suffix}/{uuid}.bam'.format(**args)],
-                                    's3://{s3_bucket}/analysis{dir_suffix}/{uuid}'.format(**args),
-                                    suffix='.gatk').encapsulate()
+    # Configure options for Toil Germline pipeline. This function call only runs the preprocessing steps.
+    gatk_preprocessing_inputs = copy.deepcopy(inputs)
+    gatk_preprocessing_inputs.suffix = '.gatk'
+    gatk_preprocessing_inputs.preprocess = True
+    gatk_preprocessing_inputs.preprocess_only = True
+    gatk_preprocessing_inputs.output_dir = 's3://{s3_bucket}/analysis{dir_suffix}'.format(**args)
 
+    # get head GATK preprocessing job function and encapsulate it
+    gatk_preprocess = job.wrapJobFn(run_gatk_germline_pipeline,
+                                    GermlineSample(uuid,
+                                                   's3://{s3_bucket}/alignment{dir_suffix}/{uuid}.bam'.format(**args),
+                                                   None,    # Does not require second URL or RG_Line
+                                                   None),
+                                    gatk_preprocessing_inputs).encapsulate()
+
+    # Configure options for Toil Germline pipeline for preprocessed ADAM BAM file.
     adam_call_inputs = inputs
-    gatk_call_inputs = copy.deepcopy(inputs)
-    adam_call_inputs.indexed = False
-    gatk_call_inputs.indexed = True
+    adam_call_inputs.suffix = '.adam'
+    adam_call_inputs.sorted = True
+    adam_call_inputs.preprocess = False
+    adam_call_inputs.run_vqsr = False
+    adam_call_inputs.joint_genotype = False
+    adam_call_inputs.output_dir = 's3://{s3_bucket}/analysis{dir_suffix}'.format(**args)
 
     # get head GATK haplotype caller job function for the result of ADAM preprocessing and encapsulate it
-    gatk_adam_call = job.wrapJobFn(batch_start,
-                                   adam_call_inputs,
-                                   [uuid,'s3://{s3_bucket}/analysis{dir_suffix}/{uuid}/{uuid}.adam.bam'.format(**args)],
-                                   's3://{s3_bucket}/analysis{dir_suffix}/{uuid}'.format(**args),
-                                   suffix='.adam').encapsulate()
+    gatk_adam_call = job.wrapJobFn(run_gatk_germline_pipeline,
+                                   GermlineSample(uuid,
+                                                  's3://{s3_bucket}/analysis{dir_suffix}/{uuid}/{uuid}.adam.bam'.format(**args),
+                                                  None,
+                                                  None),
+                                   adam_call_inputs).encapsulate()
+
+    # Configure options for Toil Germline pipeline for preprocessed GATK BAM file.
+    gatk_call_inputs = copy.deepcopy(inputs)
+    gatk_call_inputs.sorted = True
+    gatk_call_inputs.preprocess = False
+    gatk_call_inputs.run_vqsr = False
+    gatk_call_inputs.joint_genotype = False
+    gatk_call_inputs.output_dir = 's3://{s3_bucket}/analysis{dir_suffix}'.format(**args)
 
     # get head GATK haplotype caller job function for the result of GATK preprocessing and encapsulate it
-    gatk_gatk_call = job.wrapJobFn(batch_start,
-                                   gatk_call_inputs,
-                                   [uuid,'s3://{s3_bucket}/analysis{dir_suffix}/{uuid}/{uuid}.gatk.bam'.format(**args)],
-                                   's3://{s3_bucket}/analysis{dir_suffix}/{uuid}'.format(**args),
-                                   suffix='.gatk').encapsulate()
+    gatk_gatk_call = job.wrapJobFn(run_gatk_germline_pipeline,
+                                   GermlineSample(uuid,
+                                                  'S3://{s3_bucket}/analysis{dir_suffix}/{uuid}/{uuid}.gatk.bam'.format(**args),
+                                                  None, None),
+                                   gatk_call_inputs).encapsulate()
 
     # wire up dag
     if not inputs.skip_alignment:
