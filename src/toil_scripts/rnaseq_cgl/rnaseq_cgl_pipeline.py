@@ -4,6 +4,7 @@ from __future__ import print_function
 import argparse
 import multiprocessing
 import os
+import re
 import subprocess
 import sys
 import tarfile
@@ -12,9 +13,10 @@ from contextlib import closing
 from subprocess import PIPE
 from urlparse import urlparse
 
-import re
 import yaml
 from bd2k.util.files import mkdir_p
+from bd2k.util.humanize import bytes2human
+from bd2k.util.humanize import human2bytes
 from bd2k.util.processes import which
 from toil.job import Job
 
@@ -44,7 +46,7 @@ def download_sample(job, sample, config):
     config.file_type, config.paired, config.uuid, config.url = sample
     config.paired = True if config.paired == 'paired' else False
     config.cores = min(config.maxCores, multiprocessing.cpu_count())
-    disk = '2G' if config.ci_test else '20G'
+    disk = '2G' if config.ci_test else config.disk
     job.fileStore.logToMaster('UUID: {}\nURL: {}\nPaired: {}\nFile Type: {}\nCores: {}\nCIMode: {}'.format(
         config.uuid, config.url, config.paired, config.file_type, config.cores, config.ci_test))
     # Download or locate local file and place in the jobStore
@@ -78,7 +80,8 @@ def preprocessing_declaration(job, config, tar_id, r1_id, r2_id):
     :param str r1_id: FileStoreID of sample read 1 (or None)
     :param str r2_id: FileStoreID of sample read 2 (or None)
     """
-    disk = '2G' if config.ci_test else '100G'
+    config.disk *= 6  # x6 to deal with uncompression
+    disk = '2G' if config.ci_test else config.disk
     if tar_id:
         job.fileStore.logToMaster('Processing sample tar and queueing CutAdapt for: ' + config.uuid)
         preprocessing_output = job.addChildJobFn(process_sample, config, input_tar=tar_id, disk=disk).rv()
@@ -88,7 +91,6 @@ def preprocessing_declaration(job, config, tar_id, r1_id, r2_id):
     job.addFollowOnJobFn(pipeline_declaration, config, preprocessing_output)
 
 
-# FIXME: Replace hardcoded disk requirments with promised requirement once available
 def pipeline_declaration(job, config, preprocessing_output):
     """
     Define pipeline edges that use the fastq files
@@ -99,7 +101,7 @@ def pipeline_declaration(job, config, preprocessing_output):
     """
     r1_id, r2_id = preprocessing_output
     kallisto_output, rsem_output, fastqc_output = None, None, None
-    disk = '2G' if config.ci_test else '40G'
+    disk = '2G' if config.ci_test else config.disk + human2bytes('5G')  # Add 5G for index
     if config.fastqc:
         job.fileStore.logToMaster('Queueing FastQC job for: ')
         fastqc_output = job.addChildJobFn(run_fastqc, r1_id, r2_id, cores=2, disk=disk).rv()
@@ -126,7 +128,7 @@ def star_alignment(job, config, r1_id, r2_id):
     """
     job.fileStore.logToMaster('Queueing RSEM job for: ' + config.uuid)
     mem = '2G' if config.ci_test else '40G'
-    disk = '2G' if config.ci_test else '100G'
+    disk = '2G' if config.ci_test else config.disk + human2bytes('60G')  # Add 60G for index
     star = job.addChildJobFn(run_star, config.cores, r1_id, r2_id, star_index_url=config.star_index,
                              wiggle=config.wiggle, cores=config.cores, memory=mem, disk=disk).rv()
     return job.addFollowOnJobFn(rsem_quantification, config, star, disk=disk).rv()
@@ -144,7 +146,7 @@ def rsem_quantification(job, config, star_output):
     """
     work_dir = job.fileStore.getLocalTempDir()
     cores = min(16, config.cores)
-    disk = '2G' if config.ci_test else '40G'
+    disk = '2G' if config.ci_test else config.disk + human2bytes('20G')  # Add 20G for ref
     if config.wiggle:
         transcriptome_id, sorted_id, wiggle_id = star_output
         wiggle_path = os.path.join(work_dir, config.uuid + '.wiggle.bg')
@@ -235,7 +237,7 @@ def process_sample(job, config, input_tar=None, input_r1=None, input_r2=None, gz
             subprocess.check_call([command] + fastqs, stdout=f)
         processed_r1 = job.fileStore.writeGlobalFile(os.path.join(work_dir, 'R1.fastq'))
     # Start cutadapt step
-    disk = '2G' if config.ci_test else '125G'
+    disk = '2G' if config.ci_test else config.disk
     if config.cutadapt:
         return job.addChildJobFn(run_cutadapt, processed_r1, processed_r2, config.fwd_3pr_adapter,
                                  config.rev_3pr_adapter, disk=disk).rv()
@@ -341,6 +343,10 @@ def generate_config():
         #
         # Comments (beginning with #) do not need to be removed. Optional parameters left blank are treated as false.
         ##############################################################################################################
+        # Required: Size of the largest sample in the batch. Must be set by user or an error is raised.
+        # Example: 50G
+        disk:
+
         # Required: URL {scheme} to index tarball used by STAR
         star-index: s3://cgl-pipeline-inputs/rnaseq_cgl/starIndex_hg38_no_alt.tar.gz
 
@@ -523,6 +529,10 @@ def main():
         # Program checks
         for program in ['curl', 'docker']:
             require(next(which(program), None), program + ' must be installed on every node.'.format(program))
+
+        # Disk Check and add buffer space
+        require(config.disk, "User must specify the largest size of sample via disk entry in config!")
+        config.disk = human2bytes(config.disk) + human2bytes('5G')
 
         # Start the workflow by using map_job() to run the pipeline for each sample
         Job.Runner.startToil(Job.wrapJobFn(map_job, download_sample, samples, config), args)

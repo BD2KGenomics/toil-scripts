@@ -62,6 +62,7 @@ def generate_config(workdir):
     path = os.path.join(workdir, 'config-toil-rnaseq.yaml')
     with open(path, 'w') as f:
         f.write(textwrap.dedent("""
+            disk: 2G
             star-index: {input_dir}/starIndex_chr6.tar.gz
             kallisto-index: s3://cgl-pipeline-inputs/rnaseq_cgl/kallisto_hg38.idx
             rsem-ref: {input_dir}/rsem_ref_chr6.tar.gz
