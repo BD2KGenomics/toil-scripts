@@ -30,6 +30,7 @@ def run_star(job, cores, r1_id, r2_id, star_index_url, wiggle=False):
                   '--genomeDir', star_index,
                   '--outFileNamePrefix', 'rna',
                   '--outSAMtype', 'BAM', 'SortedByCoordinate',
+                  '--limitBAMsortRAM', '42950000000',
                   '--outSAMunmapped', 'Within',
                   '--quantMode', 'TranscriptomeSAM',
                   '--outSAMattributes', 'NH', 'HI', 'AS', 'NM', 'MD',
