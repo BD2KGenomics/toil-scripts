@@ -114,6 +114,7 @@ S3AM            - pip install --s3am (requires ~/.boto config file)
 # import from python system libraries
 import argparse
 import copy
+import os
 import textwrap
 from multiprocessing import cpu_count
 
@@ -123,12 +124,13 @@ from toil.job import Job
 # these don't seem necessary! but, must be imported here due to a serialization issue
 from toil.lib.spark import spawn_spark_cluster
 
+from toil_lib import require
 from toil_lib.programs import mock_mode
 
 # import job steps from other toil pipelines
-from toil_scripts.adam_pipeline.adam_preprocessing import * #static_adam_preprocessing_dag
-from toil_scripts.bwa_alignment.bwa_alignment import * #download_shared_files
-from toil_scripts.gatk_germline.germline import * #run_gatk_germline_pipeline
+from toil_scripts.adam_pipeline.adam_preprocessing import static_adam_preprocessing_dag
+from toil_scripts.bwa_alignment.bwa_alignment import * # download_shared_files #FIXME
+from toil_scripts.gatk_germline.germline import run_gatk_germline_pipeline, GermlineSample
 from toil_lib.files import generate_file
 
 
@@ -190,15 +192,21 @@ def static_dag(job, uuid, rg_line, inputs):
     gatk_preprocessing_inputs = copy.deepcopy(inputs)
     gatk_preprocessing_inputs.suffix = '.gatk'
     gatk_preprocessing_inputs.preprocess = True
+    gatk_preprocessing_inputs.g1k_indel = inputs.phase
     gatk_preprocessing_inputs.preprocess_only = True
+    gatk_preprocessing_inputs.run_bwa = False
+    gatk_preprocessing_inputs.run_vqsr = False
+    gatk_preprocessing_inputs.joint_genotype = False
+    gatk_preprocessing_inputs.run_oncotator = False
+    gatk_preprocessing_inputs.genome_fasta = inputs.ref
     gatk_preprocessing_inputs.output_dir = 's3://{s3_bucket}/analysis{dir_suffix}'.format(**args)
 
     # get head GATK preprocessing job function and encapsulate it
     gatk_preprocess = job.wrapJobFn(run_gatk_germline_pipeline,
-                                    GermlineSample(uuid,
+                                    (GermlineSample(uuid,
                                                    's3://{s3_bucket}/alignment{dir_suffix}/{uuid}.bam'.format(**args),
                                                    None,    # Does not require second URL or RG_Line
-                                                   None),
+                                                   None),),
                                     gatk_preprocessing_inputs).encapsulate()
 
     # Configure options for Toil Germline pipeline for preprocessed ADAM BAM file.
