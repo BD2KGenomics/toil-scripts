@@ -193,7 +193,7 @@ def star(job, inputs, r1_cutadapt, r2_cutadapt):
     job.fileStore.readGlobalFile(r1_cutadapt, os.path.join(work_dir, 'R1_cutadapt.fastq'))
     job.fileStore.readGlobalFile(r2_cutadapt, os.path.join(work_dir, 'R2_cutadapt.fastq'))
     # Get starIndex
-    download_url(inputs.star_index, work_dir, 'starIndex.tar.gz')
+    download_url(job=job, url=inputs.star_index, work_dir=work_dir, name='starIndex.tar.gz')
     subprocess.check_call(['tar', '-xvf', os.path.join(work_dir, 'starIndex.tar.gz'), '-C', work_dir])
     # Parameters
     parameters = ['--runThreadN', str(cores),
@@ -215,11 +215,11 @@ def star(job, inputs, r1_cutadapt, r2_cutadapt):
                   '--sjdbScore', '1',
                   '--readFilesIn', '/data/R1_cutadapt.fastq', '/data/R2_cutadapt.fastq']
     # Call: STAR Map
-    docker_call(tool='quay.io/ucsc_cgl/star:2.4.2a--bcbd5122b69ff6ac4ef61958e47bde94001cfe80',
+    docker_call(job=job, tool='quay.io/ucsc_cgl/star:2.4.2a--bcbd5122b69ff6ac4ef61958e47bde94001cfe80',
                 work_dir=work_dir, parameters=parameters)
     # Call Samtools Index
     index_command = ['index', '/data/rnaAligned.sortedByCoord.out.bam']
-    docker_call(work_dir=work_dir, parameters=index_command,
+    docker_call(job=job, work_dir=work_dir, parameters=index_command,
                 tool='quay.io/ucsc_cgl/samtools:1.3--256539928ea162949d8a65ca5c79a72ef557ce7c')
     # fileStore
     bam_id = job.fileStore.writeGlobalFile(os.path.join(work_dir, 'rnaAligned.sortedByCoord.out.bam'))
@@ -253,7 +253,7 @@ def variant_calling_and_qc(job, inputs, bam_id, bai_id):
                   (inputs.genome_index, 'genome.fa.fai'), (inputs.gtf, 'annotation.gtf'),
                   (inputs.gtf_m53, 'annotation.m53')]
     for url, fname in input_info:
-        download_url(url, work_dir=work_dir, name=fname)
+        download_url(job=job, url=url, work_dir=work_dir, name=fname)
 
     # Part 1: Variant Calling
     variant_command = ['mpileup',
@@ -262,7 +262,7 @@ def variant_calling_and_qc(job, inputs, bam_id, bai_id):
                        '-v', 'alignment.bam',
                        '-t', 'DP,SP,INFO/AD,INFO/ADF,INFO/ADR,INFO/DPR,SP',
                        '-o', '/data/output.vcf.gz']
-    docker_call(work_dir=work_dir, parameters=variant_command, sudo=inputs.sudo,
+    docker_call(job=job, work_dir=work_dir, parameters=variant_command,
                 tool='quay.io/ucsc_cgl/samtools:1.3--256539928ea162949d8a65ca5c79a72ef557ce7c')
 
     # Part 2: QC
@@ -270,7 +270,7 @@ def variant_calling_and_qc(job, inputs, bam_id, bai_id):
                   '-n', 'alignment.bam',
                   '-a', 'annotation.gtf',
                   '-m', 'annotation.m53']
-    docker_call(work_dir=work_dir, parameters=qc_command,
+    docker_call(job=job, work_dir=work_dir, parameters=qc_command,
                 tool='jvivian/checkbias:612f129--b08a1fb6526a620bbb0304b08356f2ae7c3c0ec3')
     # Write output to fileStore and return ids
     output_tsv = glob(os.path.join(work_dir, '*counts.tsv*'))[0]
@@ -296,8 +296,8 @@ def spladder(job, inputs, bam_id, bai_id):
     job.fileStore.readGlobalFile(bam_id, os.path.join(work_dir, 'alignment.bam'))
     job.fileStore.readGlobalFile(bai_id, os.path.join(work_dir, 'alignment.bam.bai'))
     # Download input file
-    download_url(url=inputs.gtf, work_dir=work_dir, name='annotation.gtf')
-    download_url(url=inputs.gtf_pickle, work_dir=work_dir, name='annotation.gtf.pickle')
+    download_url(job=job, url=inputs.gtf, work_dir=work_dir, name='annotation.gtf')
+    download_url(job=job, url=inputs.gtf_pickle, work_dir=work_dir, name='annotation.gtf.pickle')
     # Call Spladder
     command = ['--insert_ir=y',
                '--insert_es=y',
@@ -315,7 +315,7 @@ def spladder(job, inputs, bam_id, bai_id):
                '-P', 'y',
                '-p', 'n',
                '--sparse_bam', 'y']
-    docker_call(work_dir=work_dir, parameters=command, sudo=inputs.sudo, tool='jvivian/spladder:1.0')
+    docker_call(job=job, work_dir=work_dir, parameters=command, sudo=inputs.sudo, tool='jvivian/spladder:1.0')
     # Write output to fileStore and return ids
     output_pickle = os.path.join(work_dir, ' ', 'spladder', 'genes_graph_conf3.alignment.pickle')
     if not os.path.exists(output_pickle):
