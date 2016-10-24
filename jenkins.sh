@@ -14,7 +14,7 @@ rm -rf venv
 virtualenv --never-download venv
 . venv/bin/activate
 # Adding AWS extra to get boto as required by tests
-pip install toil[aws]==3.3.0
+pip install toil[aws]==3.5.0a1.dev277
 
 # Prepare directory for temp files
 TMPDIR=/mnt/ephemeral/tmp
