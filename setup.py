@@ -25,7 +25,7 @@ from pkg_resources import parse_version, require, DistributionNotFound
 def check_provided(distribution, min_version, max_version=None, optional=False):
     min_version = parse_version(min_version)
     if isinstance(min_version, tuple):
-        raise RuntimeError("Newer version of setuptools required. Update by running "
+        raise RuntimeError("Setuptools version 8.0 or newer required. Update by running "
                            "'pip install setuptools --upgrade'")
     if max_version is not None:
         max_version = parse_version(max_version)
