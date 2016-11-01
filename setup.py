@@ -26,7 +26,7 @@ def check_provided(distribution, min_version, max_version=None, optional=False):
     min_version = parse_version(min_version)
     if isinstance(min_version, tuple):
         raise RuntimeError("Setuptools version 8.0 or newer required. Update by running "
-                           "'pip install setuptools --upgrade'")
+                           "'pip install --upgrade setuptools'")
     if max_version is not None:
         max_version = parse_version(max_version)
 
