@@ -566,6 +566,7 @@ def prepare_bam(job, uuid, url, config, paired_url=None, rg_line=None):
                                    config.g1k_indel,
                                    config.mills,
                                    config.dbsnp,
+                                   realign=False,    # Do not realign INDELs
                                    memory=config.xmx,
                                    cores=config.cores).encapsulate()
         sorted_bam.addChild(preprocess)
@@ -674,8 +675,9 @@ def setup_and_run_bwakit(job, uuid, url, rg_line, config, paired_url=None):
 
     return job.addFollowOnJobFn(run_bwakit,
                                 bwa_config,
-                                sort=False,         # BAM files are sorted later in the pipeline
+                                sort=False,             # BAM files are sorted later in the pipeline
                                 trim=config.trim,
+                                mark_secondary=True,    # Mark split alignments as secondary
                                 cores=config.cores,
                                 disk=bwakit_disk).rv()
 
@@ -739,7 +741,8 @@ def gatk_haplotype_caller(job,
 
     # Uses docker_call mock mode to replace output with hc_output file
     outputs = {'output.g.vcf': hc_output}
-    docker_call(work_dir=work_dir,
+    docker_call(job=job,
+                work_dir=work_dir,
                 env={'JAVA_OPTS': '-Djava.io.tmpdir=/data/ -Xmx{}'.format(job.memory)},
                 parameters=command,
                 tool='quay.io/ucsc_cgl/gatk:3.5--dba6dae49156168a909c43330350c6161dc7ecc2',
