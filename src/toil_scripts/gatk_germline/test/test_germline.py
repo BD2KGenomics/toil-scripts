@@ -215,6 +215,7 @@ class GermlineTest(TestCase):
         inputs.sorted = False
         inputs.cores = 4
         inputs.xmx = '8G'
+        inputs.file_size = '1G'
         inputs.output_dir = self.workdir
         inputs.suffix = ''
         inputs.unsafe_mode = False
