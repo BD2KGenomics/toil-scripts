@@ -65,7 +65,7 @@ from toil_lib.tools.variant_annotation import gatk_genotype_gvcfs, run_oncotator
 from toil_lib.urls import download_url_job
 import yaml
 
-from toil_scripts.gatk_germline.common import output_file_job
+from toil_scripts.gatk_germline.common import output_file_job, run_samtools_view
 from toil_scripts.gatk_germline.germline_config_manifest import generate_config, generate_manifest
 from toil_scripts.gatk_germline.hard_filter import hard_filter_pipeline
 from toil_scripts.gatk_germline.vqsr import vqsr_pipeline
@@ -592,33 +592,6 @@ def prepare_bam(job, uuid, url, config, paired_url=None, rg_line=None):
         output_bai_promise = index_bam.rv()
 
     return output_bam_promise, output_bai_promise
-
-
-def run_samtools_view(job, bam_id, flag='0', minMQ=0):
-    """
-    Filters BAM file using SAM bitwise flag
-
-    :param JobFunctionWrappingJob job: passed automatically by Toil
-    :param str bam_id: BAM FileStoreID
-    :param str flag: SAM bitwise flags
-    :return str: BAM fileStoreID
-    """
-    work_dir = job.fileStore.getLocalTempDir()
-    job.fileStore.readGlobalFile(bam_id, os.path.join(work_dir, 'input.bam'))
-    outputs = {'output.bam': None}
-    command = ['view',
-               '-b',
-               '-o', '/data/output.bam',
-               '-q'. str(minMQ),
-               '-F', str(flag),
-               '-@', str(job.cores),
-               '-m', str(job.memory / job.cores),
-               '/data/input.bam']
-    docker_call(work_dir=work_dir, parameters=command,
-                tool='quay.io/ucsc_cgl/samtools:1.3--256539928ea162949d8a65ca5c79a72ef557ce7c',
-                outputs=outputs)
-    outpath = os.path.join(work_dir, 'output.bam')
-    return job.fileStore.writeGlobalFile(outpath)
 
 
 def setup_and_run_bwakit(job, uuid, url, rg_line, config, paired_url=None):

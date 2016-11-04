@@ -4,6 +4,7 @@ from urlparse import urlparse
 
 from bd2k.util.files import mkdir_p
 from toil_lib.files import copy_files
+from toil_lib.programs import docker_call
 from toil_lib.urls import s3am_upload
 
 
@@ -30,3 +31,30 @@ def output_file_job(job, filename, file_id, output_dir, s3_key_path=None):
     else:
         mkdir_p(output_dir)
         copy_files([filepath], output_dir)
+
+
+def run_samtools_view(job, bam_id, flag='0', minMQ=0):
+    """
+    Filters BAM file using SAM bitwise flag
+
+    :param JobFunctionWrappingJob job: passed automatically by Toil
+    :param str bam_id: BAM FileStoreID
+    :param str flag: SAM bitwise flags
+    :return str: BAM fileStoreID
+    """
+    work_dir = job.fileStore.getLocalTempDir()
+    job.fileStore.readGlobalFile(bam_id, os.path.join(work_dir, 'input.bam'))
+    outputs = {'output.bam': None}
+    command = ['view',
+               '-b',
+               '-o', '/data/output.bam',
+               '-q', str(minMQ),
+               '-F', str(flag),
+               '-@', str(job.cores),
+               '-m', str(job.memory / job.cores),
+               '/data/input.bam']
+    docker_call(work_dir=work_dir, parameters=command,
+                tool='quay.io/ucsc_cgl/samtools:1.3--256539928ea162949d8a65ca5c79a72ef557ce7c',
+                outputs=outputs)
+    outpath = os.path.join(work_dir, 'output.bam')
+    return job.fileStore.writeGlobalFile(outpath)
