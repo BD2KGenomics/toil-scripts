@@ -45,6 +45,7 @@ from __future__ import print_function
 import argparse
 from collections import namedtuple
 from copy import deepcopy
+import cPickle
 import logging
 import os
 import re
@@ -123,7 +124,7 @@ def run_gatk_germline_pipeline(job, samples, config):
                                        rg_line=sample.rg_line)
     else:
         run_pipeline = Job.wrapJobFn(gatk_germline_pipeline,
-                                     samples,
+                                     cPickle.dumps(samples),
                                      shared_files.rv()).encapsulate()
         shared_files.addChild(run_pipeline)
 
@@ -163,6 +164,7 @@ def gatk_germline_pipeline(job, samples, config):
     :return: Dictionary of filtered VCF FileStoreIDs
     :rtype: dict
     """
+    samples = cPickle.loads(samples)
     require(len(samples) > 0, 'No samples were provided!')
 
     # Get total size of genome reference files. This is used for configuring disk size.
@@ -592,6 +594,33 @@ def prepare_bam(job, uuid, url, config, paired_url=None, rg_line=None):
     return output_bam_promise, output_bai_promise
 
 
+def run_samtools_view(job, bam_id, flag='0', minMQ=0):
+    """
+    Filters BAM file using SAM bitwise flag
+
+    :param JobFunctionWrappingJob job: passed automatically by Toil
+    :param str bam_id: BAM FileStoreID
+    :param str flag: SAM bitwise flags
+    :return str: BAM fileStoreID
+    """
+    work_dir = job.fileStore.getLocalTempDir()
+    job.fileStore.readGlobalFile(bam_id, os.path.join(work_dir, 'input.bam'))
+    outputs = {'output.bam': None}
+    command = ['view',
+               '-b',
+               '-o', '/data/output.bam',
+               '-q'. str(minMQ),
+               '-F', str(flag),
+               '-@', str(job.cores),
+               '-m', str(job.memory / job.cores),
+               '/data/input.bam']
+    docker_call(work_dir=work_dir, parameters=command,
+                tool='quay.io/ucsc_cgl/samtools:1.3--256539928ea162949d8a65ca5c79a72ef557ce7c',
+                outputs=outputs)
+    outpath = os.path.join(work_dir, 'output.bam')
+    return job.fileStore.writeGlobalFile(outpath)
+
+
 def setup_and_run_bwakit(job, uuid, url, rg_line, config, paired_url=None):
     """
     Downloads and runs bwakit for BAM or FASTQ files
@@ -672,12 +701,21 @@ def setup_and_run_bwakit(job, uuid, url, rg_line, config, paired_url=None):
                                       samples,
                                       bwa_index_size)
 
-    return job.addFollowOnJobFn(run_bwakit,
-                                bwa_config,
-                                sort=False,         # BAM files are sorted later in the pipeline
-                                trim=config.trim,
-                                cores=config.cores,
-                                disk=bwakit_disk).rv()
+    bam_job = job.addFollowOnJobFn(run_bwakit,
+                                   bwa_config,
+                                   sort=False,         # BAM files are sorted later in the pipeline
+                                   trim=config.trim,
+                                   cores=config.cores,
+                                   disk=bwakit_disk)
+
+    filter_disk = PromisedRequirement(lambda bam: 2 * bam.size, bam_job.rv())
+
+    return bam_job.addChildJobFn(run_samtools_view, 
+                                 bam_job.rv(), 
+                                 minMQ=3, 
+                                 cores=config.cores, 
+                                 memory=config.xmx,
+                                 disk=filter_disk).rv()
 
 
 def gatk_haplotype_caller(job,
