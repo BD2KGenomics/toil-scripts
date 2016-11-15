@@ -23,7 +23,8 @@ def output_file_job(job, filename, file_id, output_dir, s3_key_path=None):
     work_dir = job.fileStore.getLocalTempDir()
     filepath = job.fileStore.readGlobalFile(file_id, os.path.join(work_dir, filename))
     if urlparse(output_dir).scheme == 's3':
-        s3am_upload(fpath=os.path.join(work_dir, filepath),
+        s3am_upload(job,
+                    fpath=os.path.join(work_dir, filepath),
                     s3_dir=output_dir,
                     s3_key_path=s3_key_path)
     elif os.path.exists(os.path.join(output_dir, filename)):
