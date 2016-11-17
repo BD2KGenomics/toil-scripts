@@ -29,7 +29,7 @@ kwargs = dict(
     author_email='cgl-toil@googlegroups.com',
     url="https://github.com/BD2KGenomics/toil-scripts",
     install_requires=[
-        'toil-lib==1.1.0a1.dev100',
+        'toil-lib==1.2.0a1.dev126',
         'pyyaml==3.11'],
     tests_require=[
         'pytest==2.8.3'],

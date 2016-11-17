@@ -7,13 +7,11 @@ import argparse
 import logging
 import shlex
 
-# imports from outside of toil_scripts and python core
-from toil.lib.spark import spawn_spark_cluster
-
 # imports from toil_scripts
 from toil_lib import require
 from toil_lib.tools.spark_tools import call_adam, call_conductor, \
     MasterAddress, HDFS_MASTER_PORT, SPARK_MASTER_PORT
+from toil_lib.spark import spawn_spark_cluster
 
 
 _log = logging.getLogger(__name__)

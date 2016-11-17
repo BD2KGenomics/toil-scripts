@@ -37,7 +37,7 @@ from subprocess import check_call, check_output
 
 import yaml
 from toil.job import Job
-from toil.lib.spark import spawn_spark_cluster
+from toil_lib.spark import spawn_spark_cluster
 
 from toil_lib import require
 from toil_lib.files import copy_files, move_files
