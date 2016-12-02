@@ -121,7 +121,7 @@ import yaml
 # import toil features
 from toil.job import Job
 # these don't seem necessary! but, must be imported here due to a serialization issue
-from toil.lib.spark import spawn_spark_cluster
+from toil_lib.spark import spawn_spark_cluster
 
 from toil_lib.programs import mock_mode
 

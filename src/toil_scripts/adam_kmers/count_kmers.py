@@ -7,13 +7,11 @@ import argparse
 import logging
 import shlex
 
-# imports from outside of toil_scripts and python core
-from toil.lib.spark import spawn_spark_cluster
-
 # imports from toil_scripts
 from toil_lib import require
 from toil_lib.tools.spark_tools import call_adam, call_conductor, \
     MasterAddress, HDFS_MASTER_PORT, SPARK_MASTER_PORT
+from toil_lib.spark import spawn_spark_cluster
 
 
 _log = logging.getLogger(__name__)
@@ -125,7 +123,7 @@ def download_count_upload(job,
 
         # run the download
         _log.info("Downloading input file %s to %s.", input_file, hdfs_input_file)
-        call_conductor(master_ip, input_file, hdfs_input_file,
+        call_conductor(job, master_ip, input_file, hdfs_input_file,
                        memory=memory, override_parameters=spark_conf)
 
     else:
@@ -153,7 +151,7 @@ def download_count_upload(job,
 
         # convert the file
         _log.info('Converting %s into ADAM format at %s.', hdfs_tmp_file, hdfs_input_file)
-        call_adam(master_ip,
+        call_adam(job, master_ip,
                   ['transform',
                    hdfs_tmp_file, hdfs_input_file],
                   memory=memory, override_parameters=spark_conf)
@@ -161,7 +159,7 @@ def download_count_upload(job,
     # run k-mer counting
     _log.info('Counting %d-mers in %s, and saving to %s.',
               kmer_length, hdfs_input_file, hdfs_output_file)
-    call_adam(master_ip,
+    call_adam(job, master_ip,
               ['count_kmers',
                hdfs_input_file, hdfs_output_file,
                str(kmer_length)],
@@ -170,7 +168,7 @@ def download_count_upload(job,
     # do we need to upload the file back? if so, run upload
     if run_upload:
         _log.info("Uploading output file %s to %s.", hdfs_output_file, output_file)
-        call_conductor(master_ip, hdfs_output_file, output_file,
+        call_conductor(job, master_ip, hdfs_output_file, output_file,
                        memory=memory, override_parameters=spark_conf)
         
 

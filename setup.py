@@ -19,55 +19,7 @@ import sys
 from setuptools import find_packages, setup
 from setuptools.command.test import test as TestCommand
 from version import version
-from pkg_resources import parse_version, require, DistributionNotFound
 
-
-def check_provided(distribution, min_version, max_version=None, optional=False):
-    min_version = parse_version(min_version)
-    if isinstance(min_version, tuple):
-        raise RuntimeError("Setuptools version 8.0 or newer required. Update by running "
-                           "'pip install --upgrade setuptools'")
-    if max_version is not None:
-        max_version = parse_version(max_version)
-
-    messages = []
-
-    toil_missing = 'Cannot find a valid installation of Toil.'
-    dist_missing = 'Cannot find an installed copy of the %s distribution, typically provided by Toil.' % distribution
-    version_too_low = 'The installed copy of %s is out of date. It is typically provided by Toil.' % distribution
-    version_too_high = 'The installed copy of %s is too new. It is typically provided by Toil.' % distribution
-    required_version = 'Setup requires version %s or higher' % (min_version,)
-    required_version += '.' if max_version is None else ', up to but not including %s.' % (max_version,)
-    install_toil = 'Installing Toil should fix this problem.'
-    upgrade_toil = 'Upgrading Toil should fix this problem.'
-    reinstall_dist = 'Uninstalling %s and reinstalling Toil should fix this problem.' % distribution
-    reinstall_toil = 'Uninstalling Toil and reinstalling it should fix this problem.'
-    footer = ("Setup doesn't install Toil automatically to give you a chance to choose any of the optional extras "
-              "that Toil provides. More on installing Toil at http://toil.readthedocs.io/en/latest/installation.html.")
-    try:
-        # This check will fail if the distribution or any of its dependencies are missing.
-        version = require(distribution)[0].version
-    except DistributionNotFound:
-        version = None
-        if not optional:
-            messages.extend([toil_missing if distribution == 'toil' else dist_missing, install_toil])
-    else:
-        if parse_version(version) < min_version:
-            messages.extend([version_too_low, required_version,
-                             upgrade_toil if distribution == 'toil' else reinstall_dist])
-        elif max_version is not None and max_version < parse_version(version):
-            messages.extend([version_too_high, required_version,
-                             reinstall_toil if distribution == 'toil' else reinstall_dist])
-    if messages:
-        messages.append(footer)
-        raise RuntimeError(' '.join(messages))
-    else:
-        return version
-
-
-toil_version = check_provided('toil', min_version='3.3.0', max_version='3.5.0')
-check_provided('bd2k-python-lib', min_version='1.14a1.dev29' )
-check_provided('boto', min_version='2.38.0', optional=True)
 
 kwargs = dict(
     name='toil-scripts',
@@ -77,7 +29,7 @@ kwargs = dict(
     author_email='cgl-toil@googlegroups.com',
     url="https://github.com/BD2KGenomics/toil-scripts",
     install_requires=[
-        'toil-lib==1.1.0a1.dev65',
+        'toil-lib==1.2.0a1.dev126',
         'pyyaml==3.11'],
     tests_require=[
         'pytest==2.8.3'],
@@ -112,6 +64,8 @@ class PyTest(TestCommand):
 kwargs['cmdclass'] = {'test': PyTest}
 
 setup(**kwargs)
+
+toil_version = '3.5.0a1.dev277'
 
 print("\n\n"
       "Thank you for installing toil-scripts! If you want to run Toil on a cluster in a cloud, please reinstall it "

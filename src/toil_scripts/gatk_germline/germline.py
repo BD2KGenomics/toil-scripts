@@ -739,7 +739,7 @@ def gatk_haplotype_caller(job,
 
     # Uses docker_call mock mode to replace output with hc_output file
     outputs = {'output.g.vcf': hc_output}
-    docker_call(work_dir=work_dir,
+    docker_call(job=job, work_dir=work_dir,
                 env={'JAVA_OPTS': '-Djava.io.tmpdir=/data/ -Xmx{}'.format(job.memory)},
                 parameters=command,
                 tool='quay.io/ucsc_cgl/gatk:3.5--dba6dae49156168a909c43330350c6161dc7ecc2',

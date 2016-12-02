@@ -76,7 +76,7 @@ def download_and_transfer_sample(job, sample, inputs):
     # Acquire genetorrent key and download sample
     shutil.copy(inputs['genetorrent_key'], os.path.join(work_dir, 'cghub.key'))
     parameters = ['-vv', '-c', 'cghub.key', '-d', analysis_id]
-    docker_call(tool='quay.io/ucsc_cgl/genetorrent:3.8.7--9911761265b6f08bc3ef09f53af05f56848d805b',
+    docker_call(job=job, tool='quay.io/ucsc_cgl/genetorrent:3.8.7--9911761265b6f08bc3ef09f53af05f56848d805b',
                 work_dir=work_dir, parameters=parameters)
     try:
         sample = glob.glob(os.path.join(folder_path, '*tar*'))[0]
