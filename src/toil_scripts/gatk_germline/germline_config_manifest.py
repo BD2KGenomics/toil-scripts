@@ -25,6 +25,9 @@ def generate_config():
         # Required: S3 URL or local path to output directory
         output-dir:
 
+        # Genomic intervals to restrict analysis
+        intervals:
+
         # Required: Input BAM file is sorted (Default: False)
         sorted:
 
