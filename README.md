@@ -1,9 +1,11 @@
 ## [DEPRECATED]
 
+Toil-Scripts is now deprecated and no longer being maintained.  It may be run and used at the user's discretion.  Dependencies are locked at: toil-lib==1.2.0a1.dev126, and toil==3.5.0a1.dev277 .  Other versions may work, but are not gauranteed to run.
+
+It's intended that new workflows will reside at: https://github.com/BD2KGenomics/toil-workflows
+
 ## University of California, Santa Cruz Genomics Institute
 ### Repository of Toil-based Genomic Pipelines
-
-Toil-Scripts is now deprecated and no longer being maintained.  It may be run and used at the user's discretion.  Dependencies are locked at: toil-lib==1.2.0a1.dev126, and toil==3.5.0a1.dev277 .  Other versions may work, but are not gauranteed to run.
 
 To install these pipelines, type: `pip install toil-scripts`
 
