@@ -30,7 +30,7 @@ kwargs = dict(
     url="https://github.com/BD2KGenomics/toil-scripts",
     install_requires=[
         'toil-lib==1.2.0a1.dev126',
-        'pyyaml==3.11'],
+        'pyyaml==5.1'],
     tests_require=[
         'pytest==2.8.3'],
     package_dir={'': 'src'},
